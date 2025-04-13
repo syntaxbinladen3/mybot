@@ -5,7 +5,7 @@ import random
 from datetime import datetime
 
 # Configuration
-TARGET_URL = "https://up.triotion.xyz/?=h2syntaxfr"  # Change this to your target
+TARGET_URL = "https://medium-cloudflare.dstatbot.org/255078f5-e47f-4ac8-9113-9bd0d8af4a70"  # Change this to your target
 TEST_DURATION = 300  # Seconds
 MAX_CONCURRENT = 500  # Simultaneous connections
 MIN_UPDATE_INTERVAL = 1  # Seconds between updates
