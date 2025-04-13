@@ -6,10 +6,10 @@ from datetime import datetime
 
 # Configuration
 TARGET_URL = "https://up.triotion.xyz/?=h2syntaxfr"  # Change this to your target
-TEST_DURATION = 60  # Seconds
+TEST_DURATION = 300  # Seconds
 MAX_CONCURRENT = 500  # Simultaneous connections
-MIN_UPDATE_INTERVAL = 2  # Seconds between updates
-MAX_UPDATE_INTERVAL = 4  # Seconds between updates
+MIN_UPDATE_INTERVAL = 1  # Seconds between updates
+MAX_UPDATE_INTERVAL = 3  # Seconds between updates
 
 # User Agents and Referers
 IPHONE_USER_AGENTS = [
