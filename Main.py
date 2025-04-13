@@ -7,7 +7,7 @@ import psutil
 import time
 
 # Configuration
-MAX_CONCURRENT = 1000
+MAX_CONCURRENT = 4000
 REQUEST_TIMEOUT = 10
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
