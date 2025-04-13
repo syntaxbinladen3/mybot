@@ -7,7 +7,7 @@ import psutil
 import random
 from discord import Color
 
-TOKEN = "MTMyNTM5MTk3OTkxMTA1NzQxOA.GFrCnL.JuB5rew0H0TOUj1xZnZWcVQlUoezugQVp7h6Bo"
+TOKEN = "MTMyNTM5MTk3OTkxMTA1NzQxOA.Gh58ed.4Urz2d6iVsk5vQoG2y8Nn0IWyhsM5bJNQFhZ8g"
 
 # iPhone User Agents
 IPHONE_USER_AGENTS = [
