@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
-MAX_CONCURRENT = 20000  # Further increase concurrent requests for more power
+MAX_CONCURRENT = 2000  # Further increase concurrent requests for more power
 REQUEST_TIMEOUT = 10
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
