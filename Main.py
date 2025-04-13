@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
-MAX_CONCURRENT = 8000  # Increase concurrent requests for 8 CPUs and 24GB RAM
+MAX_CONCURRENT = 10000  # Further increase concurrent requests for more power
 REQUEST_TIMEOUT = 10
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -83,7 +83,7 @@ class AttackEngine:
                 self.stats['peak_rps'] = max(self.stats['peak_rps'], current_rps)
 
                 self.print_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.55)  # Frequent stats update every 0.55 seconds
 
         self.print_summary()
 
