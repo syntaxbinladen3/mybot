@@ -20,7 +20,7 @@ REFERERS = [
     "https://www.pinterest.com/", "https://www.quora.com/"
 ]
 
-VALID_METHODS = ["C-ECPLISE"]
+VALID_METHODS = ["C-ECLIPSE"]
 
 class AttackEngine:
     def __init__(self, method, target, duration):
@@ -35,7 +35,7 @@ class AttackEngine:
             'rps': 0,
             'peak_rps': 0
         }
-        self.semaphore = asyncio.Semaphore(1000)  # Prevent memory overuse
+        self.semaphore = asyncio.Semaphore(1000)
 
     async def make_request(self, session):
         headers = {
