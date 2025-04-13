@@ -5,7 +5,7 @@ import sys
 import time
 
 # Config
-MAX_CONCURRENT = 3999
+MAX_CONCURRENT = 2000
 REQUEST_TIMEOUT = 10
 
 USER_AGENTS = [
