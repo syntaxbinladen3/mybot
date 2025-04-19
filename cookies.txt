@@ -1,0 +1,5 @@
+sessionid=abc123; path=/; HttpOnly
+token=securetokengoeshere; path=/; Secure
+user=guest; path=/; SameSite=Strict
+id=124a3d45fghq90z; path=/; Secure
+auth=true; path=/; HttpOnly
