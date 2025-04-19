@@ -1,3 +1,5 @@
 aiohttp
 cloudscraper
 psutil
+httpx
+httpx[http2]
