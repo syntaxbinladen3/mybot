@@ -17,7 +17,7 @@ def load_lines(filename):
 REFERERS = load_lines("refs.txt")
 USER_AGENTS = load_lines("uas.txt")
 
-MAX_CONCURRENT = 10000  # Power mode
+MAX_CONCURRENT = 1000  # Power mode
 REQUEST_TIMEOUT = 10
 
 class AttackEngine:
