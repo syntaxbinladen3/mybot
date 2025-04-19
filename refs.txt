@@ -9,3 +9,9 @@ https://www.twitter.com/
 https://news.ycombinator.com/
 https://www.pinterest.com/
 https://www.quora.com/
+https://sts-base.vercel.app/
+https://google.com/
+https://discord.com/
+https://www.cloudflare.com/
+https://developer.mozilla.org/
+https://support.apple.com/
