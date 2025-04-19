@@ -15,7 +15,7 @@ import threading
 # =================== CONFIG ===================
 MAX_CONCURRENT = 10000
 REQUEST_TIMEOUT = 10
-PROXY_ROTATE_CODES = [429, 403]
+PROXY_ROTATE_CODES = [429]
 MAX_TIME = 50000000
 
 DEFAULT_REFERERS = [
