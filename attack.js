@@ -8,12 +8,12 @@ puppeteer.use(StealthPlugin());
 const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line);
+    .filter(line => line.length > 0); // Properly defined 'line' here
 
 const REFERERS = fs.readFileSync('refs.txt', 'utf8')
     .split('\n')
     .map(line => line.trim())
-    .filter(line);
+    .filter(line => line.length > 0); // Properly defined 'line' here
 
 const TARGET = process.argv[2] || 'http://198.16.110.165/';  // Use your target here
 const DURATION = parseInt(process.argv[3] || 60);  // in seconds
