@@ -4,7 +4,7 @@ const os = require('os');
 const process = require('process');
 const cliProgress = require('cli-progress');
 
-const MAX_CONCURRENT = 600;
+const MAX_CONCURRENT = 777;
 const REQUEST_TIMEOUT = 8000;
 const BURST_DIVISOR = 3;
 const BURST_DELAY_MS = 100;
