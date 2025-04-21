@@ -4,15 +4,38 @@ const os = require('os');
 const http = require('http');  
 const https = require('https');  
 const process = require('process');  
-  
+
 const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);  
 const REQUEST_TIMEOUT = 8000;  
 
-// Fetch proxies from the new API
 async function getProxies() {
     try {
-        const response = await axios.get('https://sts-proxies.vercel.app/v2/');
-        return response.data.proxies || [];
+        const sources = [
+            'https://sts-proxies.vercel.app/v2/',
+            'https://www.proxy-list.download/api/v1/get?type=http',
+            'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all'
+        ];
+
+        const responses = await Promise.all(
+            sources.map(src =>
+                axios.get(src).catch(() => ({ data: '' }))
+            )
+        );
+
+        const allProxies = responses.flatMap(res => {
+            if (res.data.proxies) return res.data.proxies;
+            if (typeof res.data === 'string') return res.data.split('\n');
+            return [];
+        });
+
+        // Filter and wait 5s before returning
+        const cleanProxies = allProxies
+            .map(p => p.trim())
+            .filter(p => p && p.includes(':'));
+
+        await new Promise(res => setTimeout(res, 5000)); // wait 5s like you said
+
+        return cleanProxies;
     } catch (error) {
         console.error('Error fetchin proxies:', error);
         return [];
