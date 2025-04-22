@@ -6,7 +6,7 @@ const https = require('https');
 const process = require('process');
 
 // Constants
-const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 7540); // adjust if needed
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 4540); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
 // Load Files
