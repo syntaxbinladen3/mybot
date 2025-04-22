@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
-const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 3940); // adjust if needed
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1940); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
 
 function loadLines(filename) {
