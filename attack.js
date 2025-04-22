@@ -13,7 +13,6 @@ const time = parseInt(process.argv[3]);
 const parsed = url.parse(target);
 
 const uas = fs.readFileSync('ua.txt', 'utf-8').toString().split('\n').filter(Boolean);
-const referers = fs.readFileSync('refs.txt', 'utf-8').toString().split('\n').filter(Boolean);
 
 function ra() {
     return randstr.generate({ charset: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', length: 8 });
@@ -28,7 +27,6 @@ function sendRequest() {
         method: 'GET',
         headers: {
             'User-Agent': uas[Math.floor(Math.random() * uas.length)],
-            'Referer': referers[Math.floor(Math.random() * referers.length)],
             'Connection': 'keep-alive'
         },
         rejectUnauthorized: false,
