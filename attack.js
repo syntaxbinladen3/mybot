@@ -3,7 +3,7 @@ const { cpus } = require('os');
 const cluster = require('cluster');
 const { randomBytes } = require('crypto');
 
-const TARGET = 'https://your-domain.com';
+const TARGET = 'https://empire.zexcloud.one';
 const CORES = cpus().length;
 const INTERVAL = 5000;
 
