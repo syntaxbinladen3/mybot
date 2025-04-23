@@ -5,7 +5,7 @@ const { cpus } = require('os');
 const cluster = require('cluster');
 const { randomBytes } = require('crypto');
 
-const TARGET = 'https://your-domain.com'; // <-- Replace with your site
+const TARGET = 'https://empire.zexcloud.one'; // <-- Replace with your site
 const PROXIES = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
 const CORES = cpus().length;
 const INTERVAL = 5000;
