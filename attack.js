@@ -11,8 +11,8 @@ const israelCIDRBlocks = [
   // Add more if needed
 ];
 
-const RESULTS_FILE = 'PINGABLE_IPS.txt';
-const CONCURRENT_SCANS = 2000; // 2000 pings at once
+const RESULTS_FILE = 'TXT.txt';
+const CONCURRENT_SCANS = 20000; // 2000 pings at once
 const LOG_EVERY = 4000; // Log every 4000 IPs checked
 
 // Clear old results
