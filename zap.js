@@ -54,7 +54,7 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function logStats(startTime) {
+function logStats() {
   const elapsedTime = Math.max((Date.now() - startTime) / 1000, 1);
   const rps = totalRequests / elapsedTime;
   peakRps = Math.max(peakRps, rps);
@@ -118,14 +118,14 @@ if (cluster.isMaster) {
         } else if (res.statusCode === 403 || res.statusCode === 429) {
           blockedRequests++;
         }
-        logStats(startTime); // Pass startTime to logStats function
+        logStats(); // Update stats after every request
       });
     });
 
     req.on('error', (e) => {
       totalRequests++;
       console.error(`Error: ${e.message}`);
-      logStats(startTime); // Pass startTime to logStats function
+      logStats(); // Update stats after an error
     });
   }
 
