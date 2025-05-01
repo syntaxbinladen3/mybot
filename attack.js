@@ -1,7 +1,7 @@
 const puppeteer = require('puppeteer');
 
 // Target URL
-const targetUrl = 'https://example.com'; // Replace with the target URL
+const targetUrl = 'https://empire.zexcloud.one/'; // Replace with the target URL
 
 // Function to send a single HTTP request
 async function sendRequest(url, headers, method = 'GET', body = null) {
