@@ -41,7 +41,7 @@ function getSpoofedHeaders() {
 function sendRequest(target) {
   const options = {
     hostname: target,
-    port: 80, // Use HTTP 1.1 on port 80
+    port: 80, // Default HTTP port
     path: '/',
     method: 'GET',
     headers: getSpoofedHeaders(),
@@ -50,8 +50,10 @@ function sendRequest(target) {
   const req = http.request(options, (res) => {
     if (res.statusCode >= 200 && res.statusCode < 400) {
       successfulRequests++;
+      console.log(`[INFO] Successful request! Status Code: ${res.statusCode}`);
     } else {
       failedRequests++;
+      console.log(`[ERROR] Failed request with status: ${res.statusCode}`);
     }
 
     totalRequests++;
@@ -60,6 +62,7 @@ function sendRequest(target) {
   req.on('error', (error) => {
     failedRequests++;
     totalRequests++;
+    console.error(`[Error] Request failed: ${error.message}`);
   });
 
   req.end();
