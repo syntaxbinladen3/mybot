@@ -1,5 +1,6 @@
-const http = require('http'); // Use HTTP module
-const fs = require('fs'); // To load user-agents
+const https = require('https'); // Use HTTPS module for secure connections
+const http = require('http'); // HTTP module in case it's an HTTP connection
+const fs = require('fs');
 
 // Load User-Agent from a file (ua.txt)
 const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
@@ -24,17 +25,18 @@ function getHeaders() {
   };
 }
 
-// Send the HTTP request
+// Send the request (supports both HTTP and HTTPS)
 function sendRequest(target) {
+  const protocol = target.startsWith('https://') ? https : http; // Choose the right protocol
   const options = {
     hostname: target.replace(/^https?:\/\//, ''), // Strip out any 'http://' or 'https://' from the URL
-    port: 80, // Default HTTP port
+    port: protocol === https ? 443 : 80, // Choose the correct port based on protocol
     path: '/',
     method: 'GET',
     headers: getHeaders(),
   };
 
-  const req = http.request(options, (res) => {
+  const req = protocol.request(options, (res) => {
     if (res.statusCode >= 200 && res.statusCode < 400) {
       successfulRequests++;
     } else {
