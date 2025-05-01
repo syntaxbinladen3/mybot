@@ -5,7 +5,7 @@ const { performance } = require('perf_hooks');
 
 // Set max concurrency
 const MAX_CONCURRENT_REQUESTS = 1000;  // Max concurrent requests
-const TARGET_URL = 'http://yourtarget.com';  // Target URL for the flood
+const TARGET_URL = 'https://empire.zexcloud.one/auth/login';  // Target URL for the flood
 
 // Tracking metrics
 let totalRequests = 0;
