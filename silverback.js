@@ -14,7 +14,7 @@ function getRandomUserAgent() {
   return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
 
-// Spoofed headers to make the request look like it's from a real browser
+// Basic headers to make the request look like it's from a real browser
 function getHeaders() {
   return {
     'User-Agent': getRandomUserAgent(),
@@ -27,7 +27,7 @@ function getHeaders() {
 // Send the HTTP request
 function sendRequest(target) {
   const options = {
-    hostname: target,
+    hostname: target.replace(/^https?:\/\//, ''), // Strip out any 'http://' or 'https://' from the URL
     port: 80, // Default HTTP port
     path: '/',
     method: 'GET',
