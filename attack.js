@@ -2,7 +2,7 @@ const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 
-const THREADS = Math.min(8, cpus().length);
+const THREADS = Math.min(16, cpus().length);
 
 if (isMainThread) {
     if (process.argv.length < 4) {
