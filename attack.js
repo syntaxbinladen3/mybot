@@ -5,9 +5,9 @@ const readline = require('readline');
 const net = require('net');
 
 const THREADS = 16;
-const INITIAL_CONNECTIONS =30;
-const POWER_MULTIPLIER = 4;
-const WARMUP_TIME = 15000;
+const INITIAL_CONNECTIONS =25;
+const POWER_MULTIPLIER = 3;
+const WARMUP_TIME = 10000;
 const MAX_INFLIGHT = 2000;
 
 let totalRequests = 0;
@@ -26,7 +26,7 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`Warming up... Starting attack in 5s`);
+    console.log(`Warming up... Starting attack in 10s`);
 
     setTimeout(() => {
         console.clear();
