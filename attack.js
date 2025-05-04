@@ -43,7 +43,6 @@ if (isMainThread) {
             }
         }, WARMUP_TIME);
 
-        // Live stats
         setInterval(() => {
             maxRps = Math.max(maxRps, rpsLastSecond);
             renderStats();
@@ -66,14 +65,9 @@ if (isMainThread) {
     const server = net.createServer(socket => {
         socket.on('data', data => {
             const msg = data.toString();
-            if (msg === 'req') {
-                totalRequests++;
-                rpsLastSecond++;
-            } else if (msg === 'ok') {
-                successCount++;
-            } else if (msg === 'err') {
-                errorCount++;
-            }
+            if (msg === 'req') totalRequests++, rpsLastSecond++;
+            else if (msg === 'ok') successCount++;
+            else if (msg === 'err') errorCount++;
         });
     });
     server.listen(9999);
@@ -85,60 +79,67 @@ if (isMainThread) {
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
-    function sendOne(client, inflight) {
-        if (Date.now() > end) return;
+    function sendLoop(client, inflight) {
+        if (Date.now() > end || client.destroyed) return;
 
-        if (inflight.count >= MAX_INFLIGHT) {
-            return setTimeout(() => sendOne(client, inflight), 1);
-        }
+        if (inflight.count < MAX_INFLIGHT) {
+            try {
+                inflight.count++;
+                const req = client.request({ ':method': 'GET', ':path': '/' });
 
-        try {
-            inflight.count++;
-            const req = client.request({ ':path': '/', ':method': 'GET' });
-            req.setNoDelay?.(true);
+                req.setNoDelay?.(true);
+                req.on('response', () => {
+                    inflight.count--;
+                    sendStat('ok');
+                });
 
-            req.on('response', () => {
-                sendStat('ok');
+                req.on('error', () => {
+                    inflight.count--;
+                    sendStat('err');
+                });
+
+                req.end();
+                sendStat('req');
+            } catch (e) {
                 inflight.count--;
-            });
-
-            req.on('error', () => {
                 sendStat('err');
-                inflight.count--;
-            });
-
-            req.end();
-            sendStat('req');
-        } catch (error) {
-            inflight.count--;
-            sendStat('err');
+            }
         }
 
-        setImmediate(() => sendOne(client, inflight));
+        setTimeout(() => sendLoop(client, inflight), 1);
     }
 
     function createConnection() {
+        if (Date.now() > end) return;
+
         let client;
         try {
             client = http2.connect(target);
+
+            const inflight = { count: 0 };
+
             client.on('error', () => {
-                // Retry on error
-                setTimeout(createConnection, 250);
+                inflight.count = 0;
+                client.destroy();
             });
 
-            client.on('close', () => setTimeout(createConnection, 100));
+            client.on('goaway', () => {
+                client.close();
+            });
+
+            client.on('close', () => {
+                inflight.count = 0;
+                setTimeout(createConnection, 100); // reconnect
+            });
 
             client.on('connect', () => {
-                const inflight = { count: 0 };
-                for (let i = 0; i < 100; i++) sendOne(client, inflight);
+                for (let i = 0; i < 100; i++) sendLoop(client, inflight);
             });
-        } catch (error) {
-            // Retry connection if it fails
+        } catch {
             setTimeout(createConnection, 250);
         }
     }
 
-    // Start connections
     for (let i = 0; i < connections; i++) {
         createConnection();
     }
