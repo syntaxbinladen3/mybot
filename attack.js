@@ -5,10 +5,10 @@ const readline = require('readline');
 const net = require('net');
 
 const THREADS = 16;
-const INITIAL_CONNECTIONS = 20;
+const CONNECTIONS_PER_THREAD = 25;
 const POWER_MULTIPLIER = 2;
 const WARMUP_TIME = 5000;
-const MAX_INFLIGHT = 2000;
+const MAX_INFLIGHT = 1500;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -43,7 +43,6 @@ if (isMainThread) {
             }
         }, WARMUP_TIME);
 
-        // Live stats
         setInterval(() => {
             maxRps = Math.max(maxRps, rpsLastSecond);
             renderStats();
@@ -79,25 +78,25 @@ if (isMainThread) {
     server.listen(9999);
 } else {
     const { target, duration, initial } = workerData;
-    const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
+    const totalConnections = (initial ? CONNECTIONS_PER_THREAD : CONNECTIONS_PER_THREAD * POWER_MULTIPLIER);
     const end = Date.now() + duration * 1000;
-
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
-    function sendOne(client, inflight) {
+    function sendRequest(client, inflight) {
         if (Date.now() > end) return;
-
-        if (inflight.count >= MAX_INFLIGHT) {
-            return setTimeout(() => sendOne(client, inflight), 1);
-        }
+        if (inflight.count >= MAX_INFLIGHT) return setTimeout(() => sendRequest(client, inflight), 1);
 
         try {
             inflight.count++;
             const req = client.request({ ':path': '/', ':method': 'GET' });
             req.setNoDelay?.(true);
-            req.on('response', () => {
-                sendStat('ok');
+            req.on('response', headers => {
+                if (headers[':status'] >= 200 && headers[':status'] < 300) {
+                    sendStat('ok');
+                } else {
+                    sendStat('err');
+                }
                 inflight.count--;
             });
             req.on('error', () => {
@@ -111,25 +110,26 @@ if (isMainThread) {
             sendStat('err');
         }
 
-        setImmediate(() => sendOne(client, inflight));
+        setImmediate(() => sendRequest(client, inflight));
     }
 
-    function createConnection() {
-        let client;
-        try {
-            client = http2.connect(target);
-            client.on('error', () => {});
-            client.on('close', () => setTimeout(createConnection, 100));
-            client.on('connect', () => {
+    function createConnectionStaggered(index) {
+        setTimeout(() => {
+            try {
+                const client = http2.connect(target);
                 const inflight = { count: 0 };
-                for (let i = 0; i < 100; i++) sendOne(client, inflight);
-            });
-        } catch {
-            setTimeout(createConnection, 250);
-        }
+                client.on('error', () => {});
+                client.on('close', () => setTimeout(() => createConnectionStaggered(index), 250));
+                client.on('connect', () => {
+                    for (let i = 0; i < 25; i++) sendRequest(client, inflight);
+                });
+            } catch {
+                setTimeout(() => createConnectionStaggered(index), 500);
+            }
+        }, index * 40); // 40ms spacing
     }
 
-    for (let i = 0; i < connections; i++) {
-        createConnection();
+    for (let i = 0; i < totalConnections; i++) {
+        createConnectionStaggered(i);
     }
 }
