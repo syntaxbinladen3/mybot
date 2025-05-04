@@ -6,11 +6,12 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = cpus().length * 2; // Demon time: 32 workers on 16vCPU
-const CONNECTIONS_PER_THREAD = 100;
+const THREADS = cpus().length * 2; // 32 workers on 16vCPU
+const CONNECTIONS_PER_THREAD = 50; // Reduced connections per thread to avoid EADDRNOTAVAIL
 const POWER_MULTIPLIER = 2;
 const WARMUP_TIME = 5000;
 const MAX_INFLIGHT = 5000;
+const CONNECTION_DELAY = 100; // Delay to stagger connection attempts
 
 let totalRequests = 0;
 let successCount = 0;
@@ -126,7 +127,7 @@ if (isMainThread) {
                 for (let i = 0; i < 300; i++) sendOne(client, inflight);
             });
         } catch {
-            setTimeout(createConnection, 250);
+            setTimeout(createConnection, CONNECTION_DELAY);
         }
     }
 
