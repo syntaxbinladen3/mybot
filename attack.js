@@ -10,7 +10,7 @@ const INITIAL_CONNECTIONS = 20;
 const POWER_MULTIPLIER = 2;
 const WARMUP_TIME = 20000; // 20 seconds warmup
 const MAX_INFLIGHT = 2000;
-const MAX_RPS = 10000; // Adjust this depending on your needs
+const MAX_RPS = 100000; // Adjust this depending on your needs
 
 let totalRequests = 0;
 let successCount = 0;
