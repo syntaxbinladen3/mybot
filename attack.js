@@ -4,11 +4,11 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 32;
-const INITIAL_CONNECTIONS = 45;
-const POWER_MULTIPLIER = 4;
+const THREADS = 16;
+const INITIAL_CONNECTIONS = 30;
+const POWER_MULTIPLIER = 3;
 const MAX_INFLIGHT = 4000;
-const LIVE_REFRESH_RATE = 1100;
+const LIVE_REFRESH_RATE = 100;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -114,14 +114,14 @@ if (isMainThread) {
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 1000); // auto-recover fast
+                setTimeout(createConnection, 100); // auto-recover fast
             });
 
             client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 500));
+            client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 1500; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
             setTimeout(createConnection, 100);
