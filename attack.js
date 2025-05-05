@@ -114,17 +114,17 @@ if (isMainThread) {
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 100); // auto-recover fast
+                setTimeout(createConnection, 1000); // auto-recover fast
             });
 
             client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 100));
+            client.on('close', () => setTimeout(createConnection, 1000));
 
             client.on('connect', () => {
-                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < 1500; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 100);
+            setTimeout(createConnection, 1000);
         }
     }
 
