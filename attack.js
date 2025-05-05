@@ -4,6 +4,9 @@ const { cpus } = require('os');
 const readline = require('readline');
 const net = require('net');
 
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
+
 const THREADS = 32;
 const INITIAL_CONNECTIONS = 45;
 const POWER_MULTIPLIER = 4;
@@ -77,7 +80,11 @@ if (isMainThread) {
     const end = Date.now() + duration * 1000;
 
     const socket = net.connect(port, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
+    const sendStat = msg => {
+        try {
+            socket.write(msg);
+        } catch {}
+    };
 
     function sendLoop(client, inflight) {
         if (Date.now() > end || client.destroyed) return;
@@ -105,7 +112,7 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 5); // smooth burst
+        setTimeout(() => sendLoop(client, inflight), 5);
     }
 
     function createConnection() {
@@ -122,11 +129,14 @@ if (isMainThread) {
             const inflight = { count: 0 };
 
             client.on('error', () => {
-                client.destroy();
+                try { client.destroy(); } catch {}
                 setTimeout(createConnection, 100);
             });
 
-            client.on('goaway', () => client.close());
+            client.on('goaway', () => {
+                try { client.close(); } catch {}
+            });
+
             client.on('close', () => setTimeout(createConnection, 100));
 
             client.on('connect', () => {
