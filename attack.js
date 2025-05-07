@@ -30,7 +30,7 @@ function makeRequest(targetUrl, callback) {
     req.end();
 }
 
-// Function to simulate a flood of requests (no concurrency control)
+// Function to flood requests without recursion, using a queue
 function startFloodTest(targetUrl, numRequests) {
     let completedRequests = 0;
     let totalDuration = 0;
@@ -39,6 +39,7 @@ function startFloodTest(targetUrl, numRequests) {
     console.log(`Starting flood test on ${targetUrl}`);
     console.log(`Total Requests: ${numRequests}`);
 
+    // Using setImmediate for non-blocking call to avoid stack overflow
     function runRequest() {
         if (completedRequests < numRequests) {
             makeRequest(targetUrl, (err, result) => {
@@ -59,11 +60,10 @@ function startFloodTest(targetUrl, numRequests) {
                     console.log(`Completed Requests: ${completedRequests}`);
                     console.log(`Errors: ${errors}`);
                     console.log(`Average Duration: ${totalDuration / completedRequests}ms`);
-                } else {
-                    runRequest(); // Continue firing more requests
                 }
             });
-            runRequest(); // Keep firing requests immediately
+
+            setImmediate(runRequest); // Allow event loop to handle the next request asynchronously
         }
     }
 
