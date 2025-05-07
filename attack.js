@@ -101,7 +101,7 @@ function sendLoop(client, inflight) {
         }  
     }  
 
-    setTimeout(() => sendLoop(client, inflight), 0); // no delay between calls  
+    setTimeout(() => sendLoop(client, inflight), 0.1); // no delay between calls  
 }  
 
 function createConnection() {  
@@ -115,14 +115,14 @@ function createConnection() {
 
         client.on('error', () => {  
             client.destroy();  
-            setTimeout(createConnection, 100); // auto-recover fast  
+            setTimeout(createConnection, 500); // auto-recover fast  
         });  
 
         client.on('goaway', () => client.close());  
-        client.on('close', () => setTimeout(createConnection, 100));  
+        client.on('close', () => setTimeout(createConnection, 500));  
 
         client.on('connect', () => {  
-            for (let i = 0; i < 150; i++) sendLoop(client, inflight); // boosted request flow  
+            for (let i = 0; i < 550; i++) sendLoop(client, inflight); // boosted request flow  
         });  
     } catch {  
         setTimeout(createConnection, 100);  
