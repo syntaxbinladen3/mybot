@@ -152,7 +152,7 @@ if (isMainThread) {
                 for (let i = 0; i < 550; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
-            setTimeout(createConnection, 100);
+            setTimeout(createConnection, 500);
         }
     }
 
