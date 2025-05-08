@@ -65,7 +65,7 @@ Time Remaining: ${Math.ceil(remainingTime / 1000)}s
 // Function to perform the flooding attack
 const performFlood = () => {
   console.log('Starting flood attack...');
-  
+
   // Flooding continuously without delay
   const floodInterval = setInterval(() => {
     if (Date.now() > stopTime) {
