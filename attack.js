@@ -3,7 +3,7 @@ const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 99;
+const THREADS = 77;
 const POWER_MULTIPLIER = 1;
 const MAX_INFLIGHT = 1000;
 const LIVE_REFRESH_RATE = 100;
