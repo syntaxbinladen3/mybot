@@ -3,7 +3,7 @@ const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 100;
+const THREADS = 99;
 const POWER_MULTIPLIER = 1;
 const MAX_INFLIGHT = 1000;
 const LIVE_REFRESH_RATE = 100;
@@ -127,20 +127,20 @@ if (isMainThread) {
         try {
             client = http2.connect(target);
         } catch {
-            return setTimeout(createConnection, 100);
+            return setTimeout(createConnection, 10000);
         }
 
         const inflight = { count: 0 };
 
         client.on('error', () => {
             client.destroy();
-            setTimeout(createConnection, 300);
+            setTimeout(createConnection, 30000);
         });
 
         client.on('goaway', () => client.close());
 
         client.on('close', () => {
-            setTimeout(createConnection, 300);
+            setTimeout(createConnection, 30000);
         });
 
         client.on('connect', () => {
