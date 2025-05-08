@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 // Configuration
-const TARGET_URL = 'https://example.com'; // Change this to the target URL
+const TARGET_URL = 'https://lookthefuture.com/'; // Change this to the target URL
 const CONCURRENT_REQUESTS = 1000; // Number of concurrent requests to send
 const TOTAL_REQUESTS = 100000; // Total requests to send
 
