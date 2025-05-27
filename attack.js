@@ -145,4 +145,4 @@ if (isMainThread) {
 
     const spawns = getRandomInt(500, 1000);
     for (let i = 0; i < spawns; i++) createConnection();
-}
+        }
