@@ -9,7 +9,7 @@ if (!target || !durationStr) {
 const duration = parseFloat(durationStr);
 const endTime = Date.now() + duration * 1000;
 
-const packetSize = 512;
+const packetSize = 154;  // Reduced packet size for VPS compatibility
 let sent = 0, received = 0, timeouts = 0;
 
 process.stdout.write('\x1Bc'); // Clear screen
@@ -29,7 +29,7 @@ function checksum(buf) {
 
 function createPacket(id) {
   const buf = Buffer.alloc(packetSize);
-  buf.writeUInt8(8, 0); // Type
+  buf.writeUInt8(8, 0); // Type: Echo (ping) request
   buf.writeUInt8(0, 1); // Code
   buf.writeUInt16BE(0, 2); // Checksum placeholder
   buf.writeUInt16BE(process.pid & 0xffff, 4); // Identifier
@@ -85,7 +85,7 @@ async function pingLoop() {
       awaitingReply = false;
     }
 
-    const timeout = 1000; // 1s timeout
+    const timeout = 700; // Reduced timeout to 700ms
     const startWait = Date.now();
 
     while (awaitingReply && (Date.now() - startWait) < timeout) {
@@ -99,7 +99,7 @@ async function pingLoop() {
       timeouts++;
     }
 
-    await delay(200); // Throttle between packets
+    await delay(200); // Maintain ~0.2s between pings
   }
 
   socket.close();
