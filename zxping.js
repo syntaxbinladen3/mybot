@@ -9,7 +9,7 @@ if (!target || !durationStr) {
 const duration = parseFloat(durationStr);
 const endTime = Date.now() + duration * 1000;
 
-const packetSize = 54;  // Reduced packet size for VPS compatibility
+const packetSize = 154;  // Reduced packet size for VPS compatibility
 let sent = 0, received = 0, timeouts = 0;
 
 process.stdout.write('\x1Bc'); // Clear screen
@@ -85,7 +85,7 @@ async function pingLoop() {
       awaitingReply = false;
     }
 
-    const timeout = 700; // Reduced timeout to 700ms
+    const timeout = 25000; // 25 seconds timeout
     const startWait = Date.now();
 
     while (awaitingReply && (Date.now() - startWait) < timeout) {
