@@ -6,8 +6,8 @@ const { exec } = require('child_process');
 const target = process.argv[2];
 const duration = parseInt(process.argv[3]);
 const batchSize = 10;
-const reloadMin = 2300;
-const reloadMax = 2500;
+const reloadMin = 23;
+const reloadMax = 25;
 
 if (!target || isNaN(duration)) {
   console.log('Usage: node attack.js <target_ip> <duration_seconds>');
