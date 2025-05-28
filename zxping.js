@@ -9,7 +9,7 @@ if (!target || !durationStr) {
 const duration = parseFloat(durationStr);
 const endTime = Date.now() + duration * 1000;
 
-const packetSize = 154;  // Reduced packet size for VPS compatibility
+const packetSize = 54;  // Reduced packet size for VPS compatibility
 let sent = 0, received = 0, timeouts = 0;
 
 process.stdout.write('\x1Bc'); // Clear screen
