@@ -1,7 +1,4 @@
 const raw = require('raw-socket');
-const chalk = require('chalk');
-const os = require('os');
-
 const [,, target, durationStr] = process.argv;
 
 if (!target || !durationStr) {
@@ -19,7 +16,7 @@ let received = 0;
 let timeouts = 0;
 
 // Clear terminal
-console.clear();
+process.stdout.write('\x1Bc');
 
 // Banner
 console.log(`S.T.S - ZX-PING | T.ME/STSVKINGDOM`);
@@ -57,6 +54,7 @@ socket.on("message", (buffer, source) => {
     const time = Date.now() - sentTime;
     received++;
     console.log(`${buffer.length} bytes from ${source} : - ttl=${buffer.readUInt8(8)} - time=${time}ms`);
+    delete times[id];
   }
 });
 
@@ -72,7 +70,7 @@ const pingInterval = setInterval(() => {
     socket.close();
 
     setTimeout(() => {
-      console.clear();
+      process.stdout.write('\x1Bc'); // Clear terminal again
       console.log(`ZX-PING | T.ME/STSVKINGDOM`);
       console.log(`--------------------------------------------------`);
       console.log(`RECEIVED - ${received}`);
@@ -97,20 +95,20 @@ const pingInterval = setInterval(() => {
     socket.send(packet, 0, packet.length, target, (err) => {
       if (err) {
         timeouts++;
-        console.log(chalk.red('connection timed out'));
+        console.log('\x1b[31mconnection timed out\x1b[0m'); // Red color
       }
     });
 
-    // Fallback timeout handler
+    // Timeout fallback
     setTimeout(() => {
       if (times[id]) {
         timeouts++;
-        console.log(chalk.red('connection timed out'));
+        console.log('\x1b[31mconnection timed out\x1b[0m'); // Red color
         delete times[id];
       }
     }, 1000);
   } catch (err) {
-    console.log(chalk.red('connection error'));
     timeouts++;
+    console.log('\x1b[31mconnection error\x1b[0m');
   }
 }, interval);
