@@ -107,5 +107,5 @@ if (cluster.isMaster) {
   setInterval(() => {
     process.send({ type: 'stats', sent, success, failed, pps });
     sent = success = failed = pps = 0;
-  }, 100);
+  }, 2000);
 }
