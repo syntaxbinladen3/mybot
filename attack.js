@@ -132,7 +132,7 @@ if (cluster.isMaster) {
     sent = 0;
     bytesSent = 0;
     bps = 0;
-  }, 1000);
+  }, 10000);
 
   sendLoop();
 }
