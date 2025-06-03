@@ -1,9 +1,8 @@
 const { spawn } = require('child_process');
-const os = require('os');
 const [,, subnetArg, durationStr] = process.argv;
 
 if (!subnetArg || !durationStr) {
-  console.log("Usage: node ZX-SN-PING.js <subnet/mask> <duration_in_ms>");
+  console.log("Usage: node ZX-SN-PING.js <subnet/mask> <duration_in_seconds>");
   process.exit(1);
 }
 
@@ -36,12 +35,11 @@ const cidrToIps = (cidr) => {
 
 const allIps = cidrToIps(subnetArg);
 const totalIps = allIps.length;
-const duration = parseInt(durationStr);
+const duration = parseInt(durationStr); // in SECONDS
 const startTime = Date.now();
 
 let totalPings = 0;
 let onlineIps = new Set();
-let lastPingResult = {}; // Stores last known online/offline status
 
 function formatUptime(ms) {
   const s = Math.floor(ms / 1000);
@@ -54,16 +52,17 @@ function formatUptime(ms) {
 function pingIp(ip) {
   const ping = spawn('ping', ['-c', '1', '-s', '64', '-W', '1', ip]);
 
+  let responded = false;
+
   ping.stdout.on('data', (data) => {
     if (data.toString().includes('bytes from')) {
       onlineIps.add(ip);
-      lastPingResult[ip] = true;
+      responded = true;
     }
   });
 
   ping.on('close', () => {
-    if (!lastPingResult[ip]) {
-      lastPingResult[ip] = false;
+    if (!responded) {
       onlineIps.delete(ip);
     }
     totalPings++;
@@ -71,31 +70,31 @@ function pingIp(ip) {
 }
 
 function updateDisplay() {
-  process.stdout.write('\x1Bc');
+  process.stdout.write('\x1Bc'); // clear screen
   console.log(`ZX-SN-PING | T.ME/STSVKINGDOM`);
   console.log(`--------------------------------------------------`);
-  console.log(`pings: ${totalPings}`);
-  console.log(`bytes: 64`);
-  console.log(`total ips: ${totalIps}`);
-  console.log(`online: ${onlineIps.size}/${totalIps}`);
-  console.log(`offline: ${totalIps - onlineIps.size}`);
-  console.log(`running: ${formatUptime(Date.now() - startTime)}`);
+  console.log(`pings   : ${totalPings}`);
+  console.log(`bytes   : 64`);
+  console.log(`total ips : ${totalIps}`);
+  console.log(`online  : ${onlineIps.size}/${totalIps}`);
+  console.log(`offline : ${totalIps - onlineIps.size}`);
+  console.log(`running : ${formatUptime(Date.now() - startTime)}`);
 }
 
-function tick() {
-  const now = Date.now();
-  if (now - startTime >= duration) {
-    clearInterval(loop);
-    updateDisplay();
-    console.log("\nDone. Stopping.");
-    process.exit(0);
-  }
+let elapsedSeconds = 0;
 
-  allIps.forEach(ip => {
-    pingIp(ip);
-  });
+const tick = setInterval(() => {
+  elapsedSeconds++;
+
+  // ping all IPs every tick
+  allIps.forEach(pingIp);
 
   updateDisplay();
-}
 
-const loop = setInterval(tick, 1000);
+  if (elapsedSeconds >= duration) {
+    clearInterval(tick);
+    updateDisplay();
+    console.log(`\nZX-SN-PING complete.`);
+    process.exit(0);
+  }
+}, 1000);
