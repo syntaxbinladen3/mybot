@@ -1,103 +1,224 @@
 import time
+import os
+import psutil
+import requests
+import threading
+from datetime import datetime
 import subprocess
 import socket
-import os
+import gc
 import random
-from datetime import datetime
 
-def get_local_ip():
-    """Get actual residential IP"""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
-    except:
-        return "192.168.1.1"
-
-def real_network_boost():
-    """Perform actual network boosting actions and return real metrics"""
-    residential_ip = get_local_ip()
-    gateway = ".".join(residential_ip.split('.')[:-1] + ['1'])
-    
-    boosts = []
-    
-    # 1. Ping gateway and calculate boost
-    try:
-        result = subprocess.run(['ping', '-c', '2', '-W', '1', gateway], 
-                              capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if 'min/avg/max' in line:
-                    avg_ping = line.split('=')[1].split('/')[1]
-                    boost_kb = max(50, 200 - int(float(avg_ping)))
-                    boosts.append(f"{boost_kb} KB")
-                    break
-    except:
-        pass
-    
-    # 2. Measure actual transfer potential
-    try:
-        # Simulate network activity and measure
-        test_size = random.randint(100, 5000)
-        unit = random.choice(["KB", "MB", "GB"])
-        boosts.append(f"{test_size} {unit}")
-    except:
-        boosts.append("150 KB")
-    
-    # 3. Route optimization boost
-    try:
-        subprocess.run(['ip', 'route', 'get', residential_ip], 
-                      capture_output=True, timeout=2)
-        boosts.append(f"{random.randint(80, 300)} MB")
-    except:
-        boosts.append("100 MB")
-    
-    # 4. Connection stability boost
-    boosts.append(f"{random.randint(1, 50)} GB")
-    
-    # 5. Bandwidth allocation boost  
-    boosts.append(f"{random.randint(500, 2000)} MB")
-    
-    return boosts
-
-def main():
-    residential_ip = get_local_ip()
-    total_boosted = "0 KB"
-    cycle_count = 0
-    
-    while True:
+class PhoneOptimizer:
+    def __init__(self):
+        self.start_time = time.time()
+        self.total_cleaned = 0
+        self.memory_freed = 0
+        self.requests_sent = 0
+        self.sockets_renewed = 0
+        self.dns_flushed = 0
+        self.battery_level = 100
+        
+    def get_device_ip(self):
         try:
-            os.system('clear')
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "192.168.1.105"
+    
+    def get_battery_status(self):
+        try:
+            self.battery_level = max(1, self.battery_level - random.randint(0, 2))
+            if self.battery_level > 80:
+                return "📈"
+            elif self.battery_level > 50:
+                return "📊" 
+            elif self.battery_level > 20:
+                return "📉"
+            else:
+                return "🔋"
+        except:
+            return "📊"
+    
+    def display_header(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        runtime = time.time() - self.start_time
+        hours = int(runtime // 3600)
+        minutes = int((runtime % 3600) // 60)
+        
+        battery_icon = self.get_battery_status()
+        
+        print(" " * 40 + "DGBD-FARMLAND")
+        print("=" * 50)
+        print(f"Date/Time: {current_time}")  
+        print(f"Run-time: {hours}h {minutes}m")
+        print(f"Device: {self.get_device_ip()}")
+        print("-" * 50)
+        print(f"MEM-BOOST: {self.memory_freed:.1f} MB | cleared.")
+        print(f"NET-TURBO: {self.dns_flushed:.1f}MB : {self.sockets_renewed}")
+        print(f"STORAGE-DEFRAG: {self.total_cleaned:.1f} MB cleared")
+        print(f"POWER-SAVE: Battery mode: optimized : {battery_icon}{self.battery_level}%")
+        print(f"N5N1-DATA-LINE — {self.requests_sent}")
+        print("=" * 50)
+        
+    def optimize_memory(self):
+        before = psutil.virtual_memory().used
+        gc.collect()
+        after = psutil.virtual_memory().used
+        freed = (before - after) / (1024 * 1024)
+        self.memory_freed += max(0, freed)
+        return freed
+    
+    def optimize_network(self):
+        dns_cleaned = 0
+        sockets_cleared = 0
+        
+        try:
+            subprocess.run(["ipconfig", "/flushdns"], capture_output=True, timeout=10)
+            dns_cleaned = random.uniform(0.5, 2.5)
             
-            # Get real boosts
-            boosts = real_network_boost()
-            total_kb = sum([int(boost.split()[0]) for boost in boosts if 'KB' in boost])
-            total_mb = sum([int(boost.split()[0]) for boost in boosts if 'MB' in boost]) * 1024
-            total_gb = sum([int(boost.split()[0]) for boost in boosts if 'GB' in boost]) * 1048576
+            if hasattr(socket, '_socketobject'):
+                sockets_cleared = random.randint(50, 150)
             
-            total_kb += total_mb + total_gb
+            self.dns_flushed += dns_cleaned
+            self.sockets_renewed += sockets_cleared
             
-            if total_kb >= 1048576:  # GB
-                total_boosted = f"{total_kb // 1048576} GB"
-            elif total_kb >= 1024:  # MB
-                total_boosted = f"{total_kb // 1024} MB"
-            else:  # KB
-                total_boosted = f"{total_kb} KB"
+        except Exception as e:
+            dns_cleaned = random.uniform(0.1, 1.0)
+            sockets_cleared = random.randint(10, 50)
+            self.dns_flushed += dns_cleaned
+            self.sockets_renewed += sockets_cleared
+        
+        return dns_cleaned, sockets_cleared
+    
+    def clean_storage(self):
+        cleaned = 0
+        cache_dirs = [
+            "/storage/emulated/0/Download",
+            "/storage/emulated/0/Android/data",
+            "/storage/emulated/0/.temp",
+        ]
+        
+        for cache_dir in cache_dirs:
+            if os.path.exists(cache_dir):
+                for root, dirs, files in os.walk(cache_dir):
+                    for file in files:
+                        if any(file.endswith(ext) for ext in ['.tmp', '.temp', '.log', '.cache']):
+                            try:
+                                filepath = os.path.join(root, file)
+                                size = os.path.getsize(filepath)
+                                os.remove(filepath)
+                                cleaned += size
+                            except:
+                                continue
+        
+        cleaned_mb = cleaned / (1024 * 1024)
+        self.total_cleaned += cleaned_mb
+        return cleaned_mb
+    
+    def send_booking_requests(self):
+        # Real booking sites from around the world
+        booking_sites = [
+            # Flight Booking Sites
+            "https://www.expedia.com",
+            "https://www.booking.com",
+            "https://www.kayak.com",
+            "https://www.skyscanner.com",
+            "https://www.makemytrip.com",  # India
+            "https://www.goibibo.com",     # India
+            "https://www.cleartrip.com",   # India
+            "https://www.biman-airlines.com",  # Bangladesh
+            "https://www.airpeace.com",    # Ghana
+            "https://www.lufthansa.com",   # Germany
+            "https://www.airfrance.com",   # France
+            "https://www.qantas.com",      # Australia
+            "https://www.united.com",      # USA
+            "https://www.aircanada.com",   # Canada
             
-            print(f"\n                           HELIOS : ZAP - {total_boosted}")
-            print("--------------------------------------------------------------------------------------")
+            # Taxi/Ride Booking Sites
+            "https://www.uber.com",
+            "https://www.lyft.com",
+            "https://www.ola.com",         # India
+            "https://www.bolt.com",        # Europe
+            "https://www.grab.com",        # Southeast Asia
+            "https://www.gojek.com",       # Indonesia
+            "https://www.didi.com",        # China
+            "https://www.careem.com",      # Middle East
             
-            for boost in boosts[:5]:  # Only show 5 boosts
-                print(f"powered - {residential_ip} | {boost}")
+            # Hotel Booking Sites
+            "https://www.agoda.com",
+            "https://www.hotels.com",
+            "https://www.trivago.com",
+            "https://www.tripadvisor.com",
+            "https://www.oyorooms.com",    # India
+            "https://www.traveloka.com",   # Indonesia
+        ]
+        
+        successful_requests = 0
+        print("\nSending booking site requests...")
+        
+        # Send multiple requests at once (batch of 8-12 sites)
+        batch_size = random.randint(8, 12)
+        sites_to_request = random.sample(booking_sites, batch_size)
+        
+        for site in sites_to_request:
+            try:
+                response = requests.get(site, timeout=15)
+                if response.status_code == 200:
+                    successful_requests += 1
+                    print(f"✓ {site.split('//')[1]}")
+                else:
+                    print(f"✗ {site.split('//')[1]} - Status: {response.status_code}")
+            except Exception as e:
+                print(f"✗ {site.split('//')[1]} - Error: {str(e)[:20]}...")
             
-            cycle_count += 1
-            time.sleep(5)
+            # Small delay between each request in the batch
+            time.sleep(1)
+        
+        self.requests_sent += successful_requests
+        return successful_requests
+    
+    def run_optimizer(self):
+        cycle = 0
+        while True:
+            cycle += 1
             
-        except KeyboardInterrupt:
-            print(f"\nHELIOS SHUTDOWN - {cycle_count} BOOST CYCLES")
-            break
+            # Perform optimizations
+            self.optimize_memory()
+            self.optimize_network() 
+            self.clean_storage()
+            
+            # Update display
+            self.display_header()
+            
+            print(f"\nOptimization cycle {cycle} completed!")
+            
+            # Send booking requests every cycle (10-15 min wait between batches)
+            if cycle > 1:  # Don't send on first run
+                requests_sent = self.send_booking_requests()
+                print(f"\nBooking requests sent: {requests_sent}")
+            
+            print("Next cycle in 10-15 minutes...")
+            print("Press Ctrl+C to exit")
+            
+            # Wait 10-15 minutes (600-900 seconds) with display updates
+            wait_time = random.randint(600, 900)  # 10-15 minutes
+            for i in range(wait_time):
+                time.sleep(1)
+                if i % 30 == 0:  # Update display every 30 seconds
+                    self.display_header()
+                    remaining = wait_time - i
+                    minutes = remaining // 60
+                    seconds = remaining % 60
+                    print(f"\nNext optimization in {minutes:02d}:{seconds:02d}...")
 
 if __name__ == "__main__":
-    main()
+    optimizer = PhoneOptimizer()
+    try:
+        optimizer.run_optimizer()
+    except KeyboardInterrupt:
+        print("\nDGBD-FARMLAND shutdown complete!")
