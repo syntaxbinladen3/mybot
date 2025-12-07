@@ -1,4 +1,0 @@
-https://sts-base.vercel.app/screamv2flood?target=[replace]
-https://sts-base.vercel.app/attack1?target=[replace]
-https://sts-base.vercel.app/attack2?target=[replace]
-https://sts-base.vercel.app/attack3?target=[replace]
