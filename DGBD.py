@@ -121,7 +121,7 @@ class DGBD_FARMLAND:
         try:
             # Using HEAD method as requested
             response = requests.head(
-                "http://command-station.com",  # Changed to HTTP for HEAD requests
+                "https://www.honeygain.com/",  # Changed to HTTP for HEAD requests
                 headers=headers,
                 timeout=5,
                 allow_redirects=True
