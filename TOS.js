@@ -88,6 +88,8 @@ class TOS_SHARK {
             await this.sendRandomRequest();
             if (i % 50 === 0) await this.sleepRandom(10, 50);
         }
+
+        console.clear();
         
         // Step 3: Main attack loop
         this.attackLoop();
