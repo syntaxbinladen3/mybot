@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 
 // ================= CONFIG =================
-const TARGET = "https://example.com"; // CHANGE THIS
+const TARGET = "https://sts-network.vercel.app/"; // CHANGE THIS
 const H1INF_PY = "H1INF.py";
 const H1FD_PY = "H1FD.py";
 const LOG_INTERVAL = 10000; // 10 seconds
