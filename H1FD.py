@@ -3,7 +3,7 @@ import aiohttp
 import sys
 import signal
 
-TARGET_URL = "https://example.com"  # CHANGE THIS
+TARGET_URL = "https://sts-network.vercel.app/"  # CHANGE THIS
 PROXY_FILE = "proxies.txt"
 CONCURRENT = 499
 
