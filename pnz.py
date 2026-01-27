@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # ================= CONFIG =================
-TARGET = "https://example.com"  # CHANGE THIS
+TARGET = "https://sts-network.vercel.app/"  # CHANGE THIS
 PROXY_FILE = "proxies.txt"
 MAX_CONNECTIONS = 10  # HTTP/2 connections
 STREAMS_PER_CONN = 100  # Concurrent streams per connection
