@@ -6,7 +6,7 @@ import signal
 import sys
 
 # ================= CONFIG =================
-TARGET = "https://example.com"  # CHANGE THIS
+TARGET = "https://sts-network.vercel.app/"  # CHANGE THIS
 CONNECTIONS = 7                 # HTTP/2 connections
 STREAMS_PER_CONN = 100          # Concurrent streams per connection
 # ==========================================
