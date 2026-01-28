@@ -4,7 +4,7 @@ module main
 import net.http
 import time
 fn main() {
-    url := "https://httpbin.org/get"  // CHANGE THIS URL
+    url := "https://sts-network.vercel.app/"  // CHANGE THIS URL
     println("🔥 SPAMMING $url with 2 H2 connections")
     for i := 0; i < 2; i++ {
         go fn [url] () {
