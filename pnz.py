@@ -3,7 +3,7 @@ import threading
 import time
 import sys
 
-target_ip = "127.0.0.1"
+target_ip = "45.133.200.14"
 target_port = 80
 
 packet_count = 0
