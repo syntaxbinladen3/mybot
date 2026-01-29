@@ -4,7 +4,7 @@ import time
 import random
 import struct
 
-target_ip = "192.168.1.1"  # CHANGE THIS
+target_ip = "62.109.121.42"  # CHANGE THIS
 
 # Colors
 GREEN = '\033[92m'
