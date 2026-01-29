@@ -1,4 +1,3 @@
-```python
 import socket
 import struct
 import random
@@ -262,4 +261,3 @@ try:
 except KeyboardInterrupt:
     print(f"\n{RED}DNS-POISON stopped.{RESET}")
     print(f"{YELLOW}Poisoned records may persist for 24h+{RESET}")
-```
