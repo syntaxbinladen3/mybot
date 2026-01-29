@@ -5,7 +5,7 @@ import random
 import subprocess
 import os
 
-router_ip = "62.109.121.43"
+router_ip = "172.217.33.147"
 
 # Colors
 MAGENTA = '\033[95m'
