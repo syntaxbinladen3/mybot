@@ -5,7 +5,7 @@ import threading
 import time
 from collections import defaultdict
 
-router_ip = "62.109.121.43"  # Change to target IP
+router_ip = "62.109.121.42"  # Change to target IP
 DNS_PORT = 53
 
 # Colors
