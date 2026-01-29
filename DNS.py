@@ -4,7 +4,7 @@ import time
 import random
 
 # Two target IPs
-router_ips = ["62.109.121.42", "192.168.1.1"]  # Add your second IP here
+router_ips = ["62.109.121.42", "62.52.52.26"]  # Add your second IP here
 
 # Colors
 MAGENTA = '\033[95m'
