@@ -5,7 +5,7 @@ import random
 import struct
 
 # Two target IPs
-router_ips = ["62.109.121.42", "192.168.1.1"]  # Add your second IP here
+router_ips = ["62.109.121.42", "74.63.24.212"]  # Add your second IP here
 
 # Colors
 MAGENTA = '\033[95m'
