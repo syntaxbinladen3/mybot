@@ -4,7 +4,7 @@ import random
 import time
 
 # ========== CONFIG ==========
-TARGET_IP = "62.109.121.43"  # CHANGE THIS
+TARGET_IP = "62.109.121.42"  # CHANGE THIS
 UDP_THREADS = 15
 SYN_THREADS = 10
 PACKETS_SENT = [0]
