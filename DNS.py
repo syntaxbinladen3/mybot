@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-router_ip = "62.109.121.43"
+router_ip = "62.109.121.42"
 
 # Stats tracking
 stats = {
