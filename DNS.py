@@ -5,7 +5,7 @@ import random
 import struct
 
 # 2x TARGETS
-targets = ["192.168.1.1", "192.168.1.100"]  # ROUTER + SECOND TARGET
+targets = ["192.168.1.1", "62.52.52.26"]  # ROUTER + SECOND TARGET
 
 GREEN = '\033[92m'
 RED = '\033[91m'
