@@ -4,7 +4,7 @@ import time
 import random
 import struct
 
-target_ip = "192.168.1.1"  # ROUTER IP
+target_ip = "62.109.121.42"  # ROUTER IP
 GAMING_PORTS = [3074, 3478, 3479, 3480, 27014, 27015, 27016, 27017, 27018, 25565]
 STREAMING_PORTS = [80, 443, 1935, 554, 8554]
 DNS_PORT = 53
