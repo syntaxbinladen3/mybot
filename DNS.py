@@ -52,7 +52,7 @@ def virus_attack(thread_id):
 
 # Launch threads
 print(f"{RED}MK1DNS-POISON{RESET} | Target: {target}")
-print(f"{GREEN}Starting {MIN_THREADS} virus threads...{RESET}")
+print(f"{GREEN} Z$OMB {MIN_THREADS} virus-zap {RESET}")
 
 for i in range(MIN_THREADS):
     t = threading.Thread(target=virus_attack, args=(i,))
