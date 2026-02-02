@@ -5,7 +5,7 @@ import random
 import ipaddress
 
 # TARGET: Israeli network IP
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 TARGET_SUBNET = "45.60.39.0/24"  # Whole Psychz block
 
 # Colors for output
