@@ -5,7 +5,7 @@ import random
 import gc
 
 # TARGET
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 
 # EXTREME MK2 CONFIG
 TOTAL_THREADS = 1200
