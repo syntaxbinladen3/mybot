@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-TARGET_IP = "192.168.1.1"
+TARGET_IP = "62.109.121.42"
 
 # EFFICIENT 500 THREADS
 UDP_RAPID_PPS = 125    # Fast small
