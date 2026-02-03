@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-TARGET_IP = "192.168.1.1"  # YOUR ROUTER
+TARGET_IP = "62.109.121.42"  # YOUR ROUTER
 
 # THREAD BREAKDOWN
 UDP_RAPID_PPS = 150    # Fast small packets
