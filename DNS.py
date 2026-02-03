@@ -5,7 +5,7 @@ import random
 import struct
 
 # TARGET
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 
 # RAW POWER CONFIG
 UDP_THREADS = 400      # Raw UDP power
