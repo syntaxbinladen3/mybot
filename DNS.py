@@ -8,7 +8,7 @@ from colorama import Fore, Back, Style, init
 # Initialize colorama
 init(autoreset=True)
 
-TARGET_IP = "192.168.1.1"  # YOUR ROUTER
+TARGET_IP = "62.109.121.42"  # YOUR ROUTER
 
 # ==================== COLORAMA COLORS ====================
 SK1_COLOR = Fore.YELLOW  # yellow_to_green = YELLOW
