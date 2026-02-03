@@ -6,7 +6,7 @@ import gc
 from datetime import datetime
 
 # TARGET
-TARGET_IP = "45.60.39.88"
+TARGET_IP = "62.109.121.42"
 
 # MK2-DP v2.1 CONFIG
 UDP_THREADS = 300      # 80% priority
