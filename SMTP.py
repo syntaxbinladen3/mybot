@@ -6,7 +6,7 @@ from termcolor import colored
 import sys
 
 # ========== DEINE DATEN ==========
-DEINE_EMAIL = "deine.email@gmail.com"  # HIER DEINE GMAIL EINTRAGEN
+DEINE_EMAIL = "nibbafarm3@gmal.com"  # HIER DEINE GMAIL EINTRAGEN
 APP_PASSWORT = "zbdh eovg eosl ittv"    # Dein App-Passwort (genau so mit Leerzeichen!)
 LOG_DATEI = "email_log.txt"
 # =================================
