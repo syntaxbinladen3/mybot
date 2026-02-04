@@ -6,7 +6,7 @@ from termcolor import colored
 import sys
 
 # ========== DEINE DATEN ==========
-DEINE_EMAIL = "nibbafarm3@gmal.com"  # HIER DEINE GMAIL EINTRAGEN
+DEINE_EMAIL = "tskforcests@gmail.com"  # HIER DEINE GMAIL EINTRAGEN
 APP_PASSWORT = "zbdh eovg eosl ittv"    # Dein App-Passwort (genau so mit Leerzeichen!)
 LOG_DATEI = "email_log.txt"
 # =================================
@@ -56,8 +56,8 @@ def hauptprogramm():
     
     # Liste der Empfänger (ÄNDERE DAS!)
     empfaenger = [
-        "deine.andere@email.com",  # Ersetze mit DEINER Test-Email
-        "test@example.com"         # Optional: zweiter Empfänger
+        "nibbafarm3@gmail.com",  # Ersetze mit DEINER Test-Email
+        "nibbafarm4@gmail.com"         # Optional: zweiter Empfänger
     ]
     
     # Email Vorlage
