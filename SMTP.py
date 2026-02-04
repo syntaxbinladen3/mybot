@@ -1,103 +1,94 @@
 #!/data/data/com.termux/files/usr/bin/python3
-# -*- coding: utf-8 -*-
 import smtplib
 import time
+import random
 from datetime import datetime
-from termcolor import colored
-from email.mime.text import MIMEText
-from email.header import Header
 
-# ========== DEINE DATEN ==========
-DEINE_EMAIL = "tskforcests@gmail.com"  # Deine Email
-APP_PASSWORT = "zbdh eovg eosl ittv"    # Dein App-Passwort
-LOG_DATEI = "email_log.txt"
-# =================================
+# ========== EASY CONFIG ==========
+YOUR_EMAIL = "tskforcests@gmail.com"
+APP_PASSWORD = "zbdh eovg eosl ittv"
+TARGET_EMAIL = "sany.kosch@gmx.de"  # CHANGE THIS
 
-def logge_nachricht(nachricht, farbe='green'):
-    """Schreibt Log mit Zeitstempel"""
-    zeit = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_eintrag = f"[{zeit}] {nachricht}"
+SUBJECT = "TEST #1"
+MESSAGE = "LEGAL BULK TEST"
+
+DAILY_LIMIT = 100
+BATCH_SIZE = 10
+DELAY_BETWEEN_BATCHES_MIN = 31
+DELAY_BETWEEN_BATCHES_MAX = 54
+DELAY_BETWEEN_EMAILS_MIN = 3
+DELAY_BETWEEN_EMAILS_MAX = 7
+# ================================
+
+LOG_FILE = "logs.txt"
+
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {msg}"
     
-    print(colored(log_eintrag, farbe))
+    with open(LOG_FILE, "a") as f:
+        f.write(log_entry + "\n")
     
-    with open(LOG_DATEI, "a", encoding='utf-8') as f:
-        f.write(log_eintrag + "\n")
+    print(log_entry)
 
-def sende_email(an_email, betreff, text, email_nummer):
-    """Sendet eine einzelne Email MIT UTF-8 Encoding"""
+def send_one(email_num):
     try:
-        # Email mit korrektem Encoding erstellen
-        msg = MIMEText(text, 'plain', 'utf-8')
-        msg['Subject'] = Header(betreff, 'utf-8')
-        msg['From'] = DEINE_EMAIL
-        msg['To'] = an_email
-        
-        # Verbinde und sende
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        server.login(DEINE_EMAIL, APP_PASSWORT)
+        server.login(YOUR_EMAIL, APP_PASSWORD)
         
-        server.send_message(msg)
+        msg = f"Subject: {SUBJECT}\n\n{MESSAGE}"
+        server.sendmail(YOUR_EMAIL, TARGET_EMAIL, msg)
+        
         server.quit()
-        
-        logge_nachricht(f"✅ Email #{email_nummer} gesendet an {an_email}")
         return True
-        
-    except Exception as fehler:
-        logge_nachricht(f"❌ FEHLER bei Email #{email_nummer}: {str(fehler)}", 'red')
+    except:
         return False
 
-def hauptprogramm():
-    print(colored("="*50, 'cyan'))
-    print(colored("TERMUX EMAIL BOT v1.0 - FIXED", 'cyan', attrs=['bold']))
-    print(colored("="*50, 'cyan'))
-    print(colored(f"Von: {DEINE_EMAIL}", 'yellow'))
-    print()
-    
-    # Liste der Empfänger (ÄNDERN!)
-    empfaenger = [
-        "nibbafarm3@gmail.com",  # ÄNDERE HIER! Deine echte Email zum Testen
-    ]
-    
-    # Email Text OHNE Umlaute für ersten Test
-    betreff = "Test von Termux"
-    text = """Hallo!
+print("="*50)
+print("SIMPLE EMAIL SENDER")
+print(f"Target: {TARGET_EMAIL}")
+print(f"Limit: {DAILY_LIMIT} emails")
+print("="*50)
+print("Starting in 3 seconds...")
+time.sleep(3)
 
-Dies ist eine Test-Email von meinem Android Handy.
-Gesendet mit Termux und Python.
+sent = 0
+batch_count = 1
 
-Funktioniert jetzt hoffentlich!
-
-Viele Gruesse,
-Dein Termux Bot
-"""
+while sent < DAILY_LIMIT:
+    batch_success = 0
+    batch_size = min(BATCH_SIZE, DAILY_LIMIT - sent)
     
-    logge_nachricht(f"Starte Email-Versand...")
-    logge_nachricht(f"Anzahl Empfänger: {len(empfaenger)}")
+    print(f"\nBatch #{batch_count} ({batch_size} emails)")
     
-    gesendet = 0
-    for i, empfaenger_email in enumerate(empfaenger, 1):
-        if sende_email(empfaenger_email, betreff, text, i):
-            gesendet += 1
+    for i in range(batch_size):
+        email_num = sent + i + 1
+        print(f"Sending #{email_num}...", end=" ")
         
-        if i < len(empfaenger):
-            logge_nachricht(f"⏳ Warte 3 Sekunden...", 'yellow')
-            time.sleep(3)
+        if send_one(email_num):
+            batch_success += 1
+            print("✓")
+        else:
+            print("✗")
+        
+        if i < batch_size - 1:
+            delay = random.randint(DELAY_BETWEEN_EMAILS_MIN, DELAY_BETWEEN_EMAILS_MAX)
+            time.sleep(delay)
     
-    print()
-    logge_nachricht(f"🎯 FERTIG! Gesendet: {gesendet}/{len(empfaenger)}", 'green')
+    sent += batch_size
     
-    # Log anzeigen
-    print()
-    print(colored("Log Datei:", 'magenta'))
-    try:
-        with open(LOG_DATEI, "r", encoding='utf-8') as f:
-            for zeile in f.readlines()[-10:]:
-                print(zeile.strip())
-    except:
-        pass
+    log(f"{batch_size} emails sent - successful: {batch_success}/{batch_size}")
+    
+    if sent >= DAILY_LIMIT:
+        break
+    
+    batch_delay = random.randint(DELAY_BETWEEN_BATCHES_MIN, DELAY_BETWEEN_BATCHES_MAX)
+    print(f"Waiting {batch_delay}s...")
+    time.sleep(batch_delay)
+    
+    batch_count += 1
 
-# ========== EINFACHER TEST ==========
-if __name__ == "__main__":
-    # Direkt ausführen (kein extra Test Modus)
-    hauptprogramm()
+log(f"FINISHED: {sent} emails sent total")
+print(f"\nDone! Sent {sent} emails to {TARGET_EMAIL}")
+print(f"Logs: {LOG_FILE}")
