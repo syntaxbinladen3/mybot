@@ -1,13 +1,15 @@
 #!/data/data/com.termux/files/usr/bin/python3
+# -*- coding: utf-8 -*-
 import smtplib
 import time
 from datetime import datetime
 from termcolor import colored
-import sys
+from email.mime.text import MIMEText
+from email.header import Header
 
 # ========== DEINE DATEN ==========
-DEINE_EMAIL = "tskforcests@gmail.com"  # HIER DEINE GMAIL EINTRAGEN
-APP_PASSWORT = "zbdh eovg eosl ittv"    # Dein App-Passwort (genau so mit Leerzeichen!)
+DEINE_EMAIL = "tskforcests@gmail.com"  # Deine Email
+APP_PASSWORT = "zbdh eovg eosl ittv"    # Dein App-Passwort
 LOG_DATEI = "email_log.txt"
 # =================================
 
@@ -16,28 +18,26 @@ def logge_nachricht(nachricht, farbe='green'):
     zeit = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_eintrag = f"[{zeit}] {nachricht}"
     
-    # Zeige farbig an
     print(colored(log_eintrag, farbe))
     
-    # Speichere in Datei
     with open(LOG_DATEI, "a", encoding='utf-8') as f:
         f.write(log_eintrag + "\n")
 
 def sende_email(an_email, betreff, text, email_nummer):
-    """Sendet eine einzelne Email"""
+    """Sendet eine einzelne Email MIT UTF-8 Encoding"""
     try:
-        # Verbinde mit Gmail
+        # Email mit korrektem Encoding erstellen
+        msg = MIMEText(text, 'plain', 'utf-8')
+        msg['Subject'] = Header(betreff, 'utf-8')
+        msg['From'] = DEINE_EMAIL
+        msg['To'] = an_email
+        
+        # Verbinde und sende
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        
-        # Einloggen mit App-Passwort
         server.login(DEINE_EMAIL, APP_PASSWORT)
         
-        # Email erstellen
-        nachricht = f"Subject: {betreff}\n\n{text}"
-        server.sendmail(DEINE_EMAIL, an_email, nachricht)
-        
-        # Verbindung beenden
+        server.send_message(msg)
         server.quit()
         
         logge_nachricht(f"✅ Email #{email_nummer} gesendet an {an_email}")
@@ -49,27 +49,26 @@ def sende_email(an_email, betreff, text, email_nummer):
 
 def hauptprogramm():
     print(colored("="*50, 'cyan'))
-    print(colored("TERMUX EMAIL BOT v1.0", 'cyan', attrs=['bold']))
+    print(colored("TERMUX EMAIL BOT v1.0 - FIXED", 'cyan', attrs=['bold']))
     print(colored("="*50, 'cyan'))
     print(colored(f"Von: {DEINE_EMAIL}", 'yellow'))
     print()
     
-    # Liste der Empfänger (ÄNDERE DAS!)
+    # Liste der Empfänger (ÄNDERN!)
     empfaenger = [
-        "nibbafarm3@gmail.com",  # Ersetze mit DEINER Test-Email
-        "nibbafarm4@gmail.com"         # Optional: zweiter Empfänger
+        "nibbafarm3@gmail.com",  # ÄNDERE HIER! Deine echte Email zum Testen
     ]
     
-    # Email Vorlage
+    # Email Text OHNE Umlaute für ersten Test
     betreff = "Test von Termux"
     text = """Hallo!
 
-Dies ist eine Test-Email die von meinem Android Handy 
-mit Termux gesendet wurde.
+Dies ist eine Test-Email von meinem Android Handy.
+Gesendet mit Termux und Python.
 
-Funktioniert super!
+Funktioniert jetzt hoffentlich!
 
-Viele Grüße,
+Viele Gruesse,
 Dein Termux Bot
 """
     
@@ -81,53 +80,24 @@ Dein Termux Bot
         if sende_email(empfaenger_email, betreff, text, i):
             gesendet += 1
         
-        # Warte zwischen Emails (Anti-Spam)
         if i < len(empfaenger):
             logge_nachricht(f"⏳ Warte 3 Sekunden...", 'yellow')
             time.sleep(3)
     
-    # Zusammenfassung
     print()
     logge_nachricht(f"🎯 FERTIG! Gesendet: {gesendet}/{len(empfaenger)}", 'green')
-    logge_nachricht(f"📁 Log gespeichert in: {LOG_DATEI}", 'blue')
     
-    # Zeige Log an
+    # Log anzeigen
     print()
-    print(colored("Letzte 5 Log-Einträge:", 'magenta'))
+    print(colored("Log Datei:", 'magenta'))
     try:
         with open(LOG_DATEI, "r", encoding='utf-8') as f:
-            zeilen = f.readlines()
-            for zeile in zeilen[-5:]:
+            for zeile in f.readlines()[-10:]:
                 print(zeile.strip())
     except:
         pass
 
-# ========== TEST MODUS ==========
-def test_modus():
-    """Testet nur die Verbindung"""
-    print(colored("🔄 TEST MODUS - Verbindung testen...", 'yellow'))
-    
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(DEINE_EMAIL, APP_PASSWORT)
-        server.quit()
-        print(colored("✅ VERBINDUNG ERFOLGREICH!", 'green'))
-        return True
-    except Exception as e:
-        print(colored(f"❌ VERBINDUNG FEHLGESCHLAGEN: {e}", 'red'))
-        return False
-
-# ========== HAUPTPROGRAMM ==========
+# ========== EINFACHER TEST ==========
 if __name__ == "__main__":
-    # Erstmal testen
-    if test_modus():
-        print()
-        hauptprogramm()
-    else:
-        print()
-        print(colored("⚠️  PROBLEME:", 'red'))
-        print("1. Prüfe ob DEINE_EMAIL richtig ist")
-        print("2. Prüfe APP_PASSWORT (16 Zeichen mit Leerzeichen)")
-        print("3. Internet-Verbindung prüfen")
-        print("4. 2FA muss mit Authenticator App aktiviert sein")
+    # Direkt ausführen (kein extra Test Modus)
+    hauptprogramm()
