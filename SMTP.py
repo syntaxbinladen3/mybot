@@ -2,116 +2,187 @@
 import smtplib
 import time
 import random
+import threading
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ========== EASY CONFIG ==========
+# ========== CONFIG ==========
 YOUR_EMAIL = "tskforcests@gmail.com"
 APP_PASSWORD = "zbdh eovg eosl ittv"
 TARGET_EMAIL = "sany.kosch@gmx.de"  # CHANGE THIS
 
-SUBJECT = "TEST INFO #2"
-MESSAGE = "BULK TEST #2"
+SUBJECT = "sg nil"
+MESSAGE = "info #1 test #3"
 
-DAILY_LIMIT = 100
-BATCH_SIZE = 50                     # CHANGED: 50 per batch
-DELAY_BETWEEN_BATCHES_MIN = 22     # CHANGED: 22s timeout
-DELAY_BETWEEN_BATCHES_MAX = 23     # CHANGED: 23s timeout
-DELAY_BETWEEN_EMAILS_MIN = 0.012   # CHANGED: 12ms minimum
-DELAY_BETWEEN_EMAILS_MAX = 2       # CHANGED: 2s maximum
-# ================================
+TOTAL_LIMIT = 100
+WAVE_SIZE = 50                      # 50 emails per wave
+DELAY_BETWEEN_EMAILS = 0.0005      # 0.5ms between starts
+DELAY_BETWEEN_WAVES_MIN = 120      # 2 minutes minimum
+DELAY_BETWEEN_WAVES_MAX = 180      # 3 minutes maximum
+MAX_WORKERS = 20                    # Concurrent sends
+# ============================
 
 LOG_FILE = "logs.txt"
+WAVE_LOG_FILE = "wave_logs.txt"
 
-def log(msg):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def log(msg, file=LOG_FILE):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     log_entry = f"[{timestamp}] {msg}"
     
-    with open(LOG_FILE, "a") as f:
+    with open(file, "a") as f:
         f.write(log_entry + "\n")
     
     print(log_entry)
+    return log_entry
 
-def send_one(email_num):
+def send_single(email_num, wave_num):
+    """Send one email"""
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
         server.starttls()
         server.login(YOUR_EMAIL, APP_PASSWORD)
         
-        msg = f"Subject: {SUBJECT}\n\n{MESSAGE}"
+        msg = f"Subject: {SUBJECT} Wave{wave_num}#{email_num}\n\n{MESSAGE}"
         server.sendmail(YOUR_EMAIL, TARGET_EMAIL, msg)
-        
         server.quit()
-        return True
+        
+        return True, email_num
     except Exception as e:
-        print(f"Error: {str(e)[:50]}")  # Show short error
-        return False
+        return False, f"{email_num} Error: {str(e)[:30]}"
 
-print("="*50)
-print("FAST BATCH EMAIL SENDER")
-print(f"Target: {TARGET_EMAIL}")
-print(f"Limit: {DAILY_LIMIT} emails")
-print(f"Batch: {BATCH_SIZE} emails")
-print("="*50)
-print("Starting NOW...")
-
-sent = 0
-batch_count = 1
-total_success = 0
-
-while sent < DAILY_LIMIT:
-    batch_success = 0
-    batch_size = min(BATCH_SIZE, DAILY_LIMIT - sent)
+def execute_wave(wave_num, emails_to_send):
+    """Execute one wave of rapid-fire emails"""
+    wave_start = datetime.now()
+    print(f"\n{'='*60}")
+    print(f"🌊 WAVE #{wave_num} LAUNCHING - {emails_to_send} emails")
+    print(f"{'='*60}")
     
-    print(f"\n{'='*40}")
-    print(f"BATCH #{batch_count} ({batch_size} emails)")
-    print(f"{'='*40}")
+    log(f"WAVE #{wave_num} START - {emails_to_send} emails", WAVE_LOG_FILE)
     
-    for i in range(batch_size):
-        email_num = sent + i + 1
-        print(f"#{email_num:3d} → ", end="")
+    results = []
+    start_num = (wave_num - 1) * WAVE_SIZE + 1
+    
+    # Use threading for concurrent sending
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
         
-        if send_one(email_num):
-            batch_success += 1
-            total_success += 1
-            print("✓")
-        else:
-            print("✗")
+        for i in range(emails_to_send):
+            email_num = start_num + i
+            
+            # Submit to thread pool
+            future = executor.submit(send_single, email_num, wave_num)
+            futures.append(future)
+            
+            # Tiny delay between starting threads (0.5ms)
+            if i < emails_to_send - 1:
+                time.sleep(DELAY_BETWEEN_EMAILS)
         
-        # Random delay between emails (12ms to 2s)
-        if i < batch_size - 1:
-            delay = random.uniform(DELAY_BETWEEN_EMAILS_MIN, DELAY_BETWEEN_EMAILS_MAX)
-            time.sleep(delay)
+        # Collect results
+        for future in as_completed(futures):
+            success, result = future.result()
+            results.append(success)
+            
+            if success:
+                print(f"  ✓ #{result}", end=" ", flush=True)
+            else:
+                print(f"  ✗ {result}", end=" ", flush=True)
     
-    sent += batch_size
+    # Wave statistics
+    wave_end = datetime.now()
+    wave_duration = (wave_end - wave_start).total_seconds()
+    successful = sum(results)
+    failed = len(results) - successful
     
-    # Log batch results
-    log(f"Batch #{batch_count}: {batch_size} sent - {batch_success} successful")
+    print(f"\n\n📊 WAVE #{wave_num} COMPLETE")
+    print(f"   Duration: {wave_duration:.2f}s")
+    print(f"   Successful: {successful}/{emails_to_send}")
+    print(f"   Failed: {failed}")
+    print(f"   Rate: {emails_to_send/wave_duration:.1f} emails/sec")
     
-    # Check if done
-    if sent >= DAILY_LIMIT:
-        break
+    # Log wave summary
+    wave_log = f"WAVE #{wave_num}: {emails_to_send} sent in {wave_duration:.2f}s - {successful} successful"
+    log(wave_log, WAVE_LOG_FILE)
     
-    # Timeout between batches (22-23s)
-    batch_delay = random.randint(DELAY_BETWEEN_BATCHES_MIN, DELAY_BETWEEN_BATCHES_MAX)
-    print(f"\n⏳ Timeout: {batch_delay}s before next batch...")
-    
-    # Simple countdown
-    for sec in range(batch_delay, 0, -1):
-        if sec % 5 == 0 or sec <= 3:
-            print(f"{sec}s", end=" ", flush=True)
-        time.sleep(1)
-    print("GO!")
-    
-    batch_count += 1
+    return successful, wave_duration
 
-# Final log and summary
-log(f"COMPLETED: {sent} total | {total_success} successful")
-print(f"\n{'='*50}")
-print(f"🎯 CAMPAIGN COMPLETE")
-print(f"{'='*50}")
-print(f"Batches: {batch_count-1}")
-print(f"Total sent: {sent}")
-print(f"Successful: {total_success}")
-print(f"Failed: {sent - total_success}")
-print(f"Log file: {LOG_FILE}")
-print(f"{'='*50}")
+def main():
+    print("\n" + "="*60)
+    print("🌊 RAPID WAVE EMAIL BLASTER")
+    print("="*60)
+    print(f"From: {YOUR_EMAIL}")
+    print(f"Target: {TARGET_EMAIL}")
+    print(f"Total limit: {TOTAL_LIMIT} emails")
+    print(f"Wave size: {WAVE_SIZE} emails")
+    print(f"Delay between emails: {DELAY_BETWEEN_EMAILS*1000:.1f}ms")
+    print(f"Cooldown between waves: {DELAY_BETWEEN_WAVES_MIN//60}-{DELAY_BETWEEN_WAVES_MAX//60} mins")
+    print("="*60)
+    print("\nStarting in 5 seconds...")
+    time.sleep(5)
+    
+    total_sent = 0
+    total_successful = 0
+    wave_count = 0
+    
+    campaign_start = datetime.now()
+    log(f"CAMPAIGN START - Target: {TARGET_EMAIL}, Limit: {TOTAL_LIMIT}")
+    
+    while total_sent < TOTAL_LIMIT:
+        wave_count += 1
+        emails_in_wave = min(WAVE_SIZE, TOTAL_LIMIT - total_sent)
+        
+        # Execute wave
+        successful, wave_time = execute_wave(wave_count, emails_in_wave)
+        
+        total_sent += emails_in_wave
+        total_successful += successful
+        
+        # Check if done
+        if total_sent >= TOTAL_LIMIT:
+            break
+        
+        # Cooldown between waves (2-3 minutes)
+        cooldown = random.randint(DELAY_BETWEEN_WAVES_MIN, DELAY_BETWEEN_WAVES_MAX)
+        minutes = cooldown // 60
+        seconds = cooldown % 60
+        
+        print(f"\n⏳ COOLDOWN: {minutes}m {seconds}s before next wave...")
+        log(f"Cooldown: {minutes}m {seconds}s before Wave #{wave_count+1}", WAVE_LOG_FILE)
+        
+        # Visual countdown
+        remaining = cooldown
+        while remaining > 0:
+            if remaining % 30 == 0 or remaining <= 10:
+                mins = remaining // 60
+                secs = remaining % 60
+                print(f"  {mins:02d}:{secs:02d} remaining", end="\r")
+            time.sleep(1)
+            remaining -= 1
+        
+        print(" " * 30, end="\r")  # Clear line
+        print("✅ Cooldown complete!")
+    
+    # Campaign summary
+    campaign_end = datetime.now()
+    total_duration = (campaign_end - campaign_start).total_seconds()
+    
+    print(f"\n{'='*60}")
+    print("🎯 CAMPAIGN COMPLETE")
+    print(f"{'='*60}")
+    print(f"Waves executed: {wave_count}")
+    print(f"Total emails sent: {total_sent}")
+    print(f"Total successful: {total_successful}")
+    print(f"Total failed: {total_sent - total_successful}")
+    print(f"Total time: {total_duration:.1f}s ({total_duration/60:.1f} minutes)")
+    print(f"Average rate: {total_sent/total_duration:.1f} emails/sec")
+    print(f"Success rate: {(total_successful/total_sent)*100:.1f}%")
+    print(f"{'='*60}")
+    
+    # Final log entry
+    final_log = f"CAMPAIGN END: {total_sent} total, {total_successful} successful, {wave_count} waves, {total_duration:.1f}s"
+    log(final_log)
+    
+    print(f"\n📁 Main log: {LOG_FILE}")
+    print(f"📁 Wave log: {WAVE_LOG_FILE}")
+
+if __name__ == "__main__":
+    main()
