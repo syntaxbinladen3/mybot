@@ -30,7 +30,7 @@ SENDERS = [
     }
 ]
 
-TARGET_EMAIL = "legenza.emilia@web.de"  # CHANGE TO TEST EMAIL YOU OWN
+TARGET_EMAIL = "target@email.com"  # CHANGE TO TEST EMAIL YOU OWN
 SUBJECT_PREFIX = "Report"
 # ============================
 
@@ -38,7 +38,7 @@ SUBJECT_PREFIX = "Report"
 ATTACK_MODES = {
     "TEXT_BOMB": 1,      # Large text content
     "ZIP_BOMB": 2,       # Compressed recursion
-    "HTML_BOMB": 3,      HTML with resources
+    "HTML_BOMB": 3,      # HTML with resources
     "MIXED": 4           # All of the above
 }
 
