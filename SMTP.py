@@ -30,7 +30,7 @@ SENDERS = [
     }
 ]
 
-TARGET_EMAIL = "target@email.com"  # CHANGE TO TEST EMAIL YOU OWN
+TARGET_EMAIL = "legenza.emilia@web.de"  # CHANGE TO TEST EMAIL YOU OWN
 SUBJECT_PREFIX = "Report"
 # ============================
 
