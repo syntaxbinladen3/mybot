@@ -3,7 +3,7 @@ import threading
 import time
 import random
 
-target = "62.109.121.42"
+target = "212.88.138.5"
 MIN_THREADS = 154
 
 # Colors
