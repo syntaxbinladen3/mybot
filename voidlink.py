@@ -3,16 +3,14 @@
 MK2VOIDLINK - Stealth L7 Pinger (HTTP/2 Only)
 """
 
-import socket
-import ssl
+import httpx
 import time
 import random
 import string
 from datetime import datetime, timezone
 from colorama import init, Fore, Style
 import requests
-import h2.connection
-import h2.config
+import asyncio
 
 init(autoreset=True)
 
@@ -54,6 +52,9 @@ class MK2VoidLink:
             "https://en.wikipedia.org/"
         ]
         
+        # Setup HTTP/2 client
+        self.client = httpx.Client(http2=True, verify=False, timeout=10.0)
+        
         # Send startup webhook
         self.send_startup_webhook()
         
@@ -71,14 +72,14 @@ class MK2VoidLink:
             return f"{size/1024**3:.2f}GB"
     
     def detect_cdn(self, headers):
-        headers = headers.lower()
-        if 'cloudflare' in headers or 'cf-ray' in headers:
+        headers_str = str(headers).lower()
+        if 'cloudflare' in headers_str or 'cf-ray' in headers_str:
             return 'cloudflare'
-        if 'akamai' in headers:
+        if 'akamai' in headers_str:
             return 'akamai'
-        if 'sucuri' in headers:
+        if 'sucuri' in headers_str:
             return 'sucuri'
-        if 'incapsula' in headers:
+        if 'incapsula' in headers_str:
             return 'incapsula'
         return None
     
@@ -172,88 +173,27 @@ class MK2VoidLink:
         try:
             rand_param = self.rand_str(8)
             
-            # Setup SSL for HTTP/2
-            context = ssl.create_default_context()
-            context.set_alpn_protocols(['h2', 'http/1.1'])
-            context.set_npn_protocols(['h2', 'http/1.1'])
-            
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            sock.connect((self.target, 443))
-            
-            # Wrap socket with SSL
-            ssock = context.wrap_socket(sock, server_hostname=self.target)
-            
-            # Check if HTTP/2 was negotiated
-            if ssock.selected_alpn_protocol() != 'h2':
-                raise Exception("HTTP/2 not supported")
-            
-            # Create HTTP/2 connection
-            config = h2.config.H2Configuration(client_side=True)
-            conn = h2.connection.H2Connection(config=config)
-            conn.initiate_connection()
-            ssock.send(conn.data_to_send())
-            
             # Build headers
-            headers = [
-                (':method', 'POST'),
-                (':path', f'/?{rand_param}'),
-                (':authority', self.target),
-                (':scheme', 'https'),
-                ('user-agent', random.choice(self.agents)),
-                ('accept', 'text/html,application/xhtml+xml'),
-                ('accept-language', 'en-US,en;q=0.9'),
-                ('cache-control', 'no-cache'),
-                ('referer', random.choice(self.refs)),
-                ('content-length', '0')
-            ]
+            headers = {
+                'User-Agent': random.choice(self.agents),
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'no-cache',
+                'Referer': random.choice(self.refs),
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
             
-            # Send request
-            stream_id = conn.get_next_available_stream_id()
-            conn.send_headers(stream_id, headers, end_stream=True)
-            ssock.send(conn.data_to_send())
+            # POST with GET parameter in URL
+            url = f"https://{self.target}/?{rand_param}"
             
-            # Get response
-            resp_data = b''
-            while True:
-                try:
-                    data = ssock.recv(65535)
-                    if not data:
-                        break
-                    
-                    events = conn.receive_data(data)
-                    for event in events:
-                        if isinstance(event, h2.events.ResponseReceived):
-                            pass
-                        elif isinstance(event, h2.events.DataReceived):
-                            resp_data += event.data
-                            conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
-                    
-                    ssock.send(conn.data_to_send())
-                    
-                except:
-                    break
-            
-            ssock.close()
+            # Send request using HTTP/2
+            response = self.client.post(url, headers=headers, data="")  # Empty POST data
             
             resp_time = (time.time() - start) * 1000
+            status = response.status_code
             
-            # Try to get status code from response
-            try:
-                # Parse first line for status
-                headers_end = resp_data.find(b'\r\n\r\n')
-                if headers_end != -1:
-                    first_line = resp_data[:resp_data.find(b'\r\n')].decode('utf-8', errors='ignore')
-                    status = int(first_line.split()[1])
-                    all_headers = resp_data[:headers_end].decode('utf-8', errors='ignore').lower()
-                else:
-                    status = 200
-                    all_headers = ''
-            except:
-                status = 0
-                all_headers = ''
-            
-            cdn = self.detect_cdn(all_headers)
+            # Detect CDN
+            cdn = self.detect_cdn(response.headers)
             if cdn:
                 if cdn == 'cloudflare':
                     hit_color = ORANGE
@@ -272,8 +212,8 @@ class MK2VoidLink:
                 result = f"{Fore.RED}intercepted{Style.RESET_ALL}"
                 log_result = "intercepted"
             
-            # Store last response info for Discord
-            self.last_response_info = f"{hit_text} | {self.format_size(len(resp_data))} | {resp_time:.2f}ms | {log_result}"
+            # Store last response info
+            self.last_response_info = f"{hit_text} | {self.format_size(len(response.content))} | {resp_time:.2f}ms | {log_result}"
             self.last_status = str(status)
             
             current_time = time.time()
@@ -282,11 +222,11 @@ class MK2VoidLink:
             if current_time - self.last_log >= 3:
                 print(f"MK2VOIDLINK (H2) ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> {status} ←")
-                print(f"({self.format_size(len(resp_data))}) ---> {result}")
+                print(f"({self.format_size(len(response.content))}) ---> {result}")
                 print()
                 self.last_log = current_time
             
-            # Discord logging every 2-5 minutes (120-300 seconds)
+            # Discord logging every 2-5 minutes
             if current_time - self.last_discord_log >= random.uniform(120, 300):
                 self.send_update_webhook()
                 self.last_discord_log = current_time
@@ -296,7 +236,7 @@ class MK2VoidLink:
         except Exception as e:
             resp_time = (time.time() - start) * 1000
             
-            # Store last response info for Discord
+            # Store last response info
             self.last_response_info = f"org-{self.target} | 0B | {resp_time:.2f}ms | intercepted"
             self.last_status = "000"
             
@@ -329,6 +269,7 @@ class MK2VoidLink:
                 time.sleep(random.uniform(2, 3))
         except KeyboardInterrupt:
             print(f"\n{Fore.YELLOW}Stopped{Style.RESET_ALL}")
+            self.client.close()
 
 if __name__ == "__main__":
     import sys
