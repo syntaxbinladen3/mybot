@@ -7,10 +7,9 @@ import socket
 import time
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 from colorama import init, Fore, Style
 import requests
-import json
 
 init(autoreset=True)
 
@@ -24,6 +23,7 @@ class VoidLink:
         self.webhook_url = webhook_url
         self.http_versions = ["HTTP/0.9", "HTTP/1.0", "HTTP/1.1"]
         self.last_log = 0
+        self.last_discord_log = 0
         self.start_time = datetime.now()
         self.request_count = 0
         self.session_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -105,7 +105,7 @@ class VoidLink:
             "footer": {
                 "text": "VOIDLINK Monitoring Active"
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         try:
@@ -114,7 +114,7 @@ class VoidLink:
             pass
     
     def send_update_webhook(self):
-        """Send update to Discord every 3 seconds"""
+        """Send update to Discord every 2-5 minutes"""
         running_time = str(datetime.now() - self.start_time).split('.')[0]
         
         embed = {
@@ -153,9 +153,9 @@ class VoidLink:
                 }
             ],
             "footer": {
-                "text": f"Session {self.session_id} • Update every 3s"
+                "text": f"Session {self.session_id} • Update every 2-5min"
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         try:
@@ -242,17 +242,19 @@ class VoidLink:
             self.last_status = str(status)
             
             current_time = time.time()
+            
+            # Terminal output every 3 seconds
             if current_time - self.last_log >= 3:
-                # Terminal output
                 print(f"VOIDLINK ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> {status} ←")
                 print(f"({self.format_size(len(resp))}) ---> {result}")
                 print()
-                
-                # Send Discord update
-                self.send_update_webhook()
-                
                 self.last_log = current_time
+            
+            # Discord logging every 2-5 minutes (120-300 seconds)
+            if current_time - self.last_discord_log >= random.uniform(120, 300):
+                self.send_update_webhook()
+                self.last_discord_log = current_time
             
             return True
             
@@ -264,23 +266,25 @@ class VoidLink:
             self.last_status = "000"
             
             current_time = time.time()
+            
+            # Terminal output every 3 seconds
             if current_time - self.last_log >= 3:
-                # Terminal output
                 print(f"VOIDLINK ---> ({BRIGHT_WHITE}org-{self.target}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> 000 ←")
                 print(f"(0B) ---> {Fore.RED}intercepted{Style.RESET_ALL}")
                 print()
-                
-                # Send Discord update
-                self.send_update_webhook()
-                
                 self.last_log = current_time
+            
+            # Discord logging every 2-5 minutes (120-300 seconds)
+            if current_time - self.last_discord_log >= random.uniform(120, 300):
+                self.send_update_webhook()
+                self.last_discord_log = current_time
             
             return False
     
     def run(self):
         startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n{Fore.CYAN}VOIDLINK ({startup_time}) - Target: {self.target} \\ Discord logging active{Style.RESET_ALL}")
+        print(f"\n{Fore.CYAN}VOIDLINK ({startup_time}) - Target: {self.target} \\ Discord logging active (every 2-5min){Style.RESET_ALL}")
         print("=" * 60)
         
         try:
