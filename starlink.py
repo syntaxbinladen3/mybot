@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NT-TOR - WAF Trasher
-STS BASE V1 Logging System
+STS BASE V1 - Webhook Delete + Resend Mode
 """
 
 import socket
@@ -35,6 +35,7 @@ class NTTOR:
         self.webhook_url = webhook_url
         self.duration = duration
         self.running = True
+        self.last_message_id = None
         
         # Stats
         self.h0_requests = 0
@@ -71,6 +72,7 @@ class NTTOR:
         print(f"Session: {self.session_id}")
         print(f"Target: {target}")
         print(f"Duration: {duration}s")
+        print(f"{YELLOW}Discord: Overwrite every 2-3s (Delete + Resend){RESET}")
         print("=" * 60)
         
     def rand_str(self, n=8):
@@ -138,10 +140,9 @@ Content-Length: 56
                 with self.lock:
                     self.data_received += len(data)
                     if data:
-                        # Store full response data
                         try:
                             decoded = data.decode('utf-8', errors='ignore')
-                            self.last_response_data = decoded[:500]  # First 500 chars
+                            self.last_response_data = decoded[:500]
                         except:
                             self.last_response_data = f"[BINARY DATA: {len(data)} bytes]"
             except:
@@ -194,15 +195,33 @@ Content-Length: 56
         except:
             pass
     
+    def delete_last_message(self):
+        """Delete the last message we sent"""
+        if self.last_message_id:
+            try:
+                # Extract webhook ID and token from URL
+                parts = self.webhook_url.split('/')
+                webhook_id = parts[-2]
+                webhook_token = parts[-1]
+                
+                # Delete message
+                delete_url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}/messages/{self.last_message_id}"
+                requests.delete(delete_url)
+            except:
+                pass
+    
     def send_discord_update(self):
-        """Send scary Discord update (no emojis, pure text)"""
+        """Delete old message and send new one (clean overwrite)"""
+        # Delete previous message
+        self.delete_last_message()
+        
         runtime = str(datetime.now() - self.start_time).split('.')[0]
         total_reqs = self.h0_requests + self.h2_requests
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         embed = {
             "title": f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
-            "color": 0x4a0e4a,  # Dark purple
+            "color": 0x4a0e4a,
             "fields": [
                 {
                     "name": "S.T.S NT-TOR",
@@ -245,12 +264,18 @@ Content-Length: 56
                     "inline": False
                 }
             ],
-            "footer": {"text": "STS BASE V1 • NT-TOR"}
+            "footer": {"text": "STS BASE V1 • NT-TOR • Overwrite 2-3s"}
         }
         
         try:
-            requests.post(self.webhook_url, json={"embeds": [embed]})
-            print(f"{MAGENTA}[DISCORD] Update sent{RESET}")
+            # Send new message
+            response = requests.post(self.webhook_url, json={"embeds": [embed]})
+            
+            if response.status_code == 200:
+                # Store message ID for next deletion
+                self.last_message_id = response.json().get('id')
+                print(f"{MAGENTA}[DISCORD] Updated (Delete+Resend){RESET}")
+                
         except Exception as e:
             print(f"{RED}[DISCORD] Failed: {e}{RESET}")
     
@@ -273,7 +298,7 @@ Content-Length: 56
                 time.sleep(random.uniform(1, 2))
     
     def monitor(self):
-        """Terminal logging - STS BASE V1"""
+        """Terminal logging + Discord overwrite every 2-3s"""
         last_h0 = 0
         last_h2 = 0
         last_discord = 0
@@ -294,11 +319,12 @@ Content-Length: 56
                   f"H2:{self.h2_requests} | "
                   f"TOT:{total} | "
                   f"↑{self.format_size(self.data_sent)} | "
-                  f"↓{self.format_size(self.data_received)}", 
+                  f"↓{self.format_size(self.data_received)} | "
+                  f"DC:2-3s", 
                   end='', flush=True)
             
-            # Discord update every 30 seconds (not spam)
-            if elapsed - last_discord >= 30:
+            # Discord overwrite every 2-3 seconds
+            if elapsed - last_discord >= random.uniform(2, 3):
                 self.send_discord_update()
                 last_discord = elapsed
             
