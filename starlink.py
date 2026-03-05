@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STARLINK - Termux Edition (Fixed Screenshots)
+STARLINK - Terminal Surveillance Array
 """
 
 import json
@@ -35,7 +35,6 @@ class StarLink:
         self.targets = self.config['targets']
         self.req_interval = self.config['settings']['request_interval']
         self.cycle_delay = self.config['settings']['delay_between_cycles']
-        self.screenshot_interval = self.config['settings']['screenshot_interval']
         self.webhook_url = webhook_url
         
         self.last_log = 0
@@ -46,7 +45,7 @@ class StarLink:
         self.last_responses = {}
         self.screenshot_counter = {}
         
-        # Chromium path for Termux
+        # Chromium path
         self.chromium_path = "/data/data/com.termux/files/usr/bin/chromium-browser"
         
         # User agents
@@ -54,17 +53,10 @@ class StarLink:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
         
         # HTTP client
         self.client = httpx.Client(http2=True, verify=False, timeout=15.0)
-        
-        # Check Chromium
-        if not os.path.exists(self.chromium_path):
-            print(f"{RED}Chromium not found at {self.chromium_path}{RESET}")
-            print(f"{YELLOW}Try: pkg install chromium{RESET}")
-            exit(1)
         
         # Send startup
         self.send_startup_webhook()
@@ -92,8 +84,6 @@ class StarLink:
             return 'sucuri'
         if 'incapsula' in headers_str:
             return 'incapsula'
-        if 'fastly' in headers_str:
-            return 'fastly'
         return 'origin'
     
     def get_response_type(self, headers):
@@ -103,25 +93,21 @@ class StarLink:
         elif 'application/json' in content_type:
             return 'JSON'
         elif 'image/' in content_type:
-            return 'IMAGE'
+            return 'IMG'
         elif 'text/css' in content_type:
             return 'CSS'
         elif 'javascript' in content_type:
             return 'JS'
-        elif 'application/pdf' in content_type:
-            return 'PDF'
-        elif 'text/plain' in content_type:
-            return 'TEXT'
         else:
-            return 'OTHER'
+            return 'BIN'
     
     def send_startup_webhook(self):
         embed = {
-            "title": f"🛰️ STARLINK - Session Started (Termux)",
-            "color": 0x9b59b6,
+            "title": f"STARLINK • Session Initiated",
+            "color": 0x2b2d31,
             "fields": [
                 {
-                    "name": "Session",
+                    "name": "Session ID",
                     "value": f"`{self.session_id}`",
                     "inline": True
                 },
@@ -131,20 +117,14 @@ class StarLink:
                     "inline": True
                 },
                 {
-                    "name": "Start Time",
-                    "value": f"`{self.start_time.strftime('%Y-%m-%d %H:%M:%S')}`",
+                    "name": "Started",
+                    "value": f"`{self.start_time.strftime('%H:%M:%S')}`",
                     "inline": True
-                },
-                {
-                    "name": "Settings",
-                    "value": f"```Interval: {self.req_interval}s\nCycle Delay: {self.cycle_delay}s\nScreenshot: every {self.screenshot_interval}```",
-                    "inline": False
                 }
             ],
             "footer": {
-                "text": "STARLINK • Termux Edition"
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat()
+                "text": "STARLINK • v1.0"
+            }
         }
         
         try:
@@ -153,139 +133,140 @@ class StarLink:
             pass
     
     def take_screenshot_sync(self, url):
-        """Take screenshot using subprocess (sync version)"""
+        """Fixed screenshot for Termux"""
         try:
             temp_dir = tempfile.mkdtemp()
-            screenshot_path = os.path.join(temp_dir, 'screenshot.png')
+            screenshot_path = os.path.join(temp_dir, 'shot.png')
             
+            # Termux Chromium needs extra flags
             cmd = [
                 self.chromium_path,
                 '--headless',
                 '--no-sandbox',
                 '--disable-gpu',
-                '--screenshot=' + screenshot_path,
-                '--window-size=1280,720',
-                '--hide-scrollbars',
+                '--disable-software-rasterizer',
                 '--disable-dev-shm-usage',
-                '--disable-setuid-sandbox',
-                '--timeout=10000',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--screenshot=' + screenshot_path,
+                '--window-size=1280,1024',
+                '--hide-scrollbars',
+                '--virtual-time-budget=5000',
                 url
             ]
             
             # Run with timeout
-            try:
-                process = subprocess.run(
-                    cmd,
-                    timeout=30,
-                    capture_output=True,
-                    text=True
-                )
+            process = subprocess.run(
+                cmd,
+                timeout=25,
+                capture_output=True,
+                env={**os.environ, 'DISPLAY': ':0'}
+            )
+            
+            if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 1000:
+                with open(screenshot_path, 'rb') as f:
+                    data = f.read()
                 
-                if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
-                    with open(screenshot_path, 'rb') as f:
-                        screenshot_data = f.read()
-                    
-                    os.remove(screenshot_path)
-                    os.rmdir(temp_dir)
-                    return screenshot_data
-                else:
-                    return None
-                    
-            except subprocess.TimeoutExpired:
-                print(f"{YELLOW}Screenshot timeout for {url}{RESET}")
-                return None
+                os.remove(screenshot_path)
+                os.rmdir(temp_dir)
+                return data
+            
+            # If failed, try alternate method
+            alt_cmd = [
+                self.chromium_path,
+                '--headless',
+                '--no-sandbox',
+                '--screenshot=' + screenshot_path,
+                '--window-size=1280,1024',
+                url
+            ]
+            
+            process = subprocess.run(alt_cmd, timeout=25, capture_output=True)
+            
+            if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 1000:
+                with open(screenshot_path, 'rb') as f:
+                    data = f.read()
+                
+                os.remove(screenshot_path)
+                os.rmdir(temp_dir)
+                return data
+                
+            return None
                 
         except Exception as e:
-            print(f"{RED}Screenshot error: {str(e)[:50]}{RESET}")
             return None
     
     async def take_screenshot(self, url):
-        """Wrapper to run sync function in thread"""
         return await asyncio.get_event_loop().run_in_executor(
             None, self.take_screenshot_sync, url
         )
     
     def send_screenshot_webhook(self, url, screenshot_data, response_info):
-        """Send screenshot to Discord"""
+        """Clean screenshot delivery"""
         try:
             embed = {
-                "title": f"📸 STARLINK Screenshot - {url}",
-                "color": 0xf1c40f,
+                "title": f"STARLINK • Capture • {url.split('//')[-1][:30]}",
+                "color": 0x2b2d31,
                 "fields": [
                     {
                         "name": "Target",
-                        "value": f"```{url}```",
+                        "value": f"`{url}`",
                         "inline": False
                     },
                     {
-                        "name": "Response Info",
-                        "value": f"```{response_info}```",
+                        "name": "Response",
+                        "value": f"`{response_info}`",
                         "inline": False
-                    },
-                    {
-                        "name": "Time",
-                        "value": f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
-                        "inline": True
                     }
-                ],
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                ]
             }
             
-            files = {
-                'file': ('screenshot.png', screenshot_data, 'image/png')
-            }
-            payload = {
-                'payload_json': json.dumps({'embeds': [embed]})
-            }
+            files = {'file': ('capture.png', screenshot_data, 'image/png')}
+            payload = {'payload_json': json.dumps({'embeds': [embed]})}
             
             requests.post(self.webhook_url, files=files, data=payload)
-            print(f"{GREEN}✓ Screenshot sent for {url}{RESET}")
+            print(f"{GREEN}[CAPTURE] {url}{RESET}")
             
         except Exception as e:
-            print(f"{RED}Failed to send screenshot: {e}{RESET}")
+            pass
     
     def send_update_webhook(self):
-        """Send update to Discord every 2-5 minutes"""
+        """Clean periodic update - no emoji spam"""
         running_time = str(datetime.now() - self.start_time).split('.')[0]
         
-        last_resp_str = ""
-        for url, info in list(self.last_responses.items())[-5:]:
-            last_resp_str += f"{url[:30]}... | {info}\n"
+        # Last 3 responses only
+        last_resp = ""
+        for url, info in list(self.last_responses.items())[-3:]:
+            short_url = url.split('//')[-1][:25]
+            last_resp += f"{short_url} › {info}\n"
         
         embed = {
-            "title": f"🛰️ STARLINK - ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) - (Session {self.session_id})",
-            "color": 0x9b59b6,
+            "title": f"STARLINK • Session {self.session_id}",
+            "color": 0x2b2d31,
             "fields": [
                 {
-                    "name": "🎯 Target Count",
-                    "value": f"```{len(self.targets)}```",
+                    "name": "Runtime",
+                    "value": f"`{running_time}`",
                     "inline": True
                 },
                 {
-                    "name": "📊 Total Requests",
-                    "value": f"```{self.request_count}```",
+                    "name": "Requests",
+                    "value": f"`{self.request_count}`",
                     "inline": True
                 },
                 {
-                    "name": "⏱️ Session Time",
-                    "value": f"```{running_time}```",
+                    "name": "Targets",
+                    "value": f"`{len(self.targets)}`",
                     "inline": True
                 },
                 {
-                    "name": "━━━━━━━━━━━━━━━━━━━━━━",
-                    "value": "**Recent Responses**",
-                    "inline": False
-                },
-                {
-                    "name": "📡 Last 5 Hits",
-                    "value": f"```{last_resp_str if last_resp_str else 'None'}```",
+                    "name": "Recent",
+                    "value": f"```{last_resp}```",
                     "inline": False
                 }
-            ],
-            "footer": {
-                "text": f"Session {self.session_id} • Update every 2-5min"
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            ]
         }
         
         try:
@@ -294,7 +275,6 @@ class StarLink:
             pass
     
     async def scan_url(self, url, cycle_num):
-        """Scan single URL"""
         start = time.time()
         self.request_count += 1
         
@@ -304,18 +284,13 @@ class StarLink:
             
             headers = {
                 'User-Agent': random.choice(self.agents),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Cache-Control': 'no-cache',
-                'Referer': random.choice([
-                    "https://www.google.com/",
-                    "https://www.bing.com/",
-                    "https://duckduckgo.com/",
-                    "https://www.reddit.com/"
-                ])
+                'Referer': 'https://www.google.com/'
             }
             
-            response = self.client.get(full_url, headers=headers)
+            response = self.client.get(full_url, headers=headers, follow_redirects=True)
             
             resp_time = (time.time() - start) * 1000
             status = response.status_code
@@ -323,45 +298,40 @@ class StarLink:
             
             cdn = self.detect_cdn(response.headers)
             if cdn == 'origin':
-                hit_text = f"org-{cdn}"
+                hit_text = f"origin"
                 hit_color = BRIGHT_WHITE
             else:
-                hit_text = f"cdn-{cdn}"
+                hit_text = f"{cdn}"
                 hit_color = ORANGE if cdn == 'cloudflare' else RED
             
             resp_type = self.get_response_type(response.headers)
             
             if status < 400:
                 status_color = GREEN
-                result_text = f"{GREEN}pxn-s{RESET}"
+                result = "SUCCESS"
             else:
                 status_color = RED
-                result_text = f"{RED}intercepted{RESET}"
+                result = "BLOCKED"
             
-            info = f"{hit_text} | {status} | {self.format_size(size)} | {resp_type} | {resp_time:.2f}ms"
+            info = f"{hit_text} | {status} | {self.format_size(size)} | {resp_type}"
             self.last_responses[url] = info
             
+            # Terminal - clean format
             current_time = time.time()
             if current_time - self.last_log >= 3:
-                print(f"{CYAN}[Cycle {cycle_num}]{RESET} STARLINK ---> ({hit_color}{hit_text}{RESET}) ↓")
-                print(f"({resp_time:.2f}ms) ---> {status_color}{status}{RESET} ←")
-                print(f"({self.format_size(size)}) ---> {resp_type} ←")
-                print(f"Result: {result_text}")
-                print()
+                print(f"{CYAN}[{cycle_num:02d}]{RESET} {hit_color}{hit_text:>10}{RESET} {status_color}{status:3d}{RESET} {self.format_size(size):>7} {resp_type:4} {resp_time:6.0f}ms • {url}")
                 self.last_log = current_time
             
-            # Take screenshot if needed (only once per URL)
+            # Screenshot (once per URL)
             if url not in self.screenshot_counter:
                 self.screenshot_counter[url] = 0
             
-            if self.screenshot_counter[url] < 1:
-                print(f"{YELLOW}📸 Taking screenshot of {url}...{RESET}")
+            if self.screenshot_counter[url] < 1 and status < 500:
+                print(f"{YELLOW}[CAP] {url}{RESET}")
                 screenshot = await self.take_screenshot(url)
-                if screenshot:
+                if screenshot and len(screenshot) > 1000:
                     self.send_screenshot_webhook(url, screenshot, info)
                     self.screenshot_counter[url] = 1
-                else:
-                    print(f"{RED}✗ Screenshot failed for {url}{RESET}")
             
             return True
             
@@ -370,36 +340,31 @@ class StarLink:
             
             current_time = time.time()
             if current_time - self.last_log >= 3:
-                print(f"{CYAN}[Cycle {cycle_num}]{RESET} STARLINK ---> ({BRIGHT_WHITE}org-failed{RESET}) ↓")
-                print(f"({resp_time:.2f}ms) ---> {RED}000{RESET} ←")
-                print(f"(0B) ---> ERROR ←")
-                print(f"Error: {str(e)[:50]}")
-                print()
+                print(f"{CYAN}[{cycle_num:02d}]{RESET} {RED}    failed{RESET} {resp_time:6.0f}ms • {url}")
                 self.last_log = current_time
             
             return False
     
     async def run_cycle(self, cycle_num):
-        """Run one complete cycle through all targets"""
-        print(f"\n{YELLOW}[Cycle {cycle_num}] Starting scan of {len(self.targets)} targets...{RESET}")
+        print(f"\n{YELLOW}── Cycle {cycle_num:02d} ────────────────────────────────{RESET}")
         
         for url in self.targets:
             await self.scan_url(url, cycle_num)
             await asyncio.sleep(self.req_interval)
         
+        # Discord update every 2-5min
         current_time = time.time()
         if current_time - self.last_discord_log >= random.uniform(120, 300):
             self.send_update_webhook()
             self.last_discord_log = current_time
         
-        print(f"{YELLOW}[Cycle {cycle_num}] Complete. Waiting {self.cycle_delay}s...{RESET}")
+        print(f"{YELLOW}── Complete. Waiting {self.cycle_delay}s ──────────────────{RESET}")
     
     async def run(self):
         startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n{CYAN}🛰️ STARLINK ({startup_time}) - Session: {self.session_id}{RESET}")
-        print(f"Chromium: {self.chromium_path}")
-        print(f"Targets: {len(self.targets)} | Interval: {self.req_interval}s | Cycle Delay: {self.cycle_delay}s")
-        print("=" * 70)
+        print(f"\n{CYAN}STARLINK • {startup_time} • Session {self.session_id}{RESET}")
+        print(f"Targets: {len(self.targets)} | Cycle: {self.cycle_delay}s")
+        print("=" * 60)
         
         cycle_num = 1
         try:
@@ -409,7 +374,7 @@ class StarLink:
                 cycle_num += 1
                 
         except KeyboardInterrupt:
-            print(f"\n{YELLOW}STARLINK stopped{RESET}")
+            print(f"\n{YELLOW}STARLINK terminated{RESET}")
             self.client.close()
 
 if __name__ == "__main__":
