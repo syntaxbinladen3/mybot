@@ -1,0 +1,14 @@
+{
+    "targets": [
+        "https://example.com",
+        "https://google.com",
+        "https://github.com",
+        "https://reddit.com",
+        "https://twitter.com"
+    ],
+    "settings": {
+        "request_interval": 1,
+        "delay_between_cycles": 28,
+        "screenshot_interval": 5
+    }
+}
