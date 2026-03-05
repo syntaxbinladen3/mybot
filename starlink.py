@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NT-TOR - WAF Trasher
-STS BASE V1 - Webhook Delete + Resend Mode
+STS BASE V1 - Discord Updates Every 20 Seconds
 """
 
 import socket
@@ -72,7 +72,7 @@ class NTTOR:
         print(f"Session: {self.session_id}")
         print(f"Target: {target}")
         print(f"Duration: {duration}s")
-        print(f"{YELLOW}Discord: Overwrite every 2-3s (Delete + Resend){RESET}")
+        print(f"{YELLOW}Discord: Every 20s (Delete + Resend){RESET}")
         print("=" * 60)
         
     def rand_str(self, n=8):
@@ -199,19 +199,18 @@ Content-Length: 56
         """Delete the last message we sent"""
         if self.last_message_id:
             try:
-                # Extract webhook ID and token from URL
                 parts = self.webhook_url.split('/')
                 webhook_id = parts[-2]
                 webhook_token = parts[-1]
                 
-                # Delete message
                 delete_url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}/messages/{self.last_message_id}"
                 requests.delete(delete_url)
+                self.last_message_id = None
             except:
                 pass
     
     def send_discord_update(self):
-        """Delete old message and send new one (clean overwrite)"""
+        """Delete old message and send new one every 20s"""
         # Delete previous message
         self.delete_last_message()
         
@@ -264,7 +263,7 @@ Content-Length: 56
                     "inline": False
                 }
             ],
-            "footer": {"text": "STS BASE V1 • NT-TOR • Overwrite 2-3s"}
+            "footer": {"text": "STS BASE V1 • NT-TOR • Update 20s"}
         }
         
         try:
@@ -272,9 +271,8 @@ Content-Length: 56
             response = requests.post(self.webhook_url, json={"embeds": [embed]})
             
             if response.status_code == 200:
-                # Store message ID for next deletion
                 self.last_message_id = response.json().get('id')
-                print(f"{MAGENTA}[DISCORD] Updated (Delete+Resend){RESET}")
+                print(f"{MAGENTA}[DISCORD] Updated (20s cycle){RESET}")
                 
         except Exception as e:
             print(f"{RED}[DISCORD] Failed: {e}{RESET}")
@@ -298,7 +296,7 @@ Content-Length: 56
                 time.sleep(random.uniform(1, 2))
     
     def monitor(self):
-        """Terminal logging + Discord overwrite every 2-3s"""
+        """Terminal logging + Discord every 20s"""
         last_h0 = 0
         last_h2 = 0
         last_discord = 0
@@ -320,11 +318,11 @@ Content-Length: 56
                   f"TOT:{total} | "
                   f"↑{self.format_size(self.data_sent)} | "
                   f"↓{self.format_size(self.data_received)} | "
-                  f"DC:2-3s", 
+                  f"DC:20s", 
                   end='', flush=True)
             
-            # Discord overwrite every 2-3 seconds
-            if elapsed - last_discord >= random.uniform(2, 3):
+            # Discord every 20 seconds
+            if elapsed - last_discord >= 20:
                 self.send_discord_update()
                 last_discord = elapsed
             
