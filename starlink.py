@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STARLINK - Termux Edition (No Playwright install needed)
+STARLINK - Termux Edition (Fixed Screenshots)
 """
 
 import json
@@ -152,14 +152,12 @@ class StarLink:
         except:
             pass
     
-    async def take_screenshot(self, url):
-        """Take screenshot using system Chromium (no Playwright)"""
+    def take_screenshot_sync(self, url):
+        """Take screenshot using subprocess (sync version)"""
         try:
-            # Create temp file for screenshot
             temp_dir = tempfile.mkdtemp()
             screenshot_path = os.path.join(temp_dir, 'screenshot.png')
             
-            # Use Chromium headless directly
             cmd = [
                 self.chromium_path,
                 '--headless',
@@ -169,40 +167,43 @@ class StarLink:
                 '--window-size=1280,720',
                 '--hide-scrollbars',
                 '--disable-dev-shm-usage',
+                '--disable-setuid-sandbox',
+                '--timeout=10000',
                 url
             ]
             
-            # Run Chromium
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.PIPE,
-                stderr=asyncio.PIPE
-            )
-            
+            # Run with timeout
             try:
-                await asyncio.wait_for(process.communicate(), timeout=30.0)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                print(f"{RED}Screenshot timeout{RESET}")
-                return None
-            
-            # Check if screenshot exists
-            if os.path.exists(screenshot_path):
-                with open(screenshot_path, 'rb') as f:
-                    screenshot_data = f.read()
+                process = subprocess.run(
+                    cmd,
+                    timeout=30,
+                    capture_output=True,
+                    text=True
+                )
                 
-                # Clean up
-                os.remove(screenshot_path)
-                os.rmdir(temp_dir)
-                
-                return screenshot_data
-            else:
+                if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+                    with open(screenshot_path, 'rb') as f:
+                        screenshot_data = f.read()
+                    
+                    os.remove(screenshot_path)
+                    os.rmdir(temp_dir)
+                    return screenshot_data
+                else:
+                    return None
+                    
+            except subprocess.TimeoutExpired:
+                print(f"{YELLOW}Screenshot timeout for {url}{RESET}")
                 return None
                 
         except Exception as e:
-            print(f"{RED}Screenshot failed: {str(e)[:50]}{RESET}")
+            print(f"{RED}Screenshot error: {str(e)[:50]}{RESET}")
             return None
+    
+    async def take_screenshot(self, url):
+        """Wrapper to run sync function in thread"""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self.take_screenshot_sync, url
+        )
     
     def send_screenshot_webhook(self, url, screenshot_data, response_info):
         """Send screenshot to Discord"""
@@ -238,7 +239,7 @@ class StarLink:
             }
             
             requests.post(self.webhook_url, files=files, data=payload)
-            print(f"{GREEN}✓ Screenshot sent{RESET}")
+            print(f"{GREEN}✓ Screenshot sent for {url}{RESET}")
             
         except Exception as e:
             print(f"{RED}Failed to send screenshot: {e}{RESET}")
@@ -359,6 +360,8 @@ class StarLink:
                 if screenshot:
                     self.send_screenshot_webhook(url, screenshot, info)
                     self.screenshot_counter[url] = 1
+                else:
+                    print(f"{RED}✗ Screenshot failed for {url}{RESET}")
             
             return True
             
