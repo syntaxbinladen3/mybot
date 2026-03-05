@@ -72,7 +72,7 @@ class NTTOR:
         # Send startup
         self.send_discord_update(initial=True)
         
-        print(f"\n{MAGENTA}{STS} NT-TOR{WHTIE} - WAF Trasher [STS BASE V1]{RESET}")
+        print(f"\n{MAGENTA}{STS} NT-TOR{WHITE} - WAF Trasher [STS BASE V1]{RESET}")
         print(f"{CYAN}Session: {self.session_id}{RESET}")
         print(f"Target: {target}")
         print(f"Duration: {duration}s")
