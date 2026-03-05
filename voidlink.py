@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STARLINK - Advanced Website Monitor with Screenshots
+STARLINK - Termux Edition (No Playwright install needed)
 """
 
 import json
@@ -12,10 +12,9 @@ from datetime import datetime, timezone
 from colorama import init, Fore, Style
 import requests
 import httpx
-from playwright.async_api import async_playwright
 import os
-import io
-from PIL import Image
+import subprocess
+import tempfile
 
 init(autoreset=True)
 
@@ -47,6 +46,9 @@ class StarLink:
         self.last_responses = {}
         self.screenshot_counter = {}
         
+        # Chromium path for Termux
+        self.chromium_path = "/data/data/com.termux/files/usr/bin/chromium-browser"
+        
         # User agents
         self.agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -57,6 +59,12 @@ class StarLink:
         
         # HTTP client
         self.client = httpx.Client(http2=True, verify=False, timeout=15.0)
+        
+        # Check Chromium
+        if not os.path.exists(self.chromium_path):
+            print(f"{RED}Chromium not found at {self.chromium_path}{RESET}")
+            print(f"{YELLOW}Try: pkg install chromium{RESET}")
+            exit(1)
         
         # Send startup
         self.send_startup_webhook()
@@ -109,7 +117,7 @@ class StarLink:
     
     def send_startup_webhook(self):
         embed = {
-            "title": f"🛰️ STARLINK - Session Started",
+            "title": f"🛰️ STARLINK - Session Started (Termux)",
             "color": 0x9b59b6,
             "fields": [
                 {
@@ -134,7 +142,7 @@ class StarLink:
                 }
             ],
             "footer": {
-                "text": "STARLINK • Satellite Monitoring"
+                "text": "STARLINK • Termux Edition"
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -145,21 +153,53 @@ class StarLink:
             pass
     
     async def take_screenshot(self, url):
-        """Take screenshot of webpage"""
+        """Take screenshot using system Chromium (no Playwright)"""
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(url, timeout=10000, wait_until='domcontentloaded')
+            # Create temp file for screenshot
+            temp_dir = tempfile.mkdtemp()
+            screenshot_path = os.path.join(temp_dir, 'screenshot.png')
+            
+            # Use Chromium headless directly
+            cmd = [
+                self.chromium_path,
+                '--headless',
+                '--no-sandbox',
+                '--disable-gpu',
+                '--screenshot=' + screenshot_path,
+                '--window-size=1280,720',
+                '--hide-scrollbars',
+                '--disable-dev-shm-usage',
+                url
+            ]
+            
+            # Run Chromium
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.PIPE,
+                stderr=asyncio.PIPE
+            )
+            
+            try:
+                await asyncio.wait_for(process.communicate(), timeout=30.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                print(f"{RED}Screenshot timeout{RESET}")
+                return None
+            
+            # Check if screenshot exists
+            if os.path.exists(screenshot_path):
+                with open(screenshot_path, 'rb') as f:
+                    screenshot_data = f.read()
                 
-                # Wait a bit for content
-                await asyncio.sleep(2)
+                # Clean up
+                os.remove(screenshot_path)
+                os.rmdir(temp_dir)
                 
-                # Take screenshot
-                screenshot = await page.screenshot(full_page=True)
-                await browser.close()
+                return screenshot_data
+            else:
+                return None
                 
-                return screenshot
         except Exception as e:
             print(f"{RED}Screenshot failed: {str(e)[:50]}{RESET}")
             return None
@@ -167,7 +207,6 @@ class StarLink:
     def send_screenshot_webhook(self, url, screenshot_data, response_info):
         """Send screenshot to Discord"""
         try:
-            # Prepare embed
             embed = {
                 "title": f"📸 STARLINK Screenshot - {url}",
                 "color": 0xf1c40f,
@@ -191,7 +230,6 @@ class StarLink:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
-            # Send with file
             files = {
                 'file': ('screenshot.png', screenshot_data, 'image/png')
             }
@@ -209,9 +247,8 @@ class StarLink:
         """Send update to Discord every 2-5 minutes"""
         running_time = str(datetime.now() - self.start_time).split('.')[0]
         
-        # Build last responses string
         last_resp_str = ""
-        for url, info in list(self.last_responses.items())[-5:]:  # Last 5
+        for url, info in list(self.last_responses.items())[-5:]:
             last_resp_str += f"{url[:30]}... | {info}\n"
         
         embed = {
@@ -264,7 +301,6 @@ class StarLink:
             rand_param = self.rand_str(8)
             full_url = f"{url}?{rand_param}"
             
-            # Headers
             headers = {
                 'User-Agent': random.choice(self.agents),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -278,14 +314,12 @@ class StarLink:
                 ])
             }
             
-            # Send request
             response = self.client.get(full_url, headers=headers)
             
             resp_time = (time.time() - start) * 1000
             status = response.status_code
             size = len(response.content)
             
-            # Analyze response
             cdn = self.detect_cdn(response.headers)
             if cdn == 'origin':
                 hit_text = f"org-{cdn}"
@@ -296,7 +330,6 @@ class StarLink:
             
             resp_type = self.get_response_type(response.headers)
             
-            # Status color
             if status < 400:
                 status_color = GREEN
                 result_text = f"{GREEN}pxn-s{RESET}"
@@ -304,26 +337,23 @@ class StarLink:
                 status_color = RED
                 result_text = f"{RED}intercepted{RESET}"
             
-            # Store response info
             info = f"{hit_text} | {status} | {self.format_size(size)} | {resp_type} | {resp_time:.2f}ms"
             self.last_responses[url] = info
             
-            # Terminal output
             current_time = time.time()
             if current_time - self.last_log >= 3:
                 print(f"{CYAN}[Cycle {cycle_num}]{RESET} STARLINK ---> ({hit_color}{hit_text}{RESET}) ↓")
                 print(f"({resp_time:.2f}ms) ---> {status_color}{status}{RESET} ←")
                 print(f"({self.format_size(size)}) ---> {resp_type} ←")
-                print(f"Headers: {dict(response.headers)[:50]}...")
                 print(f"Result: {result_text}")
                 print()
                 self.last_log = current_time
             
-            # Take screenshot if needed
+            # Take screenshot if needed (only once per URL)
             if url not in self.screenshot_counter:
                 self.screenshot_counter[url] = 0
             
-            if self.screenshot_counter[url] < 1:  # Only 1 screenshot per URL ever
+            if self.screenshot_counter[url] < 1:
                 print(f"{YELLOW}📸 Taking screenshot of {url}...{RESET}")
                 screenshot = await self.take_screenshot(url)
                 if screenshot:
@@ -335,7 +365,6 @@ class StarLink:
         except Exception as e:
             resp_time = (time.time() - start) * 1000
             
-            # Terminal output for errors
             current_time = time.time()
             if current_time - self.last_log >= 3:
                 print(f"{CYAN}[Cycle {cycle_num}]{RESET} STARLINK ---> ({BRIGHT_WHITE}org-failed{RESET}) ↓")
@@ -353,9 +382,8 @@ class StarLink:
         
         for url in self.targets:
             await self.scan_url(url, cycle_num)
-            await asyncio.sleep(self.req_interval)  # 1s between requests
+            await asyncio.sleep(self.req_interval)
         
-        # Discord update every 2-5 minutes
         current_time = time.time()
         if current_time - self.last_discord_log >= random.uniform(120, 300):
             self.send_update_webhook()
@@ -366,6 +394,7 @@ class StarLink:
     async def run(self):
         startup_time = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"\n{CYAN}🛰️ STARLINK ({startup_time}) - Session: {self.session_id}{RESET}")
+        print(f"Chromium: {self.chromium_path}")
         print(f"Targets: {len(self.targets)} | Interval: {self.req_interval}s | Cycle Delay: {self.cycle_delay}s")
         print("=" * 70)
         
@@ -373,7 +402,7 @@ class StarLink:
         try:
             while True:
                 await self.run_cycle(cycle_num)
-                await asyncio.sleep(self.cycle_delay)  # 28-30s delay between cycles
+                await asyncio.sleep(self.cycle_delay)
                 cycle_num += 1
                 
         except KeyboardInterrupt:
