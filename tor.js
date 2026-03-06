@@ -341,7 +341,7 @@ class H2Abuser {
                 "color": 0x4a0e4a,
                 "fields": [
                     {
-                        "name": "H2 ABUSER",
+                        "name": "NT-TOR",
                         "value": `\`\`\`Target: ${this.target}\`\`\``,
                         "inline": false
                     },
