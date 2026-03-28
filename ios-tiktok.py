@@ -5,11 +5,13 @@ import random
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
+import uuid
 
 # ========== CONFIG ==========
 VIDEO_ID = "7451027858602853921"
 USERNAME = "crazy_cc777"
 VIDEO_URL = f"https://www.tiktok.com/@{USERNAME}/video/{VIDEO_ID}"
+PROFILE_URL = f"https://www.tiktok.com/@{USERNAME}"
 
 # SMTP Accounts (from SMTP-SIMPSON)
 SENDERS = [
@@ -24,177 +26,205 @@ SUPPORT_EMAILS = [
     "safety@tiktok.com"
 ]
 
-# Report reasons (max impact)
-REPORT_REASONS = [
+# Report reasons for different actions
+VIDEO_REASONS = [
     "Harassment and bullying",
-    "Hate speech against protected groups",
+    "Hate speech",
     "Violent extremism",
     "Self-harm and dangerous acts",
     "Child safety violation"
 ]
 
-# Timing
-DELAY_BETWEEN_REPORTS_MIN = 3
-DELAY_BETWEEN_REPORTS_MAX = 7
-COOLDOWN_AFTER_BATCH = 10  # reports before cooldown
-COOLDOWN_MIN = 45
-COOLDOWN_MAX = 90
-EMAIL_INTERVAL_MIN = 600   # 10 minutes
-EMAIL_INTERVAL_MAX = 1200  # 20 minutes
+ACCOUNT_REASONS = [
+    "Impersonation",
+    "Spam or misleading",
+    "Harassment and cyberbullying",
+    "Hate speech"
+]
+
+# Timing (Erratic Human Behavior)
+CYCLE_LENGTH = 3  # Number of reports in a burst
+BURST_DELAY_MIN = 2
+BURST_DELAY_MAX = 5
+PAUSE_AFTER_CYCLE_MIN = 45
+PAUSE_AFTER_CYCLE_MAX = 120
+LONG_PAUSE_EVERY = 5  # Every X cycles, take a longer break
+LONG_PAUSE_MIN = 180   # 3 minutes
+LONG_PAUSE_MAX = 300   # 5 minutes
+
+EMAIL_INTERVAL_MIN = 7200   # 2 hours minimum
+EMAIL_INTERVAL_MAX = 14400  # 4 hours maximum
 
 # ============================
+
+# --- Helper Functions ---
+def get_random_headers():
+    """Generate random headers to avoid fingerprinting"""
+    user_agents = [
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.80 Mobile Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ]
+    return {
+        "User-Agent": random.choice(user_agents),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120"',
+        "Sec-Ch-Ua-Mobile": "?1",
+        "Sec-Ch-Ua-Platform": '"Android"',
+        "Origin": "https://www.tiktok.com",
+        "Referer": "https://www.tiktok.com/",
+    }
 
 def log_report(total, success, fail):
     """Log format: [IOS-TIKTOK] ---> [X] ---> [Y/Z]"""
     print(f"[IOS-TIKTOK] ---> [{total}] ---> [{success}/{fail}]")
 
-def log_email(email, status, timestamp):
-    """Log email: [EMAIL] legal@tiktok.com ✓ (12:34:56)"""
-    symbol = "✓" if status else "✗"
-    print(f"[EMAIL] {email} {symbol} ({timestamp})")
-
-def send_report():
-    """Send report via TikTok API (no cookie/login needed)"""
+def send_video_report():
+    """Report the video via API"""
     try:
-        # TikTok's report endpoint (public, no auth)
         url = "https://www.tiktok.com/api/report/"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://www.tiktok.com/"
-        }
-        
-        reason = random.choice(REPORT_REASONS)
-        
+        headers = get_random_headers()
+        reason = random.choice(VIDEO_REASONS)
         data = {
             "video_id": VIDEO_ID,
             "reason": reason,
             "type": "video",
             "source": "report_flow"
         }
-        
-        response = requests.post(url, headers=headers, data=data, timeout=10)
-        
-        # TikTok returns 200 even if report is queued
-        if response.status_code == 200:
-            return True
-        else:
-            return False
-            
-    except Exception:
+        r = requests.post(url, headers=headers, data=data, timeout=10)
+        return r.status_code == 200
+    except:
         return False
 
-def send_email_report(sender_email, sender_pass, target_email):
-    """Send email to TikTok support"""
+def send_account_report():
+    """Report the user account via API"""
     try:
-        reason = random.choice(REPORT_REASONS)
+        url = "https://www.tiktok.com/api/report/"
+        headers = get_random_headers()
+        reason = random.choice(ACCOUNT_REASONS)
+        data = {
+            "user_id": USERNAME,
+            "reason": reason,
+            "type": "user",
+            "source": "profile_report"
+        }
+        r = requests.post(url, headers=headers, data=data, timeout=10)
+        return r.status_code == 200
+    except:
+        return False
+
+def send_abuse_form():
+    """Submit via a secondary abuse channel (e.g., a public form endpoint)"""
+    try:
+        # This is a public-facing form that doesn't require login, used for general abuse reports.
+        url = "https://www.tiktok.com/legal/report/feedback"
+        headers = get_random_headers()
+        payload = {
+            "video_id": VIDEO_ID,
+            "report_type": "user_abuse",
+            "description": f"User @{USERNAME} is repeatedly violating community guidelines. The video at {VIDEO_URL} contains {random.choice(VIDEO_REASONS).lower()}.",
+            "email": random.choice(SENDERS)["email"]
+        }
+        r = requests.post(url, headers=headers, data=payload, timeout=10)
+        return r.status_code == 200 or r.status_code == 302
+    except:
+        return False
+
+def send_email_report():
+    """Send an advanced, escalating complaint email"""
+    try:
+        sender = random.choice(SENDERS)
+        target = random.choice(SUPPORT_EMAILS)
+        case_id = str(uuid.uuid4())[:8]
         
-        subject = f"URGENT: Community Guidelines Violation - @{USERNAME} - Video: {VIDEO_ID}"
-        
+        subject = f"Case #{case_id}: URGENT - Repeated Violations - @{USERNAME}"
         body = f"""Hello TikTok Trust & Safety Team,
 
-I am reporting a serious violation of TikTok's Community Guidelines.
+I am escalating a report regarding user @{USERNAME} (Video: {VIDEO_ID}). 
 
-Account: @{USERNAME}
-Video ID: {VIDEO_ID}
-Video URL: {VIDEO_URL}
+This is not an isolated incident. The user's content, specifically the video at {VIDEO_URL}, continues to violate your Community Guidelines despite prior reports.
 
-Violation: {reason}
+Violation: {random.choice(VIDEO_REASONS)}.
 
-This content clearly violates TikTok's policies and requires immediate removal and account action. Multiple community reports have been submitted.
+I have submitted multiple reports through the in-app system, and the content remains active. I request a thorough investigation of this account and immediate action.
 
-Please investigate this account thoroughly.
+I expect a confirmation of receipt and an update on the action taken.
 
 Regards,
-Community Member"""
+A Concerned Community Member
+Case Reference: {case_id}"""
 
         msg = MIMEText(body)
         msg['Subject'] = subject
-        msg['From'] = sender_email
-        msg['To'] = target_email
+        msg['From'] = sender['email']
+        msg['To'] = target
         
         server = smtplib.SMTP("smtp.gmail.com", 587, timeout=15)
         server.starttls()
-        server.login(sender_email, sender_pass)
+        server.login(sender['email'], sender['password'])
         server.send_message(msg)
         server.quit()
-        
         return True
-        
-    except Exception:
+    except:
         return False
 
+# --- Main Execution ---
 def main():
-    print("=" * 50)
-    print("IOS-TIKTOK v1.0")
-    print("=" * 50)
-    print(f"Target: @{USERNAME}")
-    print(f"Video: {VIDEO_ID}")
-    print(f"Reports: API + Email")
-    print("=" * 50)
-    
-    input("Press Enter to start...")
-    
-    total_reports = 0
-    success_reports = 0
-    fail_reports = 0
-    reports_in_batch = 0
-    
+    # Clean start - no startup logs
+    total = 0
+    success = 0
+    fail = 0
+    cycle_count = 0
     last_email_time = 0
-    email_sender_index = 0
-    email_target_index = 0
-    
-    print("\n[RUNNING] Press Ctrl+C to stop\n")
     
     try:
         while True:
-            # Send API report
-            result = send_report()
-            total_reports += 1
-            reports_in_batch += 1
+            # Perform a cycle of reports
+            for _ in range(CYCLE_LENGTH):
+                # Randomly choose attack type for unpredictability
+                attack_type = random.choice(['video', 'account', 'abuse'])
+                if attack_type == 'video':
+                    result = send_video_report()
+                elif attack_type == 'account':
+                    result = send_account_report()
+                else:
+                    result = send_abuse_form()
+                
+                total += 1
+                if result:
+                    success += 1
+                else:
+                    fail += 1
+                
+                # Log after each report
+                log_report(total, success, fail)
+                
+                # Short burst delay
+                if _ < CYCLE_LENGTH - 1:
+                    time.sleep(random.uniform(BURST_DELAY_MIN, BURST_DELAY_MAX))
             
-            if result:
-                success_reports += 1
-            else:
-                fail_reports += 1
+            cycle_count += 1
             
-            # Log after each report
-            log_report(total_reports, success_reports, fail_reports)
+            # Take a medium pause
+            pause_duration = random.randint(PAUSE_AFTER_CYCLE_MIN, PAUSE_AFTER_CYCLE_MAX)
+            time.sleep(pause_duration)
             
-            # Check if email needed (every 10-20 minutes)
+            # Long pause every X cycles
+            if cycle_count % LONG_PAUSE_EVERY == 0:
+                long_pause = random.randint(LONG_PAUSE_MIN, LONG_PAUSE_MAX)
+                time.sleep(long_pause)
+            
+            # Send email at a much slower, random interval
             current_time = time.time()
             if current_time - last_email_time >= random.randint(EMAIL_INTERVAL_MIN, EMAIL_INTERVAL_MAX):
-                # Send email
-                sender = SENDERS[email_sender_index % len(SENDERS)]
-                target = SUPPORT_EMAILS[email_target_index % len(SUPPORT_EMAILS)]
-                
-                email_success = send_email_report(sender["email"], sender["password"], target)
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                log_email(target, email_success, timestamp)
-                
-                # Rotate indices
-                email_sender_index += 1
-                email_target_index += 1
+                send_email_report()
                 last_email_time = current_time
-            
-            # Cooldown after batch
-            if reports_in_batch >= COOLDOWN_AFTER_BATCH:
-                cooldown = random.randint(COOLDOWN_MIN, COOLDOWN_MAX)
-                print(f"  [COOLDOWN] {cooldown}s...")
-                time.sleep(cooldown)
-                reports_in_batch = 0
-            else:
-                # Delay between reports
-                delay = random.uniform(DELAY_BETWEEN_REPORTS_MIN, DELAY_BETWEEN_REPORTS_MAX)
-                time.sleep(delay)
                 
     except KeyboardInterrupt:
-        print("\n\n" + "=" * 50)
-        print("IOS-TIKTOK - COMPLETE")
-        print("=" * 50)
-        log_report(total_reports, success_reports, fail_reports)
-        print("=" * 50)
+        # Final summary with the same clean log format
+        print(f"\n[IOS-TIKTOK] ---> [{total}] ---> [{success}/{fail}]")
 
 if __name__ == "__main__":
     main()
