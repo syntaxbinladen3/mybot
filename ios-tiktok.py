@@ -2,7 +2,6 @@
 import requests
 import time
 import random
-import threading
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -18,12 +17,14 @@ SENDERS = [
     {"email": "stsvxpmain@gmail.com", "password": "wkhq qgxy kqau idyu"}
 ]
 
+# TikTok Support Emails
 SUPPORT_EMAILS = [
     "legal@tiktok.com",
     "community@tiktok.com",
     "safety@tiktok.com"
 ]
 
+# Report reasons
 REPORT_REASONS = [
     "Harassment and bullying",
     "Hate speech against protected groups",
@@ -32,68 +33,70 @@ REPORT_REASONS = [
     "Child safety violation"
 ]
 
-# Timing
-DELAY_BETWEEN_REPORTS = 2  # seconds
-COOLDOWN_AFTER = 10  # reports before cooldown
-COOLDOWN_TIME = 30  # seconds
-EMAIL_INTERVAL = 300  # 5 minutes
+# Timing - FASTER
+DELAY_BETWEEN_REPORTS = 0.5          # 0.5 seconds between reports
+COOLDOWN_AFTER_BATCH = 20            # reports before cooldown
+COOLDOWN_SECONDS = 30                # 30 seconds cooldown
+
+EMAIL_INTERVAL = 300                 # 5 minutes between emails
 # ============================
 
-# Counters
-h1_success = 0
-h1_fail = 0
-h2_success = 0
-h2_fail = 0
-email_sent = 0
-counters_lock = threading.Lock()
-running = True
+def pink_print(text):
+    """Print in pink"""
+    print(f"\033[95m{text}\033[0m")
 
-def log_stats():
-    with counters_lock:
-        print(f"\033[95m[IOS-TIKTOK]\033[0m - {h1_success}/{h2_success}/{h1_fail}/{h2_fail}")
-
-def send_api_report():
-    """Send report via TikTok API"""
+def send_report_h1():
+    """Attack H1 - API Report"""
     try:
         url = "https://www.tiktok.com/api/report/"
         headers = {
             "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://www.tiktok.com/"
+            "Content-Type": "application/x-www-form-urlencoded"
         }
-        reason = random.choice(REPORT_REASONS)
         data = {
             "video_id": VIDEO_ID,
-            "reason": reason,
-            "type": "video",
-            "source": "report_flow"
+            "reason": random.choice(REPORT_REASONS),
+            "type": "video"
         }
-        response = requests.post(url, headers=headers, data=data, timeout=10)
+        response = requests.post(url, headers=headers, data=data, timeout=5)
         return response.status_code == 200
-    except Exception as e:
+    except:
+        return False
+
+def send_report_h2():
+    """Attack H2 - Alternative API Endpoint"""
+    try:
+        url = "https://www.tiktok.com/api/report/video/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "video_id": VIDEO_ID,
+            "reason": random.choice(REPORT_REASONS),
+            "reporter_lang": "en"
+        }
+        response = requests.post(url, headers=headers, json=data, timeout=5)
+        return response.status_code == 200 or response.status_code == 204
+    except:
         return False
 
 def send_email_report():
     """Send email to TikTok support"""
     try:
-        sender = SENDERS[email_sent % len(SENDERS)]
-        target = SUPPORT_EMAILS[email_sent % len(SUPPORT_EMAILS)]
-        
+        sender = random.choice(SENDERS)
+        target = random.choice(SUPPORT_EMAILS)
         reason = random.choice(REPORT_REASONS)
-        subject = f"URGENT: Community Guidelines Violation - @{USERNAME} - Video: {VIDEO_ID}"
-        body = f"""Hello TikTok Trust & Safety Team,
+        
+        subject = f"URGENT: Violation - @{USERNAME} - {VIDEO_ID}"
+        body = f"""Hello TikTok Team,
 
-I am reporting a serious violation of TikTok's Community Guidelines.
-
-Account: @{USERNAME}
-Video ID: {VIDEO_ID}
-Video URL: {VIDEO_URL}
-
+Report: @{USERNAME}
+Video: {VIDEO_URL}
 Violation: {reason}
 
-This content clearly violates TikTok's policies and requires immediate removal and account action. Multiple community reports have been submitted.
-
-Please investigate this account thoroughly.
+This content violates Community Guidelines.
+Please investigate immediately.
 
 Regards,
 Community Member"""
@@ -103,7 +106,7 @@ Community Member"""
         msg['From'] = sender["email"]
         msg['To'] = target
         
-        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=15)
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
         server.starttls()
         server.login(sender["email"], sender["password"])
         server.send_message(msg)
@@ -112,78 +115,52 @@ Community Member"""
     except:
         return False
 
-def api_worker(thread_id):
-    """API report worker"""
-    global h1_success, h1_fail, h2_success, h2_fail
-    batch_count = 0
-    
-    while running:
-        success = send_api_report()
-        
-        with counters_lock:
-            if thread_id == 1:
-                if success:
-                    h1_success += 1
-                else:
-                    h1_fail += 1
-            else:
-                if success:
-                    h2_success += 1
-                else:
-                    h2_fail += 1
-            log_stats()
-        
-        batch_count += 1
-        
-        if batch_count >= COOLDOWN_AFTER:
-            time.sleep(COOLDOWN_TIME)
-            batch_count = 0
-        else:
-            time.sleep(DELAY_BETWEEN_REPORTS)
-
-def email_worker():
-    """Email worker - runs every EMAIL_INTERVAL seconds"""
-    global email_sent
-    
-    while running:
-        time.sleep(EMAIL_INTERVAL)
-        
-        if not running:
-            break
-        
-        success = send_email_report()
-        
-        with counters_lock:
-            email_sent += 1
-            status = "✓" if success else "✗"
-            print(f"\033[95m[IOS-TIKTOK]\033[0m - EMAIL {status} | {SENDERS[email_sent % len(SENDERS)]['email'][:15]}... -> {SUPPORT_EMAILS[email_sent % len(SUPPORT_EMAILS)]}")
-
 def main():
-    global running
+    h1_success = 0
+    h1_fail = 0
+    h2_success = 0
+    h2_fail = 0
     
-    print(f"\033[95m[IOS-TIKTOK]\033[0m - START | @{USERNAME} | {VIDEO_ID}")
-    log_stats()
+    last_email_time = 0
+    reports_this_batch = 0
     
-    # Start workers
-    t1 = threading.Thread(target=api_worker, args=(1,), daemon=True)
-    t2 = threading.Thread(target=api_worker, args=(2,), daemon=True)
-    t3 = threading.Thread(target=email_worker, daemon=True)
-    
-    t1.start()
-    t2.start()
-    t3.start()
-    
-    print(f"\033[95m[IOS-TIKTOK]\033[0m - H1 + H2 + EMAIL ACTIVE")
-    
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        running = False
-        print(f"\n\033[95m[IOS-TIKTOK]\033[0m - STOPPED")
-        with counters_lock:
-            print(f"\033[95m[IOS-TIKTOK]\033[0m - FINAL: {h1_success}/{h2_success}/{h1_fail}/{h2_fail}")
-            print(f"\033[95m[IOS-TIKTOK]\033[0m - EMAILS: {email_sent}")
+    while True:
+        try:
+            # Attack H1
+            if send_report_h1():
+                h1_success += 1
+            else:
+                h1_fail += 1
+            
+            # Attack H2 (immediately after)
+            if send_report_h2():
+                h2_success += 1
+            else:
+                h2_fail += 1
+            
+            # Update logging
+            pink_print(f"[IOS-TIKTOK] - {h1_success}/{h2_success}/{h1_fail}/{h2_fail}")
+            
+            reports_this_batch += 2  # Two reports per cycle
+            
+            # Email attack
+            current_time = time.time()
+            if current_time - last_email_time >= EMAIL_INTERVAL:
+                if send_email_report():
+                    pink_print(f"[IOS-TIKTOK] - {h1_success}/{h2_success}/{h1_fail}/{h2_fail} [E]")
+                last_email_time = current_time
+            
+            # Cooldown after batch
+            if reports_this_batch >= COOLDOWN_AFTER_BATCH:
+                time.sleep(COOLDOWN_SECONDS)
+                reports_this_batch = 0
+            else:
+                time.sleep(DELAY_BETWEEN_REPORTS)
+                
+        except KeyboardInterrupt:
+            print("\n")
+            pink_print(f"[IOS-TIKTOK] - FINAL: {h1_success}/{h2_success}/{h1_fail}/{h2_fail}")
+            break
 
 if __name__ == "__main__":
     main()
