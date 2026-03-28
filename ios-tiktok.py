@@ -30,6 +30,7 @@ h1_fail = 0
 h2_success = 0
 h2_fail = 0
 counters_lock = threading.Lock()
+running = True
 
 def log_stats():
     with counters_lock:
@@ -59,7 +60,7 @@ def api_reporter_thread(thread_id):
     global h1_success, h1_fail, h2_success, h2_fail
     reports_in_batch = 0
     
-    while True:
+    while running:
         result = send_report()
         
         with counters_lock:
@@ -86,19 +87,24 @@ def api_reporter_thread(thread_id):
             time.sleep(delay)
 
 def main():
+    global running
+    
     thread1 = threading.Thread(target=api_reporter_thread, args=(1,), daemon=True)
     thread2 = threading.Thread(target=api_reporter_thread, args=(2,), daemon=True)
     
     thread1.start()
     thread2.start()
     
-    log_stats()
+    print(f"\033[95m[IOS-TIKTOK]\033[0m - START | @{USERNAME} | {VIDEO_ID}")
     
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        pass
+        running = False
+        print(f"\n\033[95m[IOS-TIKTOK]\033[0m - STOP")
+        with counters_lock:
+            print(f"\033[95m[IOS-TIKTOK]\033[0m - {h1_success}/{h2_success}/{h1_fail}/{h2_fail}")
 
 if __name__ == "__main__":
     main()
