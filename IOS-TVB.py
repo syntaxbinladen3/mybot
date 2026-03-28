@@ -5,8 +5,7 @@ import time
 from datetime import datetime
 
 # ========== CONFIG ==========
-VIDEO_URL = "https://www.tiktok.com/@username/video/123456789"  # CHANGE THIS
-
+VIDEO_URL = "https://www.tiktok.com/@hiddenheadline/video/7614694084996795670"
 # Proxies (HTTP)
 PROXIES = [
     "http://31.59.20.176:6754",
